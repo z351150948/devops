@@ -3,17 +3,24 @@
     <div class="page-header">
       <h2>☸️ K8s 集群管理</h2>
       <div class="k8s-toolbar" v-if="activeTab !== 'clusters'">
-        <el-select v-model="selectedClusterId" placeholder="选择集群" style="width:220px" @change="onClusterChange">
-          <el-option v-for="c in clusters" :key="c.id" :label="c.name" :value="c.id">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span class="state-pulse" :class="c.status==='connected'?'running':'exited'"></span> {{ c.name }}
-            </div>
-          </el-option>
-        </el-select>
-        <el-select v-if="needsNamespace" v-model="selectedNamespace" placeholder="命名空间" style="width:160px" @change="fetchCurrentTab">
-          <el-option label="全部命名空间" value="_all" />
-          <el-option v-for="ns in namespaces" :key="ns.name" :label="ns.name" :value="ns.name" />
-        </el-select>
+        <div class="cluster-selector-group">
+          <span class="toolbar-label"><el-icon><Connection /></el-icon> 当前集群</span>
+          <el-select v-model="selectedClusterId" placeholder="选择集群" @change="onClusterChange" class="industrial-select cluster-select" popper-class="industrial-popper">
+            <el-option v-for="c in clusters" :key="c.id" :label="c.name" :value="c.id">
+              <div style="display:flex;align-items:center;gap:8px;font-weight:600;">
+                <span class="state-pulse" :class="c.status==='connected'?'running':'exited'"></span> {{ c.name }}
+              </div>
+            </el-option>
+          </el-select>
+        </div>
+        
+        <div class="namespace-selector-group" v-if="needsNamespace">
+          <span class="toolbar-label"><el-icon><FolderOpened /></el-icon> NS</span>
+          <el-select v-model="selectedNamespace" placeholder="命名空间" @change="fetchCurrentTab" class="industrial-select ns-select" popper-class="industrial-popper">
+            <el-option label="[ 全部命名空间 ]" value="_all" />
+            <el-option v-for="ns in namespaces" :key="ns.name" :label="ns.name" :value="ns.name" />
+          </el-select>
+        </div>
       </div>
     </div>
 
@@ -310,6 +317,14 @@ async function fetchClusters() {
   try {
     const res = await getK8sClusters()
     clusters.value = res.results || res
+    
+    // 默认选择第一个集群
+    if (clusters.value.length > 0 && !selectedClusterId.value) {
+      selectedClusterId.value = clusters.value[0].id
+      if (activeTab.value !== 'clusters') {
+        onClusterChange()
+      }
+    }
   } catch (e) { /* */ }
   loading.value = false
 }
