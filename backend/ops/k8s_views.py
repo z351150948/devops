@@ -1,6 +1,7 @@
 """
 Kubernetes 集群管理 API
 使用 kubernetes Python 客户端连接并管理 K8s 集群
+支持 demo 模式：kubeconfig 为 'demo' 时返回模拟数据
 """
 import logging
 import tempfile
@@ -15,11 +16,62 @@ from .serializers import K8sClusterSerializer
 logger = logging.getLogger(__name__)
 
 
+def _is_demo(cluster):
+    return cluster.kubeconfig.strip() == 'demo'
+
+
+# ====== Demo 模拟数据 ======
+DEMO_NAMESPACES = [
+    {'name': 'default', 'status': 'Active', 'created': '2026-01-15T08:00:00+08:00', 'labels': {}},
+    {'name': 'kube-system', 'status': 'Active', 'created': '2026-01-15T08:00:00+08:00', 'labels': {}},
+    {'name': 'monitoring', 'status': 'Active', 'created': '2026-02-01T10:30:00+08:00', 'labels': {}},
+    {'name': 'production', 'status': 'Active', 'created': '2026-02-10T14:00:00+08:00', 'labels': {'env': 'prod'}},
+    {'name': 'staging', 'status': 'Active', 'created': '2026-02-10T14:00:00+08:00', 'labels': {'env': 'staging'}},
+]
+
+DEMO_PODS = [
+    {'name': 'nginx-deployment-7c5b4f9d8-x2k9p', 'namespace': 'production', 'status': 'Running', 'node': 'node-01', 'ip': '10.244.1.15', 'containers': [{'name': 'nginx', 'image': 'nginx:1.25', 'ready': True}], 'restarts': 0, 'created': '2026-03-05T09:00:00+08:00'},
+    {'name': 'nginx-deployment-7c5b4f9d8-m3h7q', 'namespace': 'production', 'status': 'Running', 'node': 'node-02', 'ip': '10.244.2.22', 'containers': [{'name': 'nginx', 'image': 'nginx:1.25', 'ready': True}], 'restarts': 0, 'created': '2026-03-05T09:00:00+08:00'},
+    {'name': 'api-server-5f8b7c6d4-r9p2w', 'namespace': 'production', 'status': 'Running', 'node': 'node-01', 'ip': '10.244.1.18', 'containers': [{'name': 'api', 'image': 'myapp/api:v2.1.0', 'ready': True}], 'restarts': 1, 'created': '2026-03-04T11:30:00+08:00'},
+    {'name': 'api-server-5f8b7c6d4-t4n8k', 'namespace': 'production', 'status': 'Running', 'node': 'node-03', 'ip': '10.244.3.10', 'containers': [{'name': 'api', 'image': 'myapp/api:v2.1.0', 'ready': True}], 'restarts': 0, 'created': '2026-03-04T11:30:00+08:00'},
+    {'name': 'redis-master-0', 'namespace': 'production', 'status': 'Running', 'node': 'node-02', 'ip': '10.244.2.30', 'containers': [{'name': 'redis', 'image': 'redis:7.2-alpine', 'ready': True}], 'restarts': 0, 'created': '2026-02-20T08:00:00+08:00'},
+    {'name': 'mysql-primary-0', 'namespace': 'production', 'status': 'Running', 'node': 'node-01', 'ip': '10.244.1.25', 'containers': [{'name': 'mysql', 'image': 'mysql:8.0', 'ready': True}], 'restarts': 0, 'created': '2026-02-18T09:00:00+08:00'},
+    {'name': 'web-frontend-6d9f8b7c5-j2m4n', 'namespace': 'staging', 'status': 'Running', 'node': 'node-03', 'ip': '10.244.3.15', 'containers': [{'name': 'frontend', 'image': 'myapp/web:v2.2.0-rc1', 'ready': True}], 'restarts': 0, 'created': '2026-03-08T16:00:00+08:00'},
+    {'name': 'web-frontend-6d9f8b7c5-k7p3q', 'namespace': 'staging', 'status': 'Pending', 'node': '', 'ip': '', 'containers': [{'name': 'frontend', 'image': 'myapp/web:v2.2.0-rc1', 'ready': False}], 'restarts': 0, 'created': '2026-03-08T16:05:00+08:00'},
+    {'name': 'prometheus-server-0', 'namespace': 'monitoring', 'status': 'Running', 'node': 'node-02', 'ip': '10.244.2.40', 'containers': [{'name': 'prometheus', 'image': 'prom/prometheus:v2.51.0', 'ready': True}], 'restarts': 0, 'created': '2026-02-01T10:30:00+08:00'},
+    {'name': 'grafana-7f8c9d6b5-w3x2y', 'namespace': 'monitoring', 'status': 'Running', 'node': 'node-03', 'ip': '10.244.3.35', 'containers': [{'name': 'grafana', 'image': 'grafana/grafana:10.4.0', 'ready': True}], 'restarts': 2, 'created': '2026-02-01T10:35:00+08:00'},
+    {'name': 'alertmanager-0', 'namespace': 'monitoring', 'status': 'Running', 'node': 'node-01', 'ip': '10.244.1.42', 'containers': [{'name': 'alertmanager', 'image': 'prom/alertmanager:v0.27.0', 'ready': True}], 'restarts': 0, 'created': '2026-02-01T10:40:00+08:00'},
+    {'name': 'coredns-5d78c9689-b8k4m', 'namespace': 'kube-system', 'status': 'Running', 'node': 'node-01', 'ip': '10.244.1.3', 'containers': [{'name': 'coredns', 'image': 'registry.k8s.io/coredns:v1.11.1', 'ready': True}], 'restarts': 0, 'created': '2026-01-15T08:00:00+08:00'},
+    {'name': 'etcd-master', 'namespace': 'kube-system', 'status': 'Running', 'node': 'master', 'ip': '10.0.0.1', 'containers': [{'name': 'etcd', 'image': 'registry.k8s.io/etcd:3.5.12', 'ready': True}], 'restarts': 0, 'created': '2026-01-15T08:00:00+08:00'},
+    {'name': 'kube-proxy-n7x2k', 'namespace': 'kube-system', 'status': 'Running', 'node': 'node-01', 'ip': '192.168.1.21', 'containers': [{'name': 'kube-proxy', 'image': 'registry.k8s.io/kube-proxy:v1.29.3', 'ready': True}], 'restarts': 0, 'created': '2026-01-15T08:00:00+08:00'},
+    {'name': 'debug-pod-manual', 'namespace': 'default', 'status': 'Failed', 'node': 'node-02', 'ip': '10.244.2.99', 'containers': [{'name': 'debug', 'image': 'busybox:latest', 'ready': False}], 'restarts': 5, 'created': '2026-03-07T20:00:00+08:00'},
+]
+
+DEMO_SERVICES = [
+    {'name': 'nginx-service', 'namespace': 'production', 'type': 'LoadBalancer', 'cluster_ip': '10.96.10.50', 'external_ip': '47.95.15.100', 'ports': '80→30080/TCP, 443→30443/TCP', 'created': '2026-03-05T09:00:00+08:00'},
+    {'name': 'api-service', 'namespace': 'production', 'type': 'ClusterIP', 'cluster_ip': '10.96.20.100', 'external_ip': '', 'ports': '8080/TCP', 'created': '2026-03-04T11:30:00+08:00'},
+    {'name': 'redis-master', 'namespace': 'production', 'type': 'ClusterIP', 'cluster_ip': '10.96.30.10', 'external_ip': '', 'ports': '6379/TCP', 'created': '2026-02-20T08:00:00+08:00'},
+    {'name': 'mysql-primary', 'namespace': 'production', 'type': 'ClusterIP', 'cluster_ip': '10.96.30.20', 'external_ip': '', 'ports': '3306/TCP', 'created': '2026-02-18T09:00:00+08:00'},
+    {'name': 'web-frontend', 'namespace': 'staging', 'type': 'NodePort', 'cluster_ip': '10.96.50.10', 'external_ip': '', 'ports': '3000→31000/TCP', 'created': '2026-03-08T16:00:00+08:00'},
+    {'name': 'prometheus', 'namespace': 'monitoring', 'type': 'NodePort', 'cluster_ip': '10.96.60.10', 'external_ip': '', 'ports': '9090→30090/TCP', 'created': '2026-02-01T10:30:00+08:00'},
+    {'name': 'grafana', 'namespace': 'monitoring', 'type': 'NodePort', 'cluster_ip': '10.96.60.20', 'external_ip': '', 'ports': '3000→30300/TCP', 'created': '2026-02-01T10:35:00+08:00'},
+    {'name': 'kubernetes', 'namespace': 'default', 'type': 'ClusterIP', 'cluster_ip': '10.96.0.1', 'external_ip': '', 'ports': '443/TCP', 'created': '2026-01-15T08:00:00+08:00'},
+    {'name': 'kube-dns', 'namespace': 'kube-system', 'type': 'ClusterIP', 'cluster_ip': '10.96.0.10', 'external_ip': '', 'ports': '53/UDP, 53/TCP, 9153/TCP', 'created': '2026-01-15T08:00:00+08:00'},
+]
+
+DEMO_DEPLOYMENTS = [
+    {'name': 'nginx-deployment', 'namespace': 'production', 'replicas': 2, 'ready_replicas': 2, 'available_replicas': 2, 'images': 'nginx:1.25', 'created': '2026-03-05T09:00:00+08:00'},
+    {'name': 'api-server', 'namespace': 'production', 'replicas': 2, 'ready_replicas': 2, 'available_replicas': 2, 'images': 'myapp/api:v2.1.0', 'created': '2026-03-04T11:30:00+08:00'},
+    {'name': 'web-frontend', 'namespace': 'staging', 'replicas': 2, 'ready_replicas': 1, 'available_replicas': 1, 'images': 'myapp/web:v2.2.0-rc1', 'created': '2026-03-08T16:00:00+08:00'},
+    {'name': 'grafana', 'namespace': 'monitoring', 'replicas': 1, 'ready_replicas': 1, 'available_replicas': 1, 'images': 'grafana/grafana:10.4.0', 'created': '2026-02-01T10:35:00+08:00'},
+    {'name': 'coredns', 'namespace': 'kube-system', 'replicas': 1, 'ready_replicas': 1, 'available_replicas': 1, 'images': 'registry.k8s.io/coredns:v1.11.1', 'created': '2026-01-15T08:00:00+08:00'},
+]
+
+
 def _get_k8s_client(cluster):
     """根据 kubeconfig 创建 K8s API 客户端"""
     from kubernetes import client, config
 
-    # 将 kubeconfig 写入临时文件
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
     tmp.write(cluster.kubeconfig)
     tmp.flush()
@@ -32,6 +84,12 @@ def _get_k8s_client(cluster):
         os.unlink(tmp.name)
 
 
+def _filter_by_ns(data, namespace):
+    if namespace == '_all':
+        return data
+    return [d for d in data if d['namespace'] == namespace]
+
+
 class K8sClusterViewSet(viewsets.ModelViewSet):
     """K8s 集群连接管理"""
     queryset = K8sCluster.objects.all()
@@ -42,6 +100,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
     def test_connection(self, request, pk=None):
         """测试集群连接"""
         cluster = self.get_object()
+        if _is_demo(cluster):
+            return Response({'success': True, 'message': '连接成功 (Kubernetes v1.29.3) [演示模式]'})
         try:
             k8s = _get_k8s_client(cluster)
             v1 = k8s.CoreV1Api()
@@ -61,6 +121,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
     def namespaces(self, request, pk=None):
         """获取命名空间列表"""
         cluster = self.get_object()
+        if _is_demo(cluster):
+            return Response(DEMO_NAMESPACES)
         try:
             k8s = _get_k8s_client(cluster)
             v1 = k8s.CoreV1Api()
@@ -80,6 +142,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
         """获取 Pod 列表"""
         cluster = self.get_object()
         namespace = request.query_params.get('namespace', 'default')
+        if _is_demo(cluster):
+            return Response(_filter_by_ns(DEMO_PODS, namespace))
         try:
             k8s = _get_k8s_client(cluster)
             v1 = k8s.CoreV1Api()
@@ -96,7 +160,6 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
                     'ready': False,
                 } for c in (pod.spec.containers or [])]
 
-                # 填充 ready 状态
                 if pod.status.container_statuses:
                     for cs in pod.status.container_statuses:
                         for c in containers:
@@ -123,6 +186,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
         """获取 Service 列表"""
         cluster = self.get_object()
         namespace = request.query_params.get('namespace', 'default')
+        if _is_demo(cluster):
+            return Response(_filter_by_ns(DEMO_SERVICES, namespace))
         try:
             k8s = _get_k8s_client(cluster)
             v1 = k8s.CoreV1Api()
@@ -152,6 +217,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
         """获取 Deployment 列表"""
         cluster = self.get_object()
         namespace = request.query_params.get('namespace', 'default')
+        if _is_demo(cluster):
+            return Response(_filter_by_ns(DEMO_DEPLOYMENTS, namespace))
         try:
             k8s = _get_k8s_client(cluster)
             apps_v1 = k8s.AppsV1Api()
@@ -177,6 +244,8 @@ class K8sClusterViewSet(viewsets.ModelViewSet):
     def restart_pod(self, request, pk=None, pod_name=None):
         """删除 Pod 以触发重启"""
         cluster = self.get_object()
+        if _is_demo(cluster):
+            return Response({'success': True, 'message': f'Pod {pod_name} 正在重启 [演示模式]'})
         namespace = request.data.get('namespace', 'default')
         try:
             k8s = _get_k8s_client(cluster)
