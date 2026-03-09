@@ -43,7 +43,7 @@ class ServiceDeployment(models.Model):
     STATUS_CHOICES = [
         ('pending', '待部署'),
         ('deploying', '部署中'),
-        ('running', '运行中'),
+        ('running', '已部署'),
         ('stopped', '已停止'),
         ('failed', '部署失败'),
         ('removing', '卸载中'),
