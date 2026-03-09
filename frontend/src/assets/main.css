@@ -932,3 +932,146 @@ body {
 .terminal-container .xterm-viewport {
   overflow-y: auto !important;
 }
+
+/* ========== 容器管理 ========== */
+.container-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 状态脉冲指示器 */
+.state-pulse {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.state-pulse.running {
+  background: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  animation: pulse-state 2s infinite;
+}
+
+.state-pulse.exited,
+.state-pulse.dead {
+  background: #94a3b8;
+}
+
+.state-pulse.paused,
+.state-pulse.restarting {
+  background: #f59e0b;
+  animation: pulse-state 1.5s infinite;
+}
+
+.state-pulse.created {
+  background: #6366f1;
+}
+
+@keyframes pulse-state {
+  0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* 空状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 64px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.empty-text {
+  font-size: 15px;
+  color: var(--text-secondary);
+}
+
+/* K8s 资源 Tab */
+.k8s-resource-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  width: fit-content;
+}
+
+.resource-tab {
+  padding: 8px 18px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.resource-tab:hover {
+  color: var(--text-primary);
+  background: var(--content-bg);
+}
+
+.resource-tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.resource-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  font-size: 11px;
+  padding: 0 6px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.resource-tab:not(.active) .resource-count {
+  background: var(--content-bg);
+  color: var(--text-secondary);
+}
+
+/* 终端风格日志弹窗 */
+.terminal-log {
+  background: #0f172a !important;
+  color: #e2e8f0 !important;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace !important;
+  font-size: 12px !important;
+  line-height: 1.6 !important;
+  padding: 16px !important;
+  border-radius: 8px !important;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

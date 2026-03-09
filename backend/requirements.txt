@@ -6,3 +6,4 @@ cryptography>=42.0
 paramiko>=3.4
 channels>=4.0
 daphne>=4.1
+kubernetes>=31.0

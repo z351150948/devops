@@ -32,6 +32,12 @@ const routes = [
                 meta: { title: '工具市场', icon: 'Shop' },
             },
             {
+                path: 'containers',
+                name: 'ContainerManage',
+                component: () => import('@/views/ContainerManage.vue'),
+                meta: { title: '容器管理', icon: 'Box' },
+            },
+            {
                 path: 'logs',
                 name: 'Logs',
                 component: () => import('@/views/Logs.vue'),

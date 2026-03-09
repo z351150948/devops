@@ -108,3 +108,28 @@ class LogEntry(models.Model):
 
     def __str__(self):
         return f'[{self.level}] {self.service}: {self.message[:50]}'
+
+
+class K8sCluster(models.Model):
+    """Kubernetes 集群连接"""
+    STATUS_CHOICES = [
+        ('connected', '已连接'),
+        ('disconnected', '未连接'),
+        ('error', '异常'),
+    ]
+
+    name = models.CharField('集群名称', max_length=128, unique=True)
+    api_server = models.CharField('API Server', max_length=256, blank=True, default='')
+    kubeconfig = models.TextField('KubeConfig', help_text='YAML 格式的 kubeconfig 内容')
+    status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default='disconnected')
+    description = models.CharField('描述', max_length=256, blank=True, default='')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = 'K8s 集群'
+        verbose_name_plural = 'K8s 集群'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name

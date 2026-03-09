@@ -50,10 +50,6 @@
               round
             >{{ ver }}</el-tag>
           </div>
-          <!-- 已部署标记 -->
-          <div v-if="isDeployed(tpl.id)" class="deployed-badge">
-            <el-icon><CircleCheckFilled /></el-icon> 已部署
-          </div>
         </div>
       </div>
     </div>

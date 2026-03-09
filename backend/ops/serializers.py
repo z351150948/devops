@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Host, Deployment, Alert, LogEntry
+from .models import Host, Deployment, Alert, LogEntry, K8sCluster
 
 
 class HostSerializer(serializers.ModelSerializer):
@@ -36,3 +36,14 @@ class LogEntrySerializer(serializers.ModelSerializer):
     class Meta:
         model = LogEntry
         fields = '__all__'
+
+
+class K8sClusterSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = K8sCluster
+        fields = '__all__'
+        extra_kwargs = {
+            'kubeconfig': {'write_only': True},  # 安全: kubeconfig 不在列表中返回
+        }

@@ -82,6 +82,7 @@ const menuItems = [
   { path: '/hosts',       name: 'Hosts',       title: '主机管理', icon: 'Monitor' },
   { path: '/deployments', name: 'Deployments', title: '部署管理', icon: 'Promotion' },
   { path: '/marketplace', name: 'ServiceMarket', title: '工具市场', icon: 'Shop' },
+  { path: '/containers',  name: 'ContainerManage', title: '容器管理', icon: 'Box' },
   { path: '/logs',        name: 'Logs',        title: '日志中心', icon: 'Document' },
   { path: '/alerts',      name: 'Alerts',      title: '告警中心', icon: 'Bell' },
   { path: '/users',       name: 'Users',       title: '用户管理', icon: 'User' },
