@@ -1,24 +1,32 @@
 """
-Docker 容器管理 API
-通过 SSH 连接远程主机执行 Docker 命令
+Docker 环境管理 API
+- DockerHostViewSet: Docker 主机 CRUD + 测试连接
+- 容器/镜像管理: 通过 SSH 连接远程主机执行 Docker 命令
 """
 import json
 import logging
 import paramiko
-from rest_framework.decorators import api_view
+from rest_framework import viewsets
+from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
+
+from .models import DockerHost
+from .serializers import DockerHostSerializer
 
 logger = logging.getLogger(__name__)
 
 
-def _get_ssh_client(host):
+# ====== SSH 工具函数 ======
+
+def _get_ssh_client_from_docker_host(docker_host):
+    """使用 DockerHost 模型创建 SSH 连接"""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
-        hostname=host.ip_address,
-        port=host.ssh_port or 22,
-        username=host.ssh_user or 'root',
-        password=host.ssh_password or None,
+        hostname=docker_host.ip_address,
+        port=docker_host.ssh_port or 22,
+        username=docker_host.ssh_user or 'root',
+        password=docker_host.ssh_password or None,
         timeout=15,
     )
     return client
@@ -77,21 +85,68 @@ def _parse_docker_images(raw_output):
     return images
 
 
+def _get_docker_host(host_id):
+    """获取 DockerHost 实例"""
+    try:
+        return DockerHost.objects.get(pk=host_id)
+    except DockerHost.DoesNotExist:
+        return None
+
+
+# ====== DockerHost ViewSet ======
+
+class DockerHostViewSet(viewsets.ModelViewSet):
+    queryset = DockerHost.objects.all()
+    serializer_class = DockerHostSerializer
+
+    @action(detail=True, methods=['post'])
+    def test_connection(self, request, pk=None):
+        """测试 Docker 主机连接"""
+        docker_host = self.get_object()
+        try:
+            client = _get_ssh_client_from_docker_host(docker_host)
+            code, out, err = _ssh_exec(client, 'docker version --format "{{.Server.Version}}" 2>/dev/null')
+            client.close()
+
+            if code == 0 and out.strip():
+                docker_host.status = 'connected'
+                docker_host.docker_api_version = out.strip()
+                docker_host.save()
+                return Response({
+                    'success': True,
+                    'message': f'连接成功，Docker 版本: {out.strip()}'
+                })
+            else:
+                docker_host.status = 'error'
+                docker_host.save()
+                return Response({
+                    'success': False,
+                    'message': f'Docker 未安装或无法执行: {err}'
+                })
+        except Exception as e:
+            docker_host.status = 'error'
+            docker_host.save()
+            return Response({
+                'success': False,
+                'message': f'SSH 连接失败: {str(e)}'
+            })
+
+
+# ====== 容器/镜像管理（使用 DockerHost） ======
+
 @api_view(['GET'])
 def list_containers(request):
     """获取主机上的 Docker 容器列表"""
-    from ops.models import Host
     host_id = request.query_params.get('host_id')
     if not host_id:
         return Response({'detail': '缺少 host_id 参数'}, status=400)
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
+        client = _get_ssh_client_from_docker_host(docker_host)
         code, out, err = _ssh_exec(client, 'docker ps -a --format json 2>/dev/null')
         client.close()
 
@@ -107,18 +162,16 @@ def list_containers(request):
 @api_view(['GET'])
 def list_images(request):
     """获取主机上的 Docker 镜像列表"""
-    from ops.models import Host
     host_id = request.query_params.get('host_id')
     if not host_id:
         return Response({'detail': '缺少 host_id 参数'}, status=400)
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
+        client = _get_ssh_client_from_docker_host(docker_host)
         code, out, err = _ssh_exec(client, 'docker images --format json 2>/dev/null')
         client.close()
 
@@ -134,25 +187,23 @@ def list_images(request):
 @api_view(['POST'])
 def container_action(request, container_id):
     """容器操作：start / stop / restart"""
-    from ops.models import Host
     host_id = request.data.get('host_id')
-    action = request.data.get('action')
+    action_name = request.data.get('action')
 
-    if action not in ('start', 'stop', 'restart'):
+    if action_name not in ('start', 'stop', 'restart'):
         return Response({'detail': '无效操作，支持: start / stop / restart'}, status=400)
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
-        code, out, err = _ssh_exec(client, f'docker {action} {container_id} 2>&1')
+        client = _get_ssh_client_from_docker_host(docker_host)
+        code, out, err = _ssh_exec(client, f'docker {action_name} {container_id} 2>&1')
         client.close()
 
         if code == 0:
-            return Response({'success': True, 'message': f'容器 {action} 成功'})
+            return Response({'success': True, 'message': f'容器 {action_name} 成功'})
         else:
             return Response({'success': False, 'message': f'操作失败: {out}{err}'}, status=400)
     except Exception as e:
@@ -162,16 +213,14 @@ def container_action(request, container_id):
 @api_view(['DELETE'])
 def container_remove(request, container_id):
     """删除容器"""
-    from ops.models import Host
     host_id = request.query_params.get('host_id')
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
+        client = _get_ssh_client_from_docker_host(docker_host)
         code, out, err = _ssh_exec(client, f'docker rm -f {container_id} 2>&1')
         client.close()
 
@@ -186,17 +235,15 @@ def container_remove(request, container_id):
 @api_view(['GET'])
 def container_logs(request, container_id):
     """获取容器日志"""
-    from ops.models import Host
     host_id = request.query_params.get('host_id')
     tail = request.query_params.get('tail', '200')
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
+        client = _get_ssh_client_from_docker_host(docker_host)
         code, out, err = _ssh_exec(client, f'docker logs --tail={tail} {container_id} 2>&1', timeout=15)
         client.close()
         return Response({'logs': out})
@@ -207,16 +254,14 @@ def container_logs(request, container_id):
 @api_view(['GET'])
 def container_inspect(request, container_id):
     """获取容器详情"""
-    from ops.models import Host
     host_id = request.query_params.get('host_id')
 
-    try:
-        host = Host.objects.get(pk=host_id)
-    except Host.DoesNotExist:
-        return Response({'detail': '主机不存在'}, status=404)
+    docker_host = _get_docker_host(host_id)
+    if not docker_host:
+        return Response({'detail': 'Docker 环境不存在'}, status=404)
 
     try:
-        client = _get_ssh_client(host)
+        client = _get_ssh_client_from_docker_host(docker_host)
         code, out, err = _ssh_exec(client, f'docker inspect {container_id} 2>&1')
         client.close()
 

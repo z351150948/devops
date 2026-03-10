@@ -1185,15 +1185,22 @@ body {
   background-color: rgba(59, 130, 246, 0.1) !important;
 }
 
-.industrial-popper .el-select-dropdown__item.selected {
-  color: #10b981 !important;
-  font-weight: 700;
-  background-color: rgba(16, 185, 129, 0.1) !important;
+.industrial-popper .el-popper__arrow::before {
+  background: #0f172a !important;
+  border: 1px solid #334155 !important;
 }
 
-.industrial-popper .el-popper__arrow::before {
-  background: #1e293b !important;
-  border: 1px solid #475569 !important;
+/* ====== Docker 工具栏 — 鲸鱼蓝 ====== */
+.docker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: #2496ed;
+  padding: 6px 20px;
+  border-radius: 6px;
+  border: none;
+  box-shadow: 0 4px 15px -3px rgba(36, 150, 237, 0.4);
+  flex-wrap: wrap;
 }
 
 .k8s-main-tabs {

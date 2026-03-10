@@ -1,5 +1,12 @@
 import request from '@/api/request'
 
+// ====== Docker 环境主机 ======
+export const getDockerHosts = () => request.get('/docker/hosts/')
+export const createDockerHost = (data) => request.post('/docker/hosts/', data)
+export const updateDockerHost = (id, data) => request.put(`/docker/hosts/${id}/`, data)
+export const deleteDockerHost = (id) => request.delete(`/docker/hosts/${id}/`)
+export const testDockerConnection = (id) => request.post(`/docker/hosts/${id}/test_connection/`)
+
 // ====== Docker 容器 ======
 export const getDockerContainers = (hostId) => request.get('/docker/containers/', { params: { host_id: hostId } })
 export const getDockerImages = (hostId) => request.get('/docker/images/', { params: { host_id: hostId } })

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Host, Deployment, Alert, LogEntry, K8sCluster
+from .models import Host, Deployment, Alert, LogEntry, K8sCluster, DockerHost
 
 
 class HostSerializer(serializers.ModelSerializer):
@@ -46,4 +46,15 @@ class K8sClusterSerializer(serializers.ModelSerializer):
         fields = '__all__'
         extra_kwargs = {
             'kubeconfig': {'write_only': True},  # 安全: kubeconfig 不在列表中返回
+        }
+
+
+class DockerHostSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = DockerHost
+        fields = '__all__'
+        extra_kwargs = {
+            'ssh_password': {'write_only': True},
         }

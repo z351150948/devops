@@ -133,3 +133,31 @@ class K8sCluster(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class DockerHost(models.Model):
+    """Docker 环境主机（手工录入，独立于通用 Host）"""
+    STATUS_CHOICES = [
+        ('connected', '已连接'),
+        ('disconnected', '未连接'),
+        ('error', '异常'),
+    ]
+
+    name = models.CharField('环境名称', max_length=128, unique=True)
+    ip_address = models.GenericIPAddressField('IP 地址')
+    ssh_port = models.IntegerField('SSH 端口', default=22)
+    ssh_user = models.CharField('SSH 用户', max_length=64, default='root')
+    ssh_password = models.CharField('SSH 密码', max_length=256, blank=True, default='')
+    docker_api_version = models.CharField('Docker API 版本', max_length=16, blank=True, default='')
+    status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default='disconnected')
+    description = models.CharField('描述', max_length=256, blank=True, default='')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = 'Docker 环境'
+        verbose_name_plural = 'Docker 环境'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.ip_address})'

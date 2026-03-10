@@ -11,6 +11,7 @@ router.register(r'deployments', views.DeploymentViewSet)
 router.register(r'alerts', views.AlertViewSet)
 router.register(r'logs', views.LogEntryViewSet)
 router.register(r'k8s/clusters', k8s_views.K8sClusterViewSet)
+router.register(r'docker/hosts', docker_views.DockerHostViewSet)
 
 urlpatterns = [
     path('dashboard/stats/', views.dashboard_stats, name='dashboard-stats'),
