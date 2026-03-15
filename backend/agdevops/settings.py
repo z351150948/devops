@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -146,6 +147,31 @@ REST_FRAMEWORK = {
 
 # Loki
 LOKI_URL = 'http://47.95.15.209:33100'
+
+LOG_PROVIDER_CONFIGS = {
+    'loki': {
+        'endpoint': os.getenv('LOKI_URL', LOKI_URL),
+    },
+    'elk': {
+        'endpoint': os.getenv('ELK_URL', ''),
+        'auth_type': os.getenv('ELK_AUTH_TYPE', 'none'),
+        'username': os.getenv('ELK_USERNAME', ''),
+        'password': os.getenv('ELK_PASSWORD', ''),
+        'api_key': os.getenv('ELK_API_KEY', ''),
+        'bearer_token': os.getenv('ELK_BEARER_TOKEN', ''),
+        'index_pattern': os.getenv('ELK_INDEX_PATTERN', 'logs-*'),
+        'time_field': os.getenv('ELK_TIME_FIELD', '@timestamp'),
+        'message_fields': os.getenv('ELK_MESSAGE_FIELDS', 'message,log,msg'),
+    },
+    'sls': {
+        'endpoint': os.getenv('ALIYUN_SLS_ENDPOINT', ''),
+        'project': os.getenv('ALIYUN_SLS_PROJECT', ''),
+        'logstore': os.getenv('ALIYUN_SLS_LOGSTORE', ''),
+        'topic': os.getenv('ALIYUN_SLS_TOPIC', ''),
+        'access_key_id': os.getenv('ALIYUN_SLS_ACCESS_KEY_ID', ''),
+        'access_key_secret': os.getenv('ALIYUN_SLS_ACCESS_KEY_SECRET', ''),
+    },
+}
 
 # ASGI / Channels
 ASGI_APPLICATION = 'agdevops.asgi.application'

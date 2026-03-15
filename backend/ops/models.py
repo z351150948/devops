@@ -110,6 +110,31 @@ class LogEntry(models.Model):
         return f'[{self.level}] {self.service}: {self.message[:50]}'
 
 
+class LogDataSource(models.Model):
+    PROVIDER_CHOICES = [
+        ('loki', 'Loki'),
+        ('elk', 'ELK / Elasticsearch'),
+        ('sls', '阿里云 SLS'),
+    ]
+
+    name = models.CharField('名称', max_length=128, unique=True)
+    provider = models.CharField('日志类型', max_length=16, choices=PROVIDER_CHOICES)
+    description = models.CharField('描述', max_length=255, blank=True, default='')
+    config = models.JSONField('连接配置', default=dict, blank=True)
+    is_enabled = models.BooleanField('启用', default=True)
+    is_default = models.BooleanField('默认数据源', default=False)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '日志数据源'
+        verbose_name_plural = '日志数据源'
+        ordering = ['provider', 'name']
+
+    def __str__(self):
+        return f'{self.get_provider_display()} - {self.name}'
+
+
 class K8sCluster(models.Model):
     """Kubernetes 集群连接"""
     STATUS_CHOICES = [
