@@ -1,63 +1,74 @@
 # AgDevOps 运维平台
 
-基于 Django 5 + Vue 3 + Element Plus 的一体化运维平台，覆盖主机管理、CMDB、部署管理、容器管理、日志中心、告警中心和 SQL 审计等场景。
+基于 Django、Django REST framework、Channels 与 Vue 3 / Element Plus 的一体化运维平台，覆盖主机管理、CMDB、部署管理、容器管理、Nginx 管理、日志中心、告警中心、SQL 审计等常见运维场景。
 
-## 功能概览
+## 核心能力
 
 - 仪表盘：聚合主机、部署、告警等核心指标
-- CMDB：资源关系、成本分析、资产管理
-- 主机与部署：主机台账、部署记录、运行状态查看
+- 主机管理：主机台账、状态展示、WebShell 入口
+- CMDB：资源类型、配置项、资源树、拓扑关系、成本分析、优化建议、资源申请
+- 部署管理：部署记录、状态查看与发布追踪
 - 容器管理：K8s 集群、Docker 环境管理
 - Nginx 管理：域名、路由、证书与环境配置
-- 日志中心：
-  - 数据源管理与日志查询分离
-  - 支持 Loki、ELK / Elasticsearch、阿里云 SLS
-  - 支持 Demo 数据源与 Demo 日志，便于本地演示
-  - 查询页支持多标签页、历史记录、收藏条件、趋势图
-  - 提供三种日志源的站内查询语法帮助
-- SQL 审计：数据源、工单、只读查询
+- 日志中心：数据源管理、日志查询、多标签页、历史记录、收藏条件、趋势图
+- SQL 审计：数据源管理、SQL 工单、只读查询
+- 工具市场：预留扩展型运维工具能力
 
-## 日志中心亮点
+## 最近更新
 
-- 菜单拆分为 `日志中心 / 日志数据源` 与 `日志中心 / 日志查询`
-- 首次进入日志查询默认选中 `SLS 演示（上海）`
-- 记住用户上次使用的数据源
-- 默认查询最近 1 小时，支持最近 10 分钟 / 30 分钟 / 1 小时 / 6 小时
-- Loki、ELK、SLS 均内置生产风格 Spring Cloud Demo 日志
-- Demo 日志包含 trace/span、线程、类名、多租户、灰度发布等字段
+- CMDB 拓扑支持更清晰的筛选范围控制，适合做同环境资源梳理与邻接分析
+- CMDB 成本分析支持按月份查看、近 6 月趋势、Top 资源与多维度聚合
+- CMDB 优化建议基于资源状态、环境、规格与月成本给出节流提示
+- CI 关系增加自关联校验与唯一性约束，避免重复或无效关系
+- 新增 CMDB 自动关联设计文档，便于后续扩展关系发现能力
+
+## 技术栈
+
+- 后端：Django + Django REST framework + Channels + Daphne
+- 前端：Vue 3 + Vite + Element Plus + Pinia + Vue Router + ECharts
+- 数据存储：SQLite（默认开发配置）
 
 ## 项目结构
 
 ```text
 agdevops/
 ├─ backend/
-│  ├─ agdevops/            # Django 配置
-│  ├─ ops/                 # 运维、日志中心、主机、部署、告警
-│  ├─ cmdb/                # CMDB 与成本分析
-│  ├─ sqlaudit/            # SQL 审计
+│  ├─ agdevops/                  # Django 配置
+│  ├─ ops/                       # 仪表盘、主机、部署、日志、告警
+│  ├─ cmdb/                      # CMDB、拓扑、成本、资源申请
+│  ├─ marketplace/               # 工具市场
+│  ├─ sqlaudit/                  # SQL 审计
 │  ├─ requirements.txt
 │  └─ manage.py
 ├─ frontend/
-│  ├─ src/api/             # 前端 API 封装
-│  ├─ src/layout/          # 布局与菜单
-│  ├─ src/router/          # 路由
-│  ├─ src/views/           # 页面视图
+│  ├─ src/api/                   # 前端 API 封装
+│  ├─ src/components/            # 复用组件
+│  ├─ src/layout/                # 布局与菜单
+│  ├─ src/router/                # 路由配置
+│  ├─ src/stores/                # Pinia store
+│  ├─ src/views/                 # 页面视图
 │  └─ package.json
+├─ docs/
+│  ├─ CMDB使用手册.md
+│  └─ CMDB自动关联设计稿.md
 └─ README.md
 ```
 
 ## 快速启动
 
-### 后端
+### 1. 启动后端
 
 ```bash
 cd backend
 pip install -r requirements.txt
 python manage.py migrate
+python manage.py seed_data
 python -m daphne -b 0.0.0.0 -p 8000 agdevops.asgi:application
 ```
 
-### 前端
+后端默认地址：`http://localhost:8000`
+
+### 2. 启动前端
 
 ```bash
 cd frontend
@@ -65,37 +76,44 @@ npm install
 npm run dev
 ```
 
-默认访问：`http://localhost:3000`
+前端默认地址：`http://localhost:3000`
 
 ## 常用命令
 
 ```bash
-# 后端测试
-cd backend && python manage.py test ops
+# 后端全量测试
+cd backend && python manage.py test
 
-# 前端构建
+# 加载演示数据
+cd backend && python manage.py seed_data
+
+# 前端开发
+cd frontend && npm run dev
+
+# 前端生产构建
 cd frontend && npm run build
+
+# 前端本地预览构建结果
+cd frontend && npm run preview
 ```
 
-## 日志相关接口
+## 日志中心说明
 
-- `GET /api/log/providers/`
-- `GET /api/log/datasources/`
-- `POST /api/log/datasources/`
-- `POST /api/log/providers/<provider>/catalog/`
-- `POST /api/log/query/`
+- 支持 Loki、ELK / Elasticsearch、阿里云 SLS
+- 首次迁移后可配合演示数据直接查看日志查询页面
+- 默认配置项位于 `backend/agdevops/settings.py`
+- 可通过环境变量覆盖日志源配置，例如 `LOKI_URL`、`ELK_URL`、`ELK_AUTH_TYPE`、`ALIYUN_SLS_ENDPOINT`、`ALIYUN_SLS_PROJECT`
 
-## 配置说明
+## 文档
 
-后端支持通过 `backend/agdevops/settings.py` 或环境变量配置日志源默认参数：
+- `docs/CMDB使用手册.md`：CMDB 列表、拓扑与成本能力说明
+- `docs/CMDB自动关联设计稿.md`：CMDB 自动发现关系的设计思路
 
-- `LOKI_URL`
-- `ELK_URL`
-- `ELK_AUTH_TYPE`
-- `ALIYUN_SLS_ENDPOINT`
-- `ALIYUN_SLS_PROJECT`
+## 开发说明
 
-首次执行迁移后会自动写入 Loki、ELK、SLS 的 Demo 数据源，可直接用于演示日志查询页面。
+- 当前默认配置面向本地开发：`DEBUG = True`、SQLite、开放 CORS
+- `frontend/dist/`、`frontend/node_modules/`、`backend/__pycache__/`、`db.sqlite3` 为生成产物，不建议提交
+- 使用 Daphne 运行后端时，修改 Python 代码后需要手动重启服务
 
 ## License
 
