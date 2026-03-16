@@ -7,7 +7,7 @@
         <button class="tab-btn" :class="{ active: activeTab === 'market' }" @click="activeTab = 'market'">
           <el-icon><Shop /></el-icon> 工具市场
         </button>
-        <button class="tab-btn" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'; fetchDeployments()">
+        <button v-if="canViewMarketplaceDeployments" class="tab-btn" :class="{ active: activeTab === 'deploy' }" @click="activeTab = 'deploy'; fetchDeployments()">
           <el-icon><Setting /></el-icon> 部署管理
           <span v-if="deployments.length" class="tab-badge">{{ deployments.length }}</span>
         </button>
@@ -33,6 +33,7 @@
           v-for="tpl in filteredTemplates"
           :key="tpl.id"
           class="service-card"
+          :class="{ disabled: !canManageMarketplaceDeployments }"
           @click="openDeployDialog(tpl)"
         >
           <div class="card-icon" :class="'icon-' + tpl.icon">
@@ -82,9 +83,9 @@
           <el-table-column label="操作" width="230" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="viewLogs(row)">日志</el-button>
-              <el-button v-if="row.status === 'running'" link type="warning" size="small" @click="handleStop(row)">停止</el-button>
-              <el-button v-if="row.status === 'stopped'" link type="success" size="small" @click="handleStart(row)">启动</el-button>
-              <el-popconfirm title="确定卸载该服务? 数据将被清除!" @confirm="handleRemove(row)">
+              <el-button v-if="canManageMarketplaceDeployments && row.status === 'running'" link type="warning" size="small" @click="handleStop(row)">停止</el-button>
+              <el-button v-if="canManageMarketplaceDeployments && row.status === 'stopped'" link type="success" size="small" @click="handleStart(row)">启动</el-button>
+              <el-popconfirm v-if="canManageMarketplaceDeployments" title="确定卸载该服务? 数据将被清除!" @confirm="handleRemove(row)">
                 <template #reference>
                   <el-button link type="danger" size="small">卸载</el-button>
                 </template>
@@ -119,7 +120,7 @@
         </template>
 
         <el-form-item label="部署人">
-          <el-input v-model="deployForm.deployer" style="width:200px" />
+          <el-input v-model="deployForm.deployer" style="width:200px" disabled />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -164,8 +165,10 @@ import {
   stopService, startService, removeService, getServiceLogs,
 } from '@/api/modules/marketplace'
 import { getHosts } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
 // ====== 数据 ======
+const authStore = useAuthStore()
 const templates = ref([])
 const deployments = ref([])
 const hosts = ref([])
@@ -195,6 +198,8 @@ const filteredTemplates = computed(() => {
   if (activeCategory.value === 'all') return templates.value
   return templates.value.filter(t => t.category === activeCategory.value)
 })
+const canViewMarketplaceDeployments = computed(() => authStore.hasPermission('marketplace.deployment.view'))
+const canManageMarketplaceDeployments = computed(() => authStore.hasPermission('marketplace.deployment.manage'))
 
 // ====== 方法 ======
 function getIconEmoji(icon) { return ICON_MAP[icon] || '📦' }
@@ -283,10 +288,14 @@ onBeforeUnmount(() => {
 // ====== 部署逻辑 ======
 const deployVisible = ref(false)
 const deployTemplate = ref(null)
-const deployForm = ref({ host_id: null, version: '', env_config: {}, deployer: 'admin' })
+const deployForm = ref({ host_id: null, version: '', env_config: {}, deployer: authStore.currentUser?.username || 'admin' })
 const deploying = ref(false)
 
 function openDeployDialog(tpl) {
+  if (!canManageMarketplaceDeployments.value) {
+    ElMessage.warning('当前账号没有部署权限')
+    return
+  }
   deployTemplate.value = tpl
   const config = {}
   ;(tpl.env_schema || []).forEach(f => { config[f.key] = f.default || '' })
@@ -294,7 +303,7 @@ function openDeployDialog(tpl) {
     host_id: null,
     version: tpl.versions?.[0] || '',
     env_config: config,
-    deployer: 'admin',
+    deployer: authStore.currentUser?.username || 'admin',
   }
   deployVisible.value = true
 }
@@ -310,7 +319,6 @@ async function handleDeploy() {
       host_id: deployForm.value.host_id,
       version: deployForm.value.version,
       env_config: deployForm.value.env_config,
-      deployer: deployForm.value.deployer,
     })
     ElMessage.success('部署任务已发起，正在自动跟踪状态...')
     deployVisible.value = false
@@ -354,3 +362,9 @@ function viewDeployLog(dep) {
   detailVisible.value = true
 }
 </script>
+
+<style scoped>
+.service-card.disabled {
+  opacity: 0.58;
+}
+</style>

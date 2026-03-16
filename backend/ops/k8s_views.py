@@ -8,11 +8,12 @@ import tempfile
 import os
 import yaml
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .models import K8sCluster
 from .serializers import K8sClusterSerializer
+from rbac.permissions import RBACPermissionMixin
 
 logger = logging.getLogger(__name__)
 
@@ -162,11 +163,40 @@ def _filter_by_ns(data, namespace):
     return [d for d in data if d['namespace'] == namespace]
 
 
-class K8sClusterViewSet(viewsets.ModelViewSet):
+class K8sClusterViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """K8s 集群连接管理"""
     queryset = K8sCluster.objects.all()
     serializer_class = K8sClusterSerializer
     pagination_class = None
+    rbac_permissions = {
+        'list': ['ops.k8s.view'],
+        'retrieve': ['ops.k8s.view'],
+        'create': ['ops.k8s.manage'],
+        'update': ['ops.k8s.manage'],
+        'partial_update': ['ops.k8s.manage'],
+        'destroy': ['ops.k8s.manage'],
+        'test_connection': ['ops.k8s.manage'],
+        'namespaces': ['ops.k8s.view'],
+        'pods': ['ops.k8s.view'],
+        'services': ['ops.k8s.view'],
+        'deployments': ['ops.k8s.view'],
+        'restart_pod': ['ops.k8s.manage'],
+        'nodes': ['ops.k8s.view'],
+        'statefulsets': ['ops.k8s.view'],
+        'daemonsets': ['ops.k8s.view'],
+        'jobs': ['ops.k8s.view'],
+        'cronjobs': ['ops.k8s.view'],
+        'ingresses': ['ops.k8s.view'],
+        'pvs': ['ops.k8s.view'],
+        'pvcs': ['ops.k8s.view'],
+        'storageclasses': ['ops.k8s.view'],
+        'configmaps': ['ops.k8s.view'],
+        'secrets': ['ops.k8s.view'],
+        'resource_yaml': ['ops.k8s.view'],
+        'workload_pods': ['ops.k8s.view'],
+        'pod_logs': ['ops.k8s.view'],
+        'resource_events': ['ops.k8s.view'],
+    }
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):

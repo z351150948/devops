@@ -1,0 +1,115 @@
+﻿from django.contrib.auth import get_user_model
+from django.db import transaction
+
+from .models import PermissionDefinition, Role, UserGroup
+from .registry import BUILTIN_ROLES, PERMISSION_DEFINITIONS
+
+
+User = get_user_model()
+DEFAULT_ADMIN_USERNAME = 'admin'
+DEFAULT_ADMIN_PASSWORD = 'Admin@123456'
+DEFAULT_ADMIN_EMAIL = 'admin@example.com'
+
+
+@transaction.atomic
+def ensure_builtin_rbac():
+    permission_by_code = {}
+    for index, (code, name, category, description) in enumerate(PERMISSION_DEFINITIONS, start=1):
+        permission, _ = PermissionDefinition.objects.update_or_create(
+            code=code,
+            defaults={
+                'name': name,
+                'category': category,
+                'description': description,
+                'sort_order': index,
+                'is_builtin': True,
+            },
+        )
+        permission_by_code[code] = permission
+
+    for role_data in BUILTIN_ROLES:
+        role, _ = Role.objects.update_or_create(
+            code=role_data['code'],
+            defaults={
+                'name': role_data['name'],
+                'description': role_data['description'],
+                'is_builtin': True,
+            },
+        )
+        codes = role_data['permissions']
+        if '*' in codes:
+            role.permissions.set(PermissionDefinition.objects.all())
+        else:
+            role.permissions.set([permission_by_code[code] for code in codes if code in permission_by_code])
+
+
+@transaction.atomic
+def ensure_default_superuser():
+    if User.objects.filter(is_superuser=True).exists():
+        return
+
+    user = User.objects.create_superuser(
+        username=DEFAULT_ADMIN_USERNAME,
+        email=DEFAULT_ADMIN_EMAIL,
+        password=DEFAULT_ADMIN_PASSWORD,
+    )
+    role = Role.objects.filter(code='platform-admin').first()
+    if role:
+        role.users.add(user)
+
+
+def get_user_direct_roles(user):
+    if not getattr(user, 'is_authenticated', False):
+        return Role.objects.none()
+    return user.rbac_roles.prefetch_related('permissions').all()
+
+
+def get_user_group_roles(user):
+    if not getattr(user, 'is_authenticated', False):
+        return Role.objects.none()
+    return Role.objects.filter(user_groups__users=user).prefetch_related('permissions').distinct()
+
+
+def get_user_effective_permissions(user):
+    if not getattr(user, 'is_authenticated', False):
+        return set()
+    if getattr(user, 'is_superuser', False):
+        return set(PermissionDefinition.objects.values_list('code', flat=True))
+
+    permission_codes = set(
+        PermissionDefinition.objects.filter(roles__users=user).values_list('code', flat=True)
+    )
+    permission_codes.update(
+        PermissionDefinition.objects.filter(roles__user_groups__users=user).values_list('code', flat=True)
+    )
+    return permission_codes
+
+
+def user_has_permissions(user, codes):
+    codes = [code for code in (codes or []) if code]
+    if not codes:
+        return True
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    if getattr(user, 'is_superuser', False):
+        return True
+    granted = get_user_effective_permissions(user)
+    return all(code in granted for code in codes)
+
+
+def get_permission_catalog():
+    return PermissionDefinition.objects.order_by('sort_order', 'code')
+
+
+def get_builtin_role_catalog():
+    return Role.objects.filter(is_builtin=True).order_by('name')
+
+
+def get_user_summary(user):
+    roles = list(Role.objects.filter(users=user).values('id', 'code', 'name'))
+    groups = list(UserGroup.objects.filter(users=user).values('id', 'code', 'name'))
+    return {
+        'roles': roles,
+        'groups': groups,
+        'effective_permissions': sorted(get_user_effective_permissions(user)),
+    }

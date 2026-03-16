@@ -2,7 +2,7 @@
   <div class="fade-in">
     <div class="page-header">
       <h2>部署管理</h2>
-      <el-button type="primary" @click="openDialog()">
+      <el-button v-if="canManageDeployments" type="primary" @click="openDialog()">
         <el-icon><Plus /></el-icon> 新建部署
       </el-button>
     </div>
@@ -43,7 +43,7 @@
         <el-table-column prop="deployed_at" label="部署时间" width="170">
           <template #default="{ row }">{{ formatTime(row.deployed_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column v-if="canManageDeployments" label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
             <el-popconfirm title="确定删除？" @confirm="handleDelete(row.id)">
@@ -87,7 +87,7 @@
           </el-select>
         </el-form-item>
         <el-form-item label="部署人">
-          <el-input v-model="form.deployer" />
+          <el-input v-model="form.deployer" disabled />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" />
@@ -102,11 +102,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getDeployments, createDeployment, updateDeployment, deleteDeployment } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const items = ref([])
 const loading = ref(false)
 const search = ref('')
@@ -120,8 +122,9 @@ const editingId = ref(null)
 const saving = ref(false)
 const form = ref({
   app_name: '', version: '', environment: 'testing',
-  status: 'pending', deployer: 'admin', description: '',
+  status: 'pending', deployer: authStore.currentUser?.username || 'admin', description: '',
 })
+const canManageDeployments = computed(() => authStore.hasPermission('ops.deployment.manage'))
 
 const envTagType = (env) => {
   const map = { production: 'danger', staging: 'warning', testing: '', development: 'info' }
@@ -150,7 +153,7 @@ const openDialog = (row) => {
     form.value = { ...row }
   } else {
     editingId.value = null
-    form.value = { app_name: '', version: '', environment: 'testing', status: 'pending', deployer: 'admin', description: '' }
+    form.value = { app_name: '', version: '', environment: 'testing', status: 'pending', deployer: authStore.currentUser?.username || 'admin', description: '' }
   }
   dialogVisible.value = true
 }

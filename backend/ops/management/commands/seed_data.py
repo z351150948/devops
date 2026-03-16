@@ -1,4 +1,5 @@
 import random
+from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
@@ -139,3 +140,6 @@ class Command(BaseCommand):
             f'{Alert.objects.count()} 告警, '
             f'{LogEntry.objects.count()} 日志'
         ))
+
+        self.stdout.write('正在生成 RBAC 演示账号...')
+        call_command('seed_rbac_demo')

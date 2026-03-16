@@ -2,7 +2,7 @@
   <div class="fade-in">
     <div class="page-header">
       <h2>SQL 工单</h2>
-      <el-button type="primary" @click="openSubmitDialog">
+      <el-button v-if="canSubmitOrders" type="primary" @click="openSubmitDialog">
         <el-icon><Plus /></el-icon> 提交工单
       </el-button>
     </div>
@@ -39,14 +39,14 @@
         <el-table-column prop="created_at" label="提交时间" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
-            <el-button v-if="row.status === 'pending'" link type="success" size="small"
+            <el-button v-if="canReviewOrders && row.status === 'pending'" link type="success" size="small"
               @click="handleApprove(row)">通过</el-button>
-            <el-button v-if="row.status === 'pending'" link type="warning" size="small"
+            <el-button v-if="canReviewOrders && row.status === 'pending'" link type="warning" size="small"
               @click="handleReject(row)">驳回</el-button>
-            <el-button v-if="row.status === 'approved'" link type="danger" size="small"
+            <el-button v-if="canExecuteOrders && row.status === 'approved'" link type="danger" size="small"
               @click="handleExecute(row)" :loading="executingId === row.id">执行</el-button>
           </template>
         </el-table-column>
@@ -94,7 +94,7 @@
           </div>
         </el-form-item>
         <el-form-item label="提交人">
-          <el-input v-model="form.submitter" style="width:200px" />
+          <el-input v-model="form.submitter" style="width:200px" disabled />
         </el-form-item>
 
         <!-- 预检查结果 -->
@@ -178,7 +178,7 @@
       width="90%" style="max-width:480px;" append-to-body destroy-on-close>
       <el-form label-width="80px">
         <el-form-item label="审核人">
-          <el-input v-model="reviewForm.reviewer" style="width:200px" />
+          <el-input v-model="reviewForm.reviewer" style="width:200px" disabled />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="reviewForm.comment" type="textarea" :rows="3"
@@ -203,7 +203,9 @@ import {
   rejectSqlOrder, executeSqlOrder, checkSql, getSqlOrderDetail,
 } from '@/api/modules/sqlaudit'
 import { getDataSources, getDataSourceDatabases } from '@/api/modules/sqlaudit'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const items = ref([])
 const loading = ref(false)
 const search = ref('')
@@ -224,7 +226,7 @@ const checking = ref(false)
 const checkResults = ref([])
 const form = ref({
   title: '', datasource: null, database: '', sql_type: 'DML',
-  sql_content: '', submitter: 'admin',
+  sql_content: '', submitter: authStore.currentUser?.username || 'admin',
 })
 
 // 详情对话框
@@ -236,7 +238,10 @@ const reviewVisible = ref(false)
 const reviewAction = ref('')
 const reviewOrderId = ref(null)
 const reviewing = ref(false)
-const reviewForm = ref({ reviewer: 'admin', comment: '' })
+const reviewForm = ref({ reviewer: authStore.currentUser?.username || 'admin', comment: '' })
+const canSubmitOrders = computed(() => authStore.hasPermission('sqlaudit.order.submit'))
+const canReviewOrders = computed(() => authStore.hasPermission('sqlaudit.order.review'))
+const canExecuteOrders = computed(() => authStore.hasPermission('sqlaudit.order.execute'))
 
 const hasErrors = computed(() =>
   checkResults.value.some(r => r.level === 'error')
@@ -289,7 +294,7 @@ const onDatasourceChange = async (dsId) => {
 const openSubmitDialog = () => {
   form.value = {
     title: '', datasource: null, database: '', sql_type: 'DML',
-    sql_content: '', submitter: 'admin',
+    sql_content: '', submitter: authStore.currentUser?.username || 'admin',
   }
   checkResults.value = []
   loadDatasources()
@@ -337,14 +342,14 @@ const openDetail = async (row) => {
 const handleApprove = (row) => {
   reviewAction.value = 'approve'
   reviewOrderId.value = row.id
-  reviewForm.value = { reviewer: 'admin', comment: '' }
+  reviewForm.value = { reviewer: authStore.currentUser?.username || 'admin', comment: '' }
   reviewVisible.value = true
 }
 
 const handleReject = (row) => {
   reviewAction.value = 'reject'
   reviewOrderId.value = row.id
-  reviewForm.value = { reviewer: 'admin', comment: '' }
+  reviewForm.value = { reviewer: authStore.currentUser?.username || 'admin', comment: '' }
   reviewVisible.value = true
 }
 

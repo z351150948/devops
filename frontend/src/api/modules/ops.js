@@ -3,6 +3,7 @@ import request from '../request'
 export const getDashboardStats = () => request.get('/dashboard/stats/')
 
 export const getHosts = (params) => request.get('/hosts/', { params })
+export const getHost = (id) => request.get(`/hosts/${id}/`)
 export const createHost = (data) => request.post('/hosts/', data)
 export const updateHost = (id, data) => request.put(`/hosts/${id}/`, data)
 export const deleteHost = (id) => request.delete(`/hosts/${id}/`)

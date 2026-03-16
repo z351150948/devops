@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Count, Avg
 from .models import Host, Deployment, Alert, LogEntry
@@ -8,13 +9,24 @@ from .serializers import (
     AlertSerializer, LogEntrySerializer,
 )
 import paramiko
+from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 
-class HostViewSet(viewsets.ModelViewSet):
+class HostViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """主机管理"""
     queryset = Host.objects.all()
     serializer_class = HostSerializer
     search_fields = ['hostname', 'ip_address']
+    rbac_permissions = {
+        'list': ['ops.host.view'],
+        'retrieve': ['ops.host.view'],
+        'create': ['ops.host.manage'],
+        'update': ['ops.host.manage'],
+        'partial_update': ['ops.host.manage'],
+        'destroy': ['ops.host.manage'],
+        'test_connection': ['ops.host.manage'],
+        'refresh_info': ['ops.host.manage'],
+    }
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
@@ -89,28 +101,56 @@ class HostViewSet(viewsets.ModelViewSet):
             return Response({'detail': f'获取信息失败: {str(e)}'}, status=400)
 
 
-class DeploymentViewSet(viewsets.ModelViewSet):
+class DeploymentViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """部署管理"""
     queryset = Deployment.objects.select_related('host').all()
     serializer_class = DeploymentSerializer
     search_fields = ['app_name', 'version', 'deployer']
+    rbac_permissions = {
+        'list': ['ops.deployment.view'],
+        'retrieve': ['ops.deployment.view'],
+        'create': ['ops.deployment.manage'],
+        'update': ['ops.deployment.manage'],
+        'partial_update': ['ops.deployment.manage'],
+        'destroy': ['ops.deployment.manage'],
+    }
+
+    def perform_create(self, serializer):
+        serializer.save(deployer=self.request.user.username)
 
 
-class AlertViewSet(viewsets.ModelViewSet):
+class AlertViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """告警管理"""
     queryset = Alert.objects.select_related('host').all()
     serializer_class = AlertSerializer
     search_fields = ['title', 'source', 'message']
+    rbac_permissions = {
+        'list': ['ops.alert.view'],
+        'retrieve': ['ops.alert.view'],
+        'create': ['ops.alert.manage'],
+        'update': ['ops.alert.manage'],
+        'partial_update': ['ops.alert.manage'],
+        'destroy': ['ops.alert.manage'],
+    }
 
 
-class LogEntryViewSet(viewsets.ModelViewSet):
+class LogEntryViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """日志管理"""
     queryset = LogEntry.objects.select_related('host').all()
     serializer_class = LogEntrySerializer
     search_fields = ['service', 'message']
+    rbac_permissions = {
+        'list': ['ops.log.entry.view'],
+        'retrieve': ['ops.log.entry.view'],
+        'create': ['ops.log.entry.manage'],
+        'update': ['ops.log.entry.manage'],
+        'partial_update': ['ops.log.entry.manage'],
+        'destroy': ['ops.log.entry.manage'],
+    }
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.dashboard.view')])
 def dashboard_stats(request):
     """仪表盘统计数据"""
     host_total = Host.objects.count()

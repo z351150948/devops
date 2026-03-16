@@ -10,11 +10,13 @@ from urllib.parse import quote
 import requests as http_requests
 from django.conf import settings
 from rest_framework import status, viewsets
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import LogDataSource
 from .serializers import LogDataSourceSerializer
+from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 
 REQUEST_TIMEOUT = 30
@@ -1244,10 +1246,19 @@ def _error_response(exc):
     return Response({'error': str(exc), 'detail': exc.detail}, status=exc.status_code)
 
 
-class LogDataSourceViewSet(viewsets.ModelViewSet):
+class LogDataSourceViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = LogDataSource.objects.all().order_by('provider', 'name')
     serializer_class = LogDataSourceSerializer
     pagination_class = None
+    rbac_permissions = {
+        'list': ['ops.log.datasource.view'],
+        'retrieve': ['ops.log.datasource.view'],
+        'create': ['ops.log.datasource.manage'],
+        'update': ['ops.log.datasource.manage'],
+        'partial_update': ['ops.log.datasource.manage'],
+        'destroy': ['ops.log.datasource.manage'],
+        'test_connection': ['ops.log.datasource.manage'],
+    }
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -1282,11 +1293,13 @@ class LogDataSourceViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.datasource.view')])
 def log_providers(request):
     return Response({'providers': _provider_info()})
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def log_provider_catalog(request, provider):
     try:
         resolved_provider, config, _ = _resolve_provider_and_config({**request.data, 'provider': provider})
@@ -1303,6 +1316,7 @@ def log_provider_catalog(request, provider):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def log_query(request):
     try:
         provider, config, datasource = _resolve_provider_and_config(request.data)

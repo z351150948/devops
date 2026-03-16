@@ -2,7 +2,7 @@
   <div class="fade-in">
     <div class="page-header">
       <h2>主机管理</h2>
-      <el-button type="primary" @click="openDialog()">
+      <el-button v-if="canManageHosts" type="primary" @click="openDialog()">
         <el-icon><Plus /></el-icon> 新增主机
       </el-button>
     </div>
@@ -50,19 +50,19 @@
             <span style="font-size:12px; color:var(--text-secondary);">{{ row.disk_usage }}%</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column v-if="canManageHosts || canUseTerminal" label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button link type="success" size="small" @click="handleTestConnection(row)" :loading="row._testing">
+            <el-button v-if="canManageHosts" link type="success" size="small" @click="handleTestConnection(row)" :loading="row._testing">
               测试
             </el-button>
-            <el-button link type="warning" size="small" @click="handleRefreshInfo(row)" :loading="row._refreshing">
+            <el-button v-if="canManageHosts" link type="warning" size="small" @click="handleRefreshInfo(row)" :loading="row._refreshing">
               刷新
             </el-button>
-            <el-button link type="primary" size="small" @click="openTerminal(row)">
+            <el-button v-if="canUseTerminal" link type="primary" size="small" @click="openTerminal(row)">
               <el-icon><Monitor /></el-icon> 终端
             </el-button>
-            <el-button link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确定删除？" @confirm="handleDelete(row.id)">
+            <el-button v-if="canManageHosts" link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
+            <el-popconfirm v-if="canManageHosts" title="确定删除？" @confirm="handleDelete(row.id)">
               <template #reference>
                 <el-button link type="danger" size="small">删除</el-button>
               </template>
@@ -123,13 +123,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getHosts, createHost, updateHost, deleteHost, testHostConnection, refreshHostInfo } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const hosts = ref([])
 const loading = ref(false)
 const search = ref('')
@@ -145,6 +147,8 @@ const defaultForm = {
   ssh_port: 22, ssh_user: 'root', ssh_password: '',
 }
 const form = ref({ ...defaultForm })
+const canManageHosts = computed(() => authStore.hasPermission('ops.host.manage'))
+const canUseTerminal = computed(() => authStore.hasPermission('ops.host.terminal'))
 
 const progressColor = (val) => {
   if (val >= 90) return '#ef4444'

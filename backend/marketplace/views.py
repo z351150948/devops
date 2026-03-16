@@ -1,6 +1,7 @@
 import threading
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import ServiceTemplate, ServiceDeployment
@@ -10,19 +11,36 @@ from .serializers import (
     DeployRequestSerializer,
 )
 from . import deployer
+from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 
-class ServiceTemplateViewSet(viewsets.ReadOnlyModelViewSet):
+class ServiceTemplateViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
     """服务模板 — 只读列表 + 详情"""
     queryset = ServiceTemplate.objects.filter(is_active=True)
     serializer_class = ServiceTemplateSerializer
     pagination_class = None  # 模板数量少，不分页
+    rbac_permissions = {
+        'list': ['marketplace.template.view'],
+        'retrieve': ['marketplace.template.view'],
+    }
 
 
-class ServiceDeploymentViewSet(viewsets.ModelViewSet):
+class ServiceDeploymentViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """服务部署实例"""
     queryset = ServiceDeployment.objects.select_related('template', 'host')
     serializer_class = ServiceDeploymentSerializer
+    rbac_permissions = {
+        'list': ['marketplace.deployment.view'],
+        'retrieve': ['marketplace.deployment.view'],
+        'create': ['marketplace.deployment.manage'],
+        'update': ['marketplace.deployment.manage'],
+        'partial_update': ['marketplace.deployment.manage'],
+        'destroy': ['marketplace.deployment.manage'],
+        'stop': ['marketplace.deployment.manage'],
+        'start': ['marketplace.deployment.manage'],
+        'remove': ['marketplace.deployment.manage'],
+        'logs': ['marketplace.deployment.view'],
+    }
 
     @action(detail=True, methods=['post'])
     def stop(self, request, pk=None):
@@ -57,6 +75,7 @@ class ServiceDeploymentViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('marketplace.deployment.manage')])
 def deploy_service_view(request):
     """发起部署"""
     ser = DeployRequestSerializer(data=request.data)
@@ -83,7 +102,7 @@ def deploy_service_view(request):
         host=host,
         version=data['version'],
         env_config=data.get('env_config', {}),
-        deployer=data.get('deployer', 'admin'),
+        deployer=request.user.username,
     )
 
     # 后台线程执行部署（传 ID 而非 ORM 对象，避免线程中 DB 连接问题）

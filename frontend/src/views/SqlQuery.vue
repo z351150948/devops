@@ -21,9 +21,9 @@
             :loading="dbLoading" filterable>
             <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
           </el-select>
-          <el-input v-model="submitter" placeholder="操作人" style="width: 130px" />
+          <el-input v-model="submitter" placeholder="操作人" style="width: 130px" disabled />
         </div>
-        <el-button type="primary" @click="handleQuery" :loading="querying"
+        <el-button v-if="canExecuteQueries" type="primary" @click="handleQuery" :loading="querying"
           :disabled="!selectedDs || !selectedDb || !sqlContent.trim()">
           <el-icon><CaretRight /></el-icon> 执行查询
         </el-button>
@@ -86,10 +86,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getDataSources, getDataSourceDatabases, submitQuery, getQueryOrders } from '@/api/modules/sqlaudit'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const datasources = ref([])
 const databases = ref([])
 const dbLoading = ref(false)
@@ -97,7 +99,7 @@ const dbLoading = ref(false)
 const selectedDs = ref(null)
 const selectedDb = ref('')
 const sqlContent = ref('')
-const submitter = ref('admin')
+const submitter = ref(authStore.currentUser?.username || 'admin')
 const querying = ref(false)
 const queryResult = ref(null)
 const queryError = ref('')
@@ -106,6 +108,7 @@ const history = ref([])
 const historyLoading = ref(false)
 const historyPage = ref(1)
 const historyTotal = ref(0)
+const canExecuteQueries = computed(() => authStore.hasPermission('sqlaudit.query.execute'))
 
 const formatTime = (t) => t ? new Date(t).toLocaleString('zh-CN') : ''
 

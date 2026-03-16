@@ -7,11 +7,13 @@ import json
 import logging
 import paramiko
 from rest_framework import viewsets
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import DockerHost
 from .serializers import DockerHostSerializer
+from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +97,18 @@ def _get_docker_host(host_id):
 
 # ====== DockerHost ViewSet ======
 
-class DockerHostViewSet(viewsets.ModelViewSet):
+class DockerHostViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = DockerHost.objects.all()
     serializer_class = DockerHostSerializer
+    rbac_permissions = {
+        'list': ['ops.docker.view'],
+        'retrieve': ['ops.docker.view'],
+        'create': ['ops.docker.manage'],
+        'update': ['ops.docker.manage'],
+        'partial_update': ['ops.docker.manage'],
+        'destroy': ['ops.docker.manage'],
+        'test_connection': ['ops.docker.manage'],
+    }
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
@@ -135,6 +146,7 @@ class DockerHostViewSet(viewsets.ModelViewSet):
 # ====== 容器/镜像管理（使用 DockerHost） ======
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.view')])
 def list_containers(request):
     """获取主机上的 Docker 容器列表"""
     host_id = request.query_params.get('host_id')
@@ -160,6 +172,7 @@ def list_containers(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.view')])
 def list_images(request):
     """获取主机上的 Docker 镜像列表"""
     host_id = request.query_params.get('host_id')
@@ -185,6 +198,7 @@ def list_images(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.manage')])
 def container_action(request, container_id):
     """容器操作：start / stop / restart"""
     host_id = request.data.get('host_id')
@@ -211,6 +225,7 @@ def container_action(request, container_id):
 
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.manage')])
 def container_remove(request, container_id):
     """删除容器"""
     host_id = request.query_params.get('host_id')
@@ -233,6 +248,7 @@ def container_remove(request, container_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.view')])
 def container_logs(request, container_id):
     """获取容器日志"""
     host_id = request.query_params.get('host_id')
@@ -252,6 +268,7 @@ def container_logs(request, container_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.docker.view')])
 def container_inspect(request, container_id):
     """获取容器详情"""
     host_id = request.query_params.get('host_id')

@@ -5,8 +5,12 @@ Uses paramiko to create an interactive SSH session and forwards I/O over WebSock
 import json
 import threading
 import logging
+from urllib.parse import parse_qs
+
 import paramiko
+from rest_framework.authtoken.models import Token
 from channels.generic.websocket import WebsocketConsumer
+from rbac.services import user_has_permissions
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,16 @@ class SSHConsumer(WebsocketConsumer):
 
     def connect(self):
         self.host_id = self.scope['url_route']['kwargs']['host_id']
+        token_key = parse_qs(self.scope.get('query_string', b'').decode('utf-8')).get('token', [''])[0]
+        token = Token.objects.filter(key=token_key).select_related('user').first()
+        if not token or not token.user.is_active:
+            self.close(code=4401)
+            return
+        if not user_has_permissions(token.user, ['ops.host.terminal']):
+            self.close(code=4403)
+            return
+
+        self.user = token.user
         self.accept()
 
         # 获取 Host 信息

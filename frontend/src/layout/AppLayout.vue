@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="app-layout">
     <aside class="sidebar" :class="{ collapsed: appStore.sidebarCollapsed }">
       <div class="sidebar-logo">
@@ -15,8 +15,8 @@
         router
         :collapse-transition="false"
       >
-        <template v-for="item in menuItems" :key="item.title">
-          <el-sub-menu v-if="item.children" :index="item.title">
+        <template v-for="item in visibleMenuItems" :key="item.title">
+          <el-sub-menu v-if="item.children?.length" :index="item.title">
             <template #title>
               <el-icon><component :is="item.icon" /></el-icon>
               <span>{{ item.title }}</span>
@@ -51,17 +51,20 @@
           <el-badge :value="3" :max="99">
             <el-icon :size="20" style="cursor: pointer; color: var(--text-secondary)"><Bell /></el-icon>
           </el-badge>
-          <el-dropdown>
+          <el-dropdown @command="handleUserCommand">
             <div style="display: flex; align-items: center; gap: 8px; cursor: pointer">
               <el-avatar :size="32" style="background: var(--primary)">
                 <el-icon><User /></el-icon>
               </el-avatar>
-              <span style="font-size: 14px; font-weight: 500; color: var(--text-primary)">管理员</span>
+              <div class="user-meta">
+                <span class="user-name">{{ authStore.displayName || '未登录' }}</span>
+                <span class="user-role">{{ currentRoleLabel }}</span>
+              </div>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item>个人设置</el-dropdown-item>
-                <el-dropdown-item divided>退出登录</el-dropdown-item>
+                <el-dropdown-item command="refresh">刷新权限</el-dropdown-item>
+                <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -81,59 +84,120 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const router = useRouter()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 const menuItems = [
-  { path: '/dashboard', title: '仪表盘', icon: 'Odometer' },
-  { path: '/hosts', title: '主机管理', icon: 'Monitor' },
-  { path: '/cmdb', title: 'CMDB', icon: 'Files' },
-  { path: '/deployments', title: '部署管理', icon: 'Promotion' },
-  { path: '/marketplace', title: '工具市场', icon: 'Shop' },
+  { path: '/dashboard', title: '仪表盘', icon: 'Odometer', permission: 'ops.dashboard.view' },
+  { path: '/hosts', title: '主机管理', icon: 'Monitor', permission: 'ops.host.view' },
+  {
+    path: '/cmdb',
+    title: 'CMDB',
+    icon: 'Files',
+    anyPermissions: ['cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view', 'cmdb.cost.view', 'cmdb.request.submit'],
+  },
+  { path: '/deployments', title: '部署管理', icon: 'Promotion', permission: 'ops.deployment.view' },
+  {
+    path: '/marketplace',
+    title: '工具市场',
+    icon: 'Shop',
+    anyPermissions: ['marketplace.template.view', 'marketplace.deployment.view', 'marketplace.deployment.manage'],
+  },
   {
     title: '容器管理',
     icon: 'Box',
     children: [
-      { path: '/containers/k8s', title: 'K8s 集群', icon: 'Connection' },
-      { path: '/containers/docker', title: 'Docker 环境', icon: 'Platform' },
+      { path: '/containers/k8s', title: 'K8s 集群', icon: 'Connection', permission: 'ops.k8s.view' },
+      { path: '/containers/docker', title: 'Docker 环境', icon: 'Platform', permission: 'ops.docker.view' },
     ],
   },
-  { path: '/nginx', title: 'Nginx 管理', icon: 'Location' },
+  { path: '/nginx', title: 'Nginx 管理', icon: 'Location', permission: 'ops.nginx.view' },
   {
     title: '日志中心',
     icon: 'Document',
     children: [
-      { path: '/logs/datasources', title: '日志数据源', icon: 'DataBoard' },
-      { path: '/logs/query', title: '日志查询', icon: 'Search' },
+      { path: '/logs/datasources', title: '日志数据源', icon: 'DataBoard', permission: 'ops.log.datasource.view' },
+      { path: '/logs/query', title: '日志查询', icon: 'Search', permission: 'ops.log.query' },
     ],
   },
-  { path: '/alerts', title: '告警中心', icon: 'Bell' },
-  { path: '/users', title: '用户管理', icon: 'User' },
+  { path: '/alerts', title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
+  {
+    path: '/users',
+    title: '用户管理',
+    icon: 'User',
+    anyPermissions: ['rbac.user.view', 'rbac.role.view', 'rbac.group.view', 'rbac.permission.view'],
+  },
   {
     title: 'SQL 审计',
     icon: 'DataAnalysis',
     children: [
-      { path: '/sql/datasources', title: '数据源', icon: 'Coin' },
-      { path: '/sql/orders', title: 'SQL 工单', icon: 'Tickets' },
-      { path: '/sql/query', title: 'SQL 查询', icon: 'Search' },
+      { path: '/sql/datasources', title: '数据源', icon: 'Coin', permission: 'sqlaudit.datasource.view' },
+      {
+        path: '/sql/orders',
+        title: 'SQL 工单',
+        icon: 'Tickets',
+        anyPermissions: ['sqlaudit.order.view', 'sqlaudit.order.submit', 'sqlaudit.order.review', 'sqlaudit.order.execute'],
+      },
+      {
+        path: '/sql/query',
+        title: 'SQL 查询',
+        icon: 'Search',
+        anyPermissions: ['sqlaudit.query.view', 'sqlaudit.query.execute'],
+      },
     ],
   },
 ]
 
+function canAccess(item) {
+  if (item.permission) return authStore.hasPermission(item.permission)
+  if (item.anyPermissions) return authStore.hasAnyPermission(item.anyPermissions)
+  return true
+}
+
+const visibleMenuItems = computed(() => menuItems
+  .map((item) => {
+    if (!item.children) return item
+    const children = item.children.filter(canAccess)
+    return { ...item, children }
+  })
+  .filter((item) => item.children ? item.children.length > 0 : canAccess(item)))
+
 const currentTitle = computed(() => {
   const currentPath = route.path
-  for (const item of menuItems) {
+  for (const item of visibleMenuItems.value) {
     if (item.path === currentPath) return item.title
     if (item.children) {
       const child = item.children.find((entry) => entry.path === currentPath)
       if (child) return `${item.title} / ${child.title}`
     }
   }
-  return ''
+  return route.meta.title || ''
 })
+
+const currentRoleLabel = computed(() => {
+  const roles = authStore.currentUser?.roles || []
+  if (!roles.length) return '无角色'
+  return roles.map(role => role.name).join(' / ')
+})
+
+async function handleUserCommand(command) {
+  if (command === 'refresh') {
+    await authStore.reloadProfile()
+    ElMessage.success('权限已刷新')
+    return
+  }
+  if (command === 'logout') {
+    await authStore.logout()
+    router.replace('/login')
+  }
+}
 </script>
 
 <style scoped>
@@ -150,5 +214,22 @@ const currentTitle = computed(() => {
 .fade-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.user-role {
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 </style>

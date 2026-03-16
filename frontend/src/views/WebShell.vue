@@ -24,9 +24,11 @@ import { useRoute } from 'vue-router'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { getHost } from '@/api/modules/ops'
 
 const route = useRoute()
 const hostId = route.params.hostId
+const token = localStorage.getItem('agdevops_token') || ''
 const terminalRef = ref(null)
 const hostInfo = ref(null)
 const wsStatus = ref('connecting')
@@ -39,10 +41,7 @@ let ws = null
 // 获取主机信息
 async function fetchHostInfo() {
   try {
-    const res = await fetch(`/api/hosts/${hostId}/`)
-    if (res.ok) {
-      hostInfo.value = await res.json()
-    }
+    hostInfo.value = await getHost(hostId)
   } catch (e) { /* */ }
 }
 
@@ -110,7 +109,7 @@ function initTerminal() {
 
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/ws/ssh/${hostId}/`
+  const wsUrl = `${protocol}//${window.location.host}/ws/ssh/${hostId}/?token=${encodeURIComponent(token)}`
 
   ws = new WebSocket(wsUrl)
 

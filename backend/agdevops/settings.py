@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third-party
     'rest_framework',
+    'rest_framework.authtoken',
     'django_filters',
     'corsheaders',
     'channels',
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     'sqlaudit',
     'marketplace',
     'cmdb',
+    'rbac',
 ]
 
 MIDDLEWARE = [
@@ -137,6 +139,13 @@ CORS_ALLOW_ALL_ORIGINS = True
 
 # DRF
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_FILTER_BACKENDS': [

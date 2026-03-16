@@ -1,5 +1,6 @@
 ﻿from unittest.mock import patch
 
+from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -41,6 +42,8 @@ class MockHttpResponse:
 class LogViewsTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user = get_user_model().objects.create_superuser('ops-admin', 'ops@example.com', 'Admin@123456')
+        self.client.force_authenticate(user=self.user)
 
     def test_log_providers_returns_loki_elk_and_sls(self):
         response = self.client.get('/api/log/providers/')

@@ -1,0 +1,144 @@
+﻿from django.contrib.auth import authenticate, get_user_model
+from rest_framework import filters, status, viewsets
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
+
+from .models import PermissionDefinition, Role, UserGroup
+from .permissions import RBACPermissionMixin, build_rbac_permission
+from .serializers import (
+    LoginSerializer,
+    PermissionDefinitionSerializer,
+    RoleSerializer,
+    UserGroupSerializer,
+    UserSerializer,
+)
+from .services import ensure_builtin_rbac, ensure_default_superuser
+
+
+User = get_user_model()
+
+
+class UserViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = User.objects.all().order_by('-date_joined')
+    serializer_class = UserSerializer
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['username', 'email', 'first_name', 'last_name']
+    rbac_permissions = {
+        'list': ['rbac.user.view'],
+        'retrieve': ['rbac.user.view'],
+        'create': ['rbac.user.manage'],
+        'update': ['rbac.user.manage'],
+        'partial_update': ['rbac.user.manage'],
+        'destroy': ['rbac.user.manage'],
+        'reset_password': ['rbac.user.manage'],
+    }
+
+    @action(detail=True, methods=['post'])
+    def reset_password(self, request, pk=None):
+        user = self.get_object()
+        password = request.data.get('password', '').strip()
+        if not password:
+            return Response({'detail': '新密码不能为空。'}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = self.get_serializer(instance=user, data={'password': password}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({'success': True, 'message': f'已重置 {user.username} 的密码。'})
+
+
+class RoleViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = Role.objects.prefetch_related('permissions').all().order_by('name')
+    serializer_class = RoleSerializer
+    pagination_class = None
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['code', 'name', 'description']
+    rbac_permissions = {
+        'list': ['rbac.role.view'],
+        'retrieve': ['rbac.role.view'],
+        'create': ['rbac.role.manage'],
+        'update': ['rbac.role.manage'],
+        'partial_update': ['rbac.role.manage'],
+        'destroy': ['rbac.role.manage'],
+    }
+
+    def perform_destroy(self, instance):
+        if instance.is_builtin:
+            raise ValidationError('内置角色不允许删除。')
+        super().perform_destroy(instance)
+
+
+class UserGroupViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = UserGroup.objects.prefetch_related('roles', 'users').all().order_by('name')
+    serializer_class = UserGroupSerializer
+    pagination_class = None
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['code', 'name', 'description']
+    rbac_permissions = {
+        'list': ['rbac.group.view'],
+        'retrieve': ['rbac.group.view'],
+        'create': ['rbac.group.manage'],
+        'update': ['rbac.group.manage'],
+        'partial_update': ['rbac.group.manage'],
+        'destroy': ['rbac.group.manage'],
+    }
+
+    def perform_destroy(self, instance):
+        if instance.is_builtin:
+            raise ValidationError('内置用户组不允许删除。')
+        super().perform_destroy(instance)
+
+
+class PermissionDefinitionViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
+    queryset = PermissionDefinition.objects.all().order_by('sort_order', 'code')
+    serializer_class = PermissionDefinitionSerializer
+    pagination_class = None
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['code', 'name', 'description', 'category']
+    rbac_permissions = {
+        'list': ['rbac.permission.view'],
+        'retrieve': ['rbac.permission.view'],
+    }
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_view(request):
+    ensure_builtin_rbac()
+    ensure_default_superuser()
+    serializer = LoginSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    user = authenticate(
+        username=serializer.validated_data['username'],
+        password=serializer.validated_data['password'],
+    )
+    if not user:
+        return Response({'detail': '用户名或密码错误。'}, status=status.HTTP_400_BAD_REQUEST)
+    if not user.is_active:
+        return Response({'detail': '用户已被禁用。'}, status=status.HTTP_403_FORBIDDEN)
+    token, _ = Token.objects.get_or_create(user=user)
+    return Response({'token': token.key, 'user': UserSerializer(user).data})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout_view(request):
+    token = Token.objects.filter(user=request.user).first()
+    if token:
+        token.delete()
+    return Response({'success': True})
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def current_user_view(request):
+    return Response(UserSerializer(request.user).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('rbac.permission.view')])
+def sync_permissions_view(request):
+    ensure_builtin_rbac()
+    return Response({'success': True, 'message': '内置权限与角色已同步。'})

@@ -5,7 +5,7 @@
         <h2>日志数据源</h2>
         <p class="page-desc">统一管理 Loki、ELK 和阿里云 SLS 的连接配置，查询页直接复用已保存的数据源。</p>
       </div>
-      <el-button type="primary" @click="openDialog()">
+      <el-button v-if="canManageLogDataSources" type="primary" @click="openDialog()">
         <el-icon><Plus /></el-icon>
         新增数据源
       </el-button>
@@ -69,7 +69,7 @@
         <el-table-column label="更新时间" width="180">
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column v-if="canManageLogDataSources" label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button link type="success" size="small" @click="handleTest(row)" :loading="testingId === row.id">测试连接</el-button>
             <el-button link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
@@ -183,7 +183,9 @@ import {
   testLogDataSource,
   updateLogDataSource,
 } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const loading = ref(false)
 const saving = ref(false)
 const testingId = ref(null)
@@ -236,6 +238,7 @@ const filteredItems = computed(() => {
     return text.includes(keyword.value.toLowerCase())
   })
 })
+const canManageLogDataSources = computed(() => authStore.hasPermission('ops.log.datasource.manage'))
 
 function providerLabel(provider) {
   return {
@@ -436,6 +439,11 @@ onMounted(async () => {
 
 .name-text {
   font-weight: 700;
+}
+
+.disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .sub-text,

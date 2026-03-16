@@ -10,6 +10,7 @@ from cryptography.hazmat.backends import default_backend
 from django.utils.timezone import make_aware, is_naive
 from rest_framework.exceptions import ValidationError
 from django_filters.rest_framework import DjangoFilterBackend
+from rbac.permissions import RBACPermissionMixin
 
 def _parse_certificate(cert_data):
     if not cert_data:
@@ -129,11 +130,20 @@ def _remove_cert_from_env(cert, env):
         return False, str(e)
 
 
-class NginxEnvironmentViewSet(viewsets.ModelViewSet):
+class NginxEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """Nginx 环境管理"""
     queryset = NginxEnvironment.objects.all()
     serializer_class = NginxEnvironmentSerializer
     search_fields = ['name', 'ip_address']
+    rbac_permissions = {
+        'list': ['ops.nginx.view'],
+        'retrieve': ['ops.nginx.view'],
+        'create': ['ops.nginx.manage'],
+        'update': ['ops.nginx.manage'],
+        'partial_update': ['ops.nginx.manage'],
+        'destroy': ['ops.nginx.manage'],
+        'test_connection': ['ops.nginx.manage'],
+    }
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
@@ -160,11 +170,22 @@ class NginxEnvironmentViewSet(viewsets.ModelViewSet):
             return Response({'success': False, 'message': f'连接失败: {str(e)}'})
 
 
-class NginxCertificateViewSet(viewsets.ModelViewSet):
+class NginxCertificateViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """Nginx 证书管理"""
     queryset = NginxCertificate.objects.prefetch_related('environments').all()
     serializer_class = NginxCertificateSerializer
     search_fields = ['domain']
+    rbac_permissions = {
+        'list': ['ops.nginx.view'],
+        'retrieve': ['ops.nginx.view'],
+        'create': ['ops.nginx.manage'],
+        'update': ['ops.nginx.manage'],
+        'partial_update': ['ops.nginx.manage'],
+        'destroy': ['ops.nginx.manage'],
+        'link_env': ['ops.nginx.manage'],
+        'unlink_env': ['ops.nginx.manage'],
+        'push_all': ['ops.nginx.manage'],
+    }
 
     def perform_create(self, serializer):
         cert_content = serializer.validated_data.get('cert_content', '')
@@ -234,13 +255,23 @@ class NginxCertificateViewSet(viewsets.ModelViewSet):
         return Response({'success': True, 'results': results})
 
 
-class NginxDomainViewSet(viewsets.ModelViewSet):
+class NginxDomainViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """Nginx 域名管理"""
     queryset = NginxDomain.objects.select_related('environment', 'certificate').all()
     serializer_class = NginxDomainSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ['domain']
     filterset_fields = ['environment']
+    rbac_permissions = {
+        'list': ['ops.nginx.view'],
+        'retrieve': ['ops.nginx.view'],
+        'create': ['ops.nginx.manage'],
+        'update': ['ops.nginx.manage'],
+        'partial_update': ['ops.nginx.manage'],
+        'destroy': ['ops.nginx.manage'],
+        'deploy_conf': ['ops.nginx.manage'],
+        'preview_conf': ['ops.nginx.view'],
+    }
 
     @action(detail=True, methods=['post'])
     def deploy_conf(self, request, pk=None):
@@ -257,10 +288,18 @@ class NginxDomainViewSet(viewsets.ModelViewSet):
         return Response({'conf': conf, 'filename': domain.conf_filename})
 
 
-class NginxRouteViewSet(viewsets.ModelViewSet):
+class NginxRouteViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """Nginx 路由管理"""
     queryset = NginxRoute.objects.select_related('nginx_domain', 'nginx_domain__environment').all()
     serializer_class = NginxRouteSerializer
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ['location', 'upstream_servers']
     filterset_fields = ['nginx_domain']
+    rbac_permissions = {
+        'list': ['ops.nginx.view'],
+        'retrieve': ['ops.nginx.view'],
+        'create': ['ops.nginx.manage'],
+        'update': ['ops.nginx.manage'],
+        'partial_update': ['ops.nginx.manage'],
+        'destroy': ['ops.nginx.manage'],
+    }

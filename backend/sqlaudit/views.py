@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view, action
+from rest_framework.decorators import api_view, action, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
 
@@ -10,13 +11,24 @@ from .serializers import (
 )
 from . import sql_checker
 from . import db_executor
+from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 
-class DataSourceViewSet(viewsets.ModelViewSet):
+class DataSourceViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """数据源管理"""
     queryset = DataSource.objects.all()
     serializer_class = DataSourceSerializer
     search_fields = ['name', 'host']
+    rbac_permissions = {
+        'list': ['sqlaudit.datasource.view'],
+        'retrieve': ['sqlaudit.datasource.view'],
+        'create': ['sqlaudit.datasource.manage'],
+        'update': ['sqlaudit.datasource.manage'],
+        'partial_update': ['sqlaudit.datasource.manage'],
+        'destroy': ['sqlaudit.datasource.manage'],
+        'test_connection': ['sqlaudit.datasource.manage'],
+        'databases': ['sqlaudit.datasource.view'],
+    }
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
@@ -36,14 +48,25 @@ class DataSourceViewSet(viewsets.ModelViewSet):
         return Response({'databases': databases})
 
 
-class SqlOrderViewSet(viewsets.ModelViewSet):
+class SqlOrderViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """SQL 工单管理"""
     queryset = SqlOrder.objects.select_related('datasource').prefetch_related('check_results').all()
     serializer_class = SqlOrderSerializer
     search_fields = ['title', 'submitter', 'sql_content']
+    rbac_permissions = {
+        'list': ['sqlaudit.order.view'],
+        'retrieve': ['sqlaudit.order.view'],
+        'create': ['sqlaudit.order.submit'],
+        'update': ['sqlaudit.order.review'],
+        'partial_update': ['sqlaudit.order.review'],
+        'destroy': ['sqlaudit.order.review'],
+        'approve': ['sqlaudit.order.review'],
+        'reject': ['sqlaudit.order.review'],
+        'execute': ['sqlaudit.order.execute'],
+    }
 
     def perform_create(self, serializer):
-        order = serializer.save()
+        order = serializer.save(submitter=self.request.user.username)
         # 提交时自动执行 SQL 检查
         results = sql_checker.check_sql(order.sql_content, order.sql_type)
         for item in results:
@@ -65,7 +88,7 @@ class SqlOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         order.status = 'approved'
-        order.reviewer = request.data.get('reviewer', 'admin')
+        order.reviewer = request.user.username
         order.review_comment = request.data.get('comment', '')
         order.reviewed_at = timezone.now()
         order.save()
@@ -81,7 +104,7 @@ class SqlOrderViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         order.status = 'rejected'
-        order.reviewer = request.data.get('reviewer', 'admin')
+        order.reviewer = request.user.username
         order.review_comment = request.data.get('comment', '')
         order.reviewed_at = timezone.now()
         order.save()
@@ -114,12 +137,17 @@ class SqlOrderViewSet(viewsets.ModelViewSet):
         return Response(SqlOrderSerializer(order).data)
 
 
-class QueryOrderViewSet(viewsets.ModelViewSet):
+class QueryOrderViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """查询工单"""
     queryset = QueryOrder.objects.select_related('datasource').all()
     serializer_class = QueryOrderSerializer
     search_fields = ['submitter', 'sql_content']
     http_method_names = ['get', 'post', 'head', 'options']  # 只允许查询和提交
+    rbac_permissions = {
+        'list': ['sqlaudit.query.view'],
+        'retrieve': ['sqlaudit.query.view'],
+        'create': ['sqlaudit.query.execute'],
+    }
 
     def create(self, request, *args, **kwargs):
         """提交查询并立即执行"""
@@ -152,6 +180,7 @@ class QueryOrderViewSet(viewsets.ModelViewSet):
 
         # 保存记录
         query_order = serializer.save(
+            submitter=request.user.username,
             result_count=count if success else 0,
             duration_ms=duration,
         )
@@ -172,6 +201,7 @@ class QueryOrderViewSet(viewsets.ModelViewSet):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('sqlaudit.order.submit')])
 def sql_check_api(request):
     """独立的 SQL 检查接口（不创建工单）"""
     sql_content = request.data.get('sql_content', '')

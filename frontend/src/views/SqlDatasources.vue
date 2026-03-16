@@ -2,7 +2,7 @@
   <div class="fade-in">
     <div class="page-header">
       <h2>数据源管理</h2>
-      <el-button type="primary" @click="openDialog()">
+      <el-button v-if="canManageSqlDatasources" type="primary" @click="openDialog()">
         <el-icon><Plus /></el-icon> 新增数据源
       </el-button>
     </div>
@@ -30,7 +30,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="140" show-overflow-tooltip />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column v-if="canManageSqlDatasources" label="操作" width="220" fixed="right">
           <template #default="{ row }">
             <el-button link type="success" size="small" @click="handleTest(row)" :loading="testingId === row.id">
               测试连接
@@ -94,14 +94,16 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
   getDataSources, createDataSource, updateDataSource,
   deleteDataSource, testDataSourceConnection,
 } from '@/api/modules/sqlaudit'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const items = ref([])
 const loading = ref(false)
 const search = ref('')
@@ -117,6 +119,7 @@ const defaultForm = {
   password: '', charset: 'utf8mb4', is_active: true, remark: '',
 }
 const form = ref({ ...defaultForm })
+const canManageSqlDatasources = computed(() => authStore.hasPermission('sqlaudit.datasource.manage'))
 
 const fetchData = async () => {
   loading.value = true

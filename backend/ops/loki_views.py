@@ -1,8 +1,10 @@
 import requests as http_requests
 from django.conf import settings
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
+from rbac.permissions import build_rbac_permission
 
 
 LOKI_BASE = getattr(settings, 'LOKI_URL', 'http://localhost:3100')
@@ -39,6 +41,7 @@ def _proxy_loki(endpoint, query_params):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def loki_labels(request):
     """获取 Loki 所有标签名"""
     params = {}
@@ -50,6 +53,7 @@ def loki_labels(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def loki_label_values(request, label_name):
     """获取指定标签的所有值"""
     params = {}
@@ -61,6 +65,7 @@ def loki_label_values(request, label_name):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def loki_query_range(request):
     """执行 LogQL range 查询"""
     params = {}
@@ -77,6 +82,7 @@ def loki_query_range(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.log.query')])
 def loki_series(request):
     """查询 Loki series 信息"""
     params = {}

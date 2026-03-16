@@ -38,7 +38,7 @@
         <el-table-column prop="created_at" label="时间" width="170">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column v-if="canManageAlerts" label="操作" width="150" fixed="right">
           <template #default="{ row }">
             <el-button v-if="!row.is_acknowledged" link type="primary" size="small"
               @click="handleAck(row)">确认</el-button>
@@ -60,11 +60,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getAlerts, updateAlert, deleteAlert } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
+const authStore = useAuthStore()
 const alerts = ref([])
 const loading = ref(false)
 const search = ref('')
@@ -72,6 +74,7 @@ const levelFilter = ref('')
 const ackFilter = ref('')
 const page = ref(1)
 const total = ref(0)
+const canManageAlerts = computed(() => authStore.hasPermission('ops.alert.manage'))
 
 const levelType = (level) => {
   const map = { critical: 'danger', warning: 'warning', info: 'info' }
