@@ -56,7 +56,7 @@ class CmdbCostAnalysisTests(AuthenticatedTestCase):
             provider='history',
         )
 
-    def test_cost_report_syncs_current_month_and_returns_aggregates(self):
+    def test_cost_report_uses_current_month_fallbacks_without_writing_cost_records(self):
         response = self.client.get('/api/cmdb/cost/report/', {'month': self.current_month})
 
         self.assertEqual(response.status_code, 200)
@@ -64,16 +64,19 @@ class CmdbCostAnalysisTests(AuthenticatedTestCase):
 
         self.assertEqual(payload['month'], self.current_month)
         self.assertEqual(payload['total_monthly_cost'], 2100.0)
-        self.assertEqual(
-            CostRecord.objects.filter(month=self.current_month).count(),
-            3,
-        )
         self.assertEqual(payload['top_cost_items'][0]['name'], 'prod-db-01')
         self.assertEqual(payload['by_business'][0]['business_line'], 'core')
         self.assertEqual(payload['by_business'][0]['total_cost'], 1800.0)
         self.assertEqual(payload['by_environment'][0]['environment'], 'prod')
+        self.assertEqual(payload['total_potential_saving'], 870.0)
+        self.assertEqual(payload['optimized_monthly_cost'], 1230.0)
+        self.assertEqual(payload['optimization_preview']['suggestion_count'], 3)
         self.assertTrue(
             any(point['period'] == self.current_month for point in payload['cost_trend'])
+        )
+        self.assertEqual(
+            CostRecord.objects.filter(month=self.current_month).count(),
+            0,
         )
 
     def test_cost_report_supports_historical_months_without_resync(self):
@@ -85,6 +88,7 @@ class CmdbCostAnalysisTests(AuthenticatedTestCase):
         self.assertEqual(payload['total_monthly_cost'], 1000.0)
         self.assertEqual(len(payload['top_cost_items']), 1)
         self.assertEqual(payload['top_cost_items'][0]['name'], 'prod-db-01')
+        self.assertEqual(payload['optimization_preview']['suggestion_count'], 1)
 
     def test_optimization_returns_actionable_suggestions(self):
         response = self.client.get(
@@ -98,10 +102,36 @@ class CmdbCostAnalysisTests(AuthenticatedTestCase):
         self.assertEqual(payload['month'], self.current_month)
         self.assertGreaterEqual(payload['suggestion_count'], 3)
         self.assertGreater(payload['total_potential_saving'], 0)
+        self.assertEqual(payload['optimized_monthly_cost'], 1230.0)
+        self.assertAlmostEqual(payload['saving_rate'], 41.4)
+        self.assertTrue(any(item['label'] for item in payload['by_type']))
         titles = [item['title'] for item in payload['suggestions']]
         self.assertTrue(any('prod-db-01' in title for title in titles))
         self.assertTrue(any('test-host-01' in title for title in titles))
         self.assertTrue(any('idle-host-01' in title for title in titles))
+
+    def test_cost_endpoints_fallback_when_month_is_invalid(self):
+        cost_response = self.client.get('/api/cmdb/cost/report/', {'month': '2026-13'})
+        optimization_response = self.client.get('/api/cmdb/optimization/suggestions/', {'month': 'not-a-month'})
+
+        self.assertEqual(cost_response.status_code, 200)
+        self.assertEqual(optimization_response.status_code, 200)
+        self.assertEqual(cost_response.json()['month'], self.current_month)
+        self.assertEqual(optimization_response.json()['month'], self.current_month)
+
+    def test_current_month_cost_endpoints_do_not_persist_cost_records(self):
+        cost_response = self.client.get('/api/cmdb/cost/report/', {'month': self.current_month})
+        optimization_response = self.client.get(
+            '/api/cmdb/optimization/suggestions/',
+            {'month': self.current_month},
+        )
+
+        self.assertEqual(cost_response.status_code, 200)
+        self.assertEqual(optimization_response.status_code, 200)
+        self.assertEqual(
+            CostRecord.objects.filter(month=self.current_month).count(),
+            0,
+        )
 
 
 class CmdbTopologyTests(AuthenticatedTestCase):

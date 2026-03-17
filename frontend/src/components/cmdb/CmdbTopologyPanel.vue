@@ -635,30 +635,34 @@ onBeforeUnmount(() => {
 
 .topology-kpis {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
 .topology-kpi {
-  min-width: 118px;
-  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 12px;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
 }
 
 .kpi-label {
-  display: block;
-  margin-bottom: 4px;
   color: #64748b;
   font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .kpi-value {
   color: #0f172a;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
+  line-height: 1;
 }
 
 .topology-layout {

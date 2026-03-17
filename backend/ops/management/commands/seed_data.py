@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from ops.models import Host, Deployment, Alert, LogEntry
+from cmdb.demo_seed import seed_cmdb_demo
 
 
 class Command(BaseCommand):
@@ -143,3 +144,6 @@ class Command(BaseCommand):
 
         self.stdout.write('正在生成 RBAC 演示账号...')
         call_command('seed_rbac_demo')
+
+        self.stdout.write('正在生成 CMDB 演示数据...')
+        seed_cmdb_demo(self.stdout)
