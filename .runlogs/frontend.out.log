@@ -1,0 +1,109 @@
+
+> agdevops-frontend@1.0.0 dev
+> vite --host 0.0.0.0 --port 3000
+
+
+  [32m[1mVITE[22m v6.4.1[39m  [2mready in [0m[1m704[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://198.18.0.1:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.17.0.1:[1m3000[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.1.16:[1m3000[22m/[39m
+[2m13:53:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m13:53:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m13:55:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m13:58:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue, /src/components/cmdb/CmdbTopologyCanvas.vue?vue&type=style&index=0&scoped=ee67f860&lang.css[22m
+[2m13:59:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m14:02:34[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m14:05:48[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m14:06:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m14:25:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m14:25:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m16:17:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m16:17:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m16:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m16:45:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m16:55:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m16:56:07[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m16:56:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m16:57:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m16:57:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m17:25:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m17:29:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m17:32:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m17:36:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m17:37:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m17:46:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m17:51:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:02:06[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue, /src/components/cmdb/CmdbTopologyCanvas.vue?vue&type=style&index=0&scoped=ee67f860&lang.css[22m
+[2m18:08:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:18:12[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:18:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:24:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:25:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:28:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:29:08[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m18:33:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m22:35:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.js[22m
+[2m22:35:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/api/request.js[22m
+[2m22:35:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Deployments.vue, /src/views/Hosts.vue, /src/views/LogDataSources.vue, /src/views/LogsQuery.vue, /src/views/ServiceMarket.vue, /src/views/Dashboard.vue[22m
+[2m22:37:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/router/index.js[22m
+[2m22:37:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/router/index.js[22m
+[2m22:38:23[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/views/Forbidden.vue[22m
+[2m22:38:41[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layout/AppLayout.vue, /src/layout/AppLayout.vue?vue&type=style&index=0&scoped=38a2b0e8&lang.css[22m
+[2m22:39:27[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layout/AppLayout.vue, /src/layout/AppLayout.vue?vue&type=style&index=0&scoped=38a2b0e8&lang.css[22m
+[2m22:39:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/stores/auth.js[22m
+[2m22:39:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layout/AppLayout.vue, /src/layout/AppLayout.vue?vue&type=style&index=0&scoped=38a2b0e8&lang.css[22m
+[2m23:06:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Hosts.vue[22m
+[2m23:07:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Deployments.vue[22m
+[2m23:07:39[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/LogDataSources.vue[22m
+[2m23:08:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ServiceMarket.vue[22m
+[2m23:08:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ServiceMarket.vue[22m
+[2m23:10:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/LogDataSources.vue?vue&type=style&index=0&scoped=bc09f414&lang.css[22m
+[2m23:10:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ServiceMarket.vue[22m
+[2m23:44:07[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Users.vue[22m
+[2m23:44:29[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/K8sManage.vue[22m
+[2m23:44:58[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ContainerManage.vue[22m
+[2m23:48:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m23:49:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m23:50:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m23:51:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/NginxManage.vue[22m
+[2m23:51:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m23:52:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue[22m
+[2m23:53:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/NginxManage.vue[22m
+[2m23:54:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m23:54:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/NginxManage.vue[22m
+[2m23:54:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue, /src/components/cmdb/CmdbTopologyCanvas.vue?vue&type=style&index=0&scoped=ee67f860&lang.css[22m
+[2m10:01:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/assets/main.css[22m
+[2m10:01:38[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m10:02:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue?vue&type=style&index=0&scoped=5e824d6a&lang.css[22m
+[2m10:02:36[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue, /src/components/cmdb/CmdbTopologyCanvas.vue?vue&type=style&index=0&scoped=ee67f860&lang.css[22m
+[2m10:32:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/assets/main.css[22m
+[2m10:32:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue, /src/views/CmdbManage.vue?vue&type=style&index=0&scoped=5e824d6a&lang.css[22m
+[2m10:32:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyCanvas.vue[22m
+[2m10:43:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/stores/auth.js[22m
+[2m10:43:11[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/api/request.js[22m
+[2m10:43:59[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/api/request.js[22m
+[2m10:51:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/api/request.js[22m
+[2m10:51:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m10:52:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/api/request.js[22m
+[2m11:05:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ContainerManage.vue[22m
+[2m11:05:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/NginxManage.vue, /src/views/NginxManage.vue?vue&type=style&index=0&scoped=72158bb4&lang.css[22m
+[2m11:05:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/K8sManage.vue[22m
+[2m11:05:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ServiceMarket.vue, /src/views/ServiceMarket.vue?vue&type=style&index=0&scoped=9d25fcdc&lang.css[22m
+[2m11:05:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/Users.vue, /src/views/Users.vue?vue&type=style&index=0&scoped=10ab5d2a&lang.css[22m
+[2m11:07:01[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/ServiceMarket.vue[22m
+[2m12:58:16[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/cmdb/CmdbTopologyPanel.vue, /src/components/cmdb/CmdbTopologyPanel.vue?vue&type=style&index=0&scoped=6c1531b2&lang.css[22m
+[2m13:20:44[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m13:22:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m13:24:03[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue?vue&type=style&index=0&scoped=5e824d6a&lang.css[22m
+[2m14:06:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m14:07:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m14:14:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m14:15:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m14:25:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue, /src/views/CmdbManage.vue?vue&type=style&index=0&scoped=5e824d6a&lang.css[22m
+[2m15:06:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m15:07:00[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m15:07:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue?vue&type=style&index=0&scoped=5e824d6a&lang.css[22m
+[2m15:14:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
+[2m15:14:33[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/views/CmdbManage.vue[22m
