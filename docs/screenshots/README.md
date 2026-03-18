@@ -2,16 +2,18 @@
 
 该目录用于存放 README 首页展示所需的产品截图。
 
-## 推荐文件名
+## 当前占位图
 
-- `dashboard.png`
-- `cmdb.png`
-- `logs-or-sql.png`
-- `iac-orchestration.png`
+仓库当前已内置 4 张 SVG 占位图，可直接在 README 首页显示。后续你只需要用真实截图替换同名文件即可。
+
+- `dashboard.svg`
+- `cmdb.svg`
+- `logs-or-sql.svg`
+- `iac-orchestration.svg`
 
 ## 推荐截图内容
 
-### 1. dashboard.png
+### 1. dashboard.svg
 
 建议包含：
 - 首页总览卡片
@@ -22,7 +24,7 @@
 
 > 平台首页总览：统一展示主机、部署、日志、告警等核心运维指标。
 
-### 2. cmdb.png
+### 2. cmdb.svg
 
 建议包含：
 - 资源树或配置项列表
@@ -33,7 +35,7 @@
 
 > CMDB 资产治理：通过资源树、配置项和关系建模实现基础设施资产沉淀。
 
-### 3. logs-or-sql.png
+### 3. logs-or-sql.svg
 
 建议包含以下任一页面：
 - 日志查询页
@@ -43,7 +45,7 @@
 
 > 日志与审计：支持日志检索、SQL 审计与问题排查。
 
-### 4. iac-orchestration.png
+### 4. iac-orchestration.svg
 
 建议包含：
 - 方案列表
@@ -57,17 +59,11 @@
 
 ## 使用示例
 
-将截图放入本目录后，可在根目录 `README.md` 中按下面方式引用：
-
-```md
-![平台首页总览](docs/screenshots/dashboard.png)
-
-平台首页总览：统一展示主机、部署、日志、告警等核心运维指标。
-```
+将真实截图替换同名文件后，根目录 `README.md` 无需额外修改即可直接展示。
 
 ## 待补清单
 
-- [ ] dashboard.png
-- [ ] cmdb.png
-- [ ] logs-or-sql.png
-- [ ] iac-orchestration.png
+- [ ] 用真实平台截图替换 `dashboard.svg`
+- [ ] 用真实平台截图替换 `cmdb.svg`
+- [ ] 用真实平台截图替换 `logs-or-sql.svg`
+- [ ] 用真实平台截图替换 `iac-orchestration.svg`

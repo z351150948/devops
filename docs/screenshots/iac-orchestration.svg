@@ -1,0 +1,20 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" fill="none">
+  <rect width="1280" height="720" rx="28" fill="#F8FAFC"/>
+  <rect x="36" y="36" width="1208" height="648" rx="24" fill="white" stroke="#CBD5E1" stroke-width="2"/>
+  <rect x="72" y="72" width="240" height="56" rx="16" fill="#14B8A6" fill-opacity="0.14"/>
+  <text x="96" y="108" fill="#0F172A" font-size="28" font-family="Segoe UI, Arial">IaC 资源编排</text>
+  <text x="72" y="170" fill="#475569" font-size="20" font-family="Segoe UI, Arial">截图占位图：建议替换为方案列表、方案设计、配置预览或执行与同步CMDB页面。</text>
+  <rect x="72" y="214" width="220" height="344" rx="20" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <rect x="104" y="248" width="156" height="20" rx="10" fill="#CBD5E1"/>
+  <rect x="104" y="292" width="132" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="104" y="330" width="148" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="104" y="368" width="124" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="326" y="214" width="406" height="344" rx="20" fill="#F0FDFA"/>
+  <rect x="354" y="248" width="350" height="44" rx="12" fill="#CCFBF1"/>
+  <rect x="354" y="314" width="350" height="44" rx="12" fill="#CCFBF1"/>
+  <rect x="354" y="380" width="350" height="44" rx="12" fill="#CCFBF1"/>
+  <rect x="354" y="446" width="190" height="48" rx="14" fill="#0D9488"/>
+  <rect x="766" y="214" width="406" height="344" rx="20" fill="#0F172A"/>
+  <rect x="72" y="582" width="1100" height="54" rx="18" fill="#DCFCE7"/>
+  <text x="418" y="617" fill="#166534" font-size="22" font-family="Segoe UI, Arial">执行与同步 CMDB / 当前方案状态提示区域</text>
+</svg>

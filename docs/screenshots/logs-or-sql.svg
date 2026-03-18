@@ -1,0 +1,16 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" fill="none">
+  <rect width="1280" height="720" rx="28" fill="#0F172A"/>
+  <rect x="36" y="36" width="1208" height="648" rx="24" fill="#111827" stroke="#334155" stroke-width="2"/>
+  <rect x="72" y="72" width="240" height="56" rx="16" fill="#A855F7" fill-opacity="0.2"/>
+  <text x="96" y="108" fill="#F8FAFC" font-size="28" font-family="Segoe UI, Arial">日志与审计</text>
+  <text x="72" y="170" fill="#CBD5E1" font-size="20" font-family="Segoe UI, Arial">截图占位图：建议替换为日志查询页或 SQL 审计页。</text>
+  <rect x="72" y="214" width="1136" height="84" rx="18" fill="#1E293B"/>
+  <rect x="96" y="238" width="180" height="36" rx="10" fill="#334155"/>
+  <rect x="298" y="238" width="220" height="36" rx="10" fill="#334155"/>
+  <rect x="540" y="238" width="160" height="36" rx="10" fill="#22C55E" fill-opacity="0.35"/>
+  <rect x="72" y="326" width="1136" height="294" rx="20" fill="#020617"/>
+  <text x="108" y="382" fill="#22C55E" font-size="20" font-family="Consolas, monospace">INFO  2026-03-18 10:00:12  Query started...</text>
+  <text x="108" y="430" fill="#38BDF8" font-size="20" font-family="Consolas, monospace">DEBUG 2026-03-18 10:00:15  Filter applied...</text>
+  <text x="108" y="478" fill="#F59E0B" font-size="20" font-family="Consolas, monospace">WARN  2026-03-18 10:01:02  Slow statement detected...</text>
+  <text x="108" y="526" fill="#F87171" font-size="20" font-family="Consolas, monospace">ERROR 2026-03-18 10:01:48  Permission denied...</text>
+</svg>

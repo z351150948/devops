@@ -1,0 +1,20 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" fill="none">
+  <rect width="1280" height="720" rx="28" fill="#F8FAFC"/>
+  <rect x="36" y="36" width="1208" height="648" rx="24" fill="white" stroke="#CBD5E1" stroke-width="2"/>
+  <rect x="72" y="72" width="200" height="56" rx="16" fill="#22C55E" fill-opacity="0.12"/>
+  <text x="96" y="108" fill="#0F172A" font-size="28" font-family="Segoe UI, Arial">CMDB 资产治理</text>
+  <text x="72" y="170" fill="#475569" font-size="20" font-family="Segoe UI, Arial">截图占位图：建议替换为资源树、配置项和拓扑或资源详情。</text>
+  <rect x="72" y="214" width="288" height="384" rx="20" fill="#F8FAFC" stroke="#CBD5E1"/>
+  <rect x="96" y="248" width="180" height="18" rx="9" fill="#CBD5E1"/>
+  <rect x="120" y="288" width="140" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="120" y="326" width="120" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="144" y="364" width="110" height="16" rx="8" fill="#E2E8F0"/>
+  <rect x="392" y="214" width="376" height="384" rx="20" fill="#ECFCCB"/>
+  <circle cx="580" cy="304" r="30" fill="#84CC16"/>
+  <circle cx="490" cy="424" r="26" fill="#A3E635"/>
+  <circle cx="670" cy="424" r="26" fill="#A3E635"/>
+  <line x1="580" y1="334" x2="490" y2="398" stroke="#65A30D" stroke-width="6"/>
+  <line x1="580" y1="334" x2="670" y2="398" stroke="#65A30D" stroke-width="6"/>
+  <rect x="800" y="214" width="372" height="384" rx="20" fill="#F8FAFC" stroke="#CBD5E1" stroke-dasharray="8 8"/>
+  <text x="878" y="420" fill="#64748B" font-size="24" font-family="Segoe UI, Arial">配置项详情 / 成本治理区域</text>
+</svg>

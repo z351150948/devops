@@ -15,6 +15,30 @@ AgDevOps 是一个基于 Django、Django REST framework、Channels、Vue 3 和 E
 | 日志中心 / SQL 审计 | 查询条件、结果列表、审计记录 | 体现运维排障与审计能力 |
 | IaC资源编排 | 方案列表、方案设计、配置预览、执行与同步CMDB | 体现交付自动化与基础设施编排能力 |
 
+### 平台首页总览
+
+![平台首页总览占位图](docs/screenshots/dashboard.svg)
+
+平台首页总览：统一展示主机、部署、日志、告警等核心运维指标。
+
+### CMDB 资产治理
+
+![CMDB 资产治理占位图](docs/screenshots/cmdb.svg)
+
+CMDB 资产治理：通过资源树、配置项和关系建模实现基础设施资产沉淀。
+
+### 日志与审计
+
+![日志与审计占位图](docs/screenshots/logs-or-sql.svg)
+
+日志与审计：支持日志检索、SQL 审计与问题排查。
+
+### IaC 资源编排
+
+![IaC 资源编排占位图](docs/screenshots/iac-orchestration.svg)
+
+IaC 资源编排：按模块设计云资源，生成 Terraform 配置并联动执行、同步 CMDB。
+
 ### README 首页截图说明文案
 
 如果你后续补截图，建议直接按下面这套文案放在图片下方：
@@ -28,10 +52,10 @@ AgDevOps 是一个基于 Django、Django REST framework、Channels、Vue 3 和 E
 
 如果你后续准备把截图正式放进仓库，建议统一放到 `docs/screenshots/`，命名如下：
 
-- `docs/screenshots/dashboard.png`
-- `docs/screenshots/cmdb.png`
-- `docs/screenshots/logs-or-sql.png`
-- `docs/screenshots/iac-orchestration.png`
+- `docs/screenshots/dashboard.svg`
+- `docs/screenshots/cmdb.svg`
+- `docs/screenshots/logs-or-sql.svg`
+- `docs/screenshots/iac-orchestration.svg`
 
 ## 核心能力
 
@@ -161,6 +185,7 @@ agdevops/
 |  |- src/stores/                # Pinia store
 |  `- src/views/                 # 页面视图
 |- docs/
+|  `- screenshots/              # README 首页截图与占位图
 `- README.md
 ```
 
