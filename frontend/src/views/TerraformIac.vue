@@ -8,7 +8,7 @@
           </span>
           <h2>IaC资源编排</h2>
         </div>
-        <p class="page-subtitle">基于 Terraform 实现。按模块完成云资源编排，生成阿里云 / 华为云 Terraform 工程文件，并支持执行记录与 CMDB 回写。</p>
+        <p class="page-subtitle">基于 Terraform 实现。按模块完成云资源编排，生成阿里云 / 华为云 Terraform 工程文件，并支持执行与同步 CMDB。</p>
       </div>
       <el-button class="new-plan-button" type="primary" @click="resetForm">
         <el-icon><Plus /></el-icon> 新建方案
@@ -1350,7 +1350,7 @@ async function handleSave() {
 async function loadStack(id) {
   const response = await getTerraformStack(id)
   applyStackResponse(response)
-  activeWorkspaceTab.value = 'design'
+  activeWorkspaceTab.value = 'preview'
   await fetchExecutions(id)
   ElMessage.success(`已载入方案 ${response.name}`)
 }
