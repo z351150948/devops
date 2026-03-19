@@ -10,7 +10,7 @@
         </div>
         <p class="page-subtitle">基于 Terraform 实现。按模块完成云资源编排，生成阿里云 / 华为云 Terraform 工程文件，并支持执行与同步 CMDB。</p>
       </div>
-      <el-button class="new-plan-button" type="primary" @click="resetForm">
+      <el-button v-if="canManageIac" class="new-plan-button" type="primary" @click="resetForm">
         <el-icon><Plus /></el-icon> 新建方案
       </el-button>
     </div>
@@ -566,7 +566,7 @@
               <strong>{{ currentDesignTabMeta.label }}</strong>
               <span>{{ currentDesignTabMeta.helper }}</span>
             </div>
-            <div class="design-step-actions">
+            <div v-if="canManageIac" class="design-step-actions">
               <el-button :disabled="!canGoPrevDesignTab" @click="goPrevDesignTab">上一步</el-button>
               <el-button type="primary" :loading="isLastDesignTab && rendering" @click="goNextDesignTab">{{ isLastDesignTab ? '生成配置并预览' : '下一步' }}</el-button>
             </div>
@@ -586,7 +586,7 @@
           <div class="section-head">
             <div>
               <span>生成预览</span>
-              <div class="workspace-hint">在这里查看和编辑 Terraform 内容，并保存当前方案。</div>
+              <div class="workspace-hint">{{ canManageIac ? '在这里查看和编辑 Terraform 内容，并保存当前方案。' : '在这里查看 Terraform 生成内容。' }}</div>
             </div>
             <div class="section-head-actions">
               <el-button v-if="canManageIac" type="success" :loading="saving" @click="handleSave">
@@ -634,7 +634,7 @@
           </div>
 
           <div v-if="previewFileNames.length" class="preview-edit-tip">
-            以下为模板生成文件，如您有其余定制化需求，可直接在下方编辑 Terraform 文件内容，添加或修改资源。
+            {{ canManageIac ? '以下为模板生成文件，如您有其余定制化需求，可直接在下方编辑 Terraform 文件内容，添加或修改资源。' : '以下为模板生成文件，当前仅支持查看。' }}
           </div>
 
           <el-tabs v-if="previewFileNames.length" v-model="activeFileName" class="file-tabs">
@@ -644,6 +644,7 @@
                 resize="vertical"
                 :autosize="{ minRows: 18, maxRows: 28 }"
                 :model-value="editablePreviewFiles[file]"
+                :disabled="!canManageIac"
                 class="file-editor"
                 spellcheck="false"
                 @update:model-value="value => updatePreviewFile(file, value)"
