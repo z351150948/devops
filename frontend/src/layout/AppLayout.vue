@@ -103,7 +103,12 @@ const menuItems = [
     anyPermissions: ['cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view', 'cmdb.cost.view', 'cmdb.request.submit'],
   },
   { path: '/hosts', title: '主机管理', icon: 'Monitor', permission: 'ops.host.view' },
-  { path: '/deployments', title: '部署管理', icon: 'Promotion', permission: 'ops.deployment.view' },
+  {
+    path: '/deployments',
+    title: '应用发布',
+    icon: 'Promotion',
+    anyPermissions: ['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'],
+  },
   {
     path: '/marketplace',
     title: '工具市场',

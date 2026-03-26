@@ -48,7 +48,11 @@ const routes = [
         path: 'deployments',
         name: 'Deployments',
         component: () => import('@/views/Deployments.vue'),
-        meta: { title: '部署管理', icon: 'Promotion', permission: 'ops.deployment.view' },
+        meta: {
+          title: '应用发布',
+          icon: 'Promotion',
+          anyPermissions: ['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'],
+        },
       },
       {
         path: 'marketplace',

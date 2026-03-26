@@ -565,7 +565,7 @@ class ConfigItemViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def stats(self, request):
         qs = self.filter_queryset(self.get_queryset())
-        by_type = list(qs.values('ci_type__name', 'ci_type__color').annotate(count=Count('id')).order_by('-count'))
+        by_type = list(qs.values('ci_type', 'ci_type__name', 'ci_type__color').annotate(count=Count('id')).order_by('-count'))
         for item in by_type:
             item['ci_type__color'] = item.get('ci_type__color') or '#9c27b0'
         by_status = dict(qs.values_list('status').annotate(count=Count('id')))

@@ -72,7 +72,13 @@
 
       <!-- 统计卡片 -->
       <div class="cmdb-stats-row" v-if="itemStats.total">
-        <div class="cmdb-stat-card" v-for="tp in itemStats.by_type" :key="tp.ci_type__name">
+        <div
+          v-for="tp in itemStats.by_type"
+          :key="tp.ci_type || tp.ci_type__name"
+          class="cmdb-stat-card"
+          :class="{ active: isTypeCardActive(tp) }"
+          @click="selectTypeCard(tp)"
+        >
           <div class="stat-dot" :style="{background: tp.ci_type__color}"></div>
           <div class="stat-info">
             <div class="stat-val">{{ tp.count }}</div>
@@ -879,7 +885,34 @@ async function fetchItems() {
 }
 
 async function fetchItemStats(params = {}) {
-  try { itemStats.value = await getConfigItemStats(params) } catch(e) {}
+  try {
+    const statsParams = { ...params }
+    delete statsParams.page
+    delete statsParams.ci_type
+    itemStats.value = await getConfigItemStats(statsParams)
+  } catch(e) {}
+}
+
+function isTypeCardActive(typeStat) {
+  const typeId = resolveTypeCardId(typeStat)
+  return typeId !== null && Number(filterType.value) === Number(typeId)
+}
+
+function selectTypeCard(typeStat) {
+  const nextType = resolveTypeCardId(typeStat)
+  if (nextType === null) return
+  filterType.value = isTypeCardActive(typeStat) ? null : nextType
+  itemsPage.value = 1
+  fetchItems()
+}
+
+function resolveTypeCardId(typeStat) {
+  const directTypeId = Number(typeStat?.ci_type)
+  if (Number.isFinite(directTypeId) && directTypeId > 0) {
+    return directTypeId
+  }
+  const matchedType = ciTypes.value.find(type => type.name === typeStat?.ci_type__name)
+  return matchedType ? Number(matchedType.id) : null
 }
 
 // Item CRUD
@@ -1520,16 +1553,25 @@ onMounted(() => {
 
 /* ====== 统计卡片行 ====== */
 .cmdb-stats-row {
-  display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
+  display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px;
 }
 .cmdb-stat-card {
   display: flex; align-items: center; gap: 10px;
-  background: var(--card-bg, #1e293b); border-radius: 10px; padding: 10px 16px;
-  min-width: 110px; border: 1px solid rgba(139,92,246,0.15);
+  background: var(--card-bg, #1e293b); border-radius: 10px; padding: 8px 12px;
+  min-width: 88px; border: 1px solid rgba(139,92,246,0.15); flex: 0 0 auto;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.cmdb-stat-card:hover { transform: translateY(-1px); border-color: rgba(139,92,246,0.32); }
+.cmdb-stat-card.active {
+  background: rgba(139,92,246,0.12);
+  border-color: rgba(139,92,246,0.5);
+  box-shadow: 0 10px 20px rgba(139,92,246,0.12);
 }
 .stat-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-.stat-val { font-size: 20px; font-weight: 700; color: var(--text-primary, #e2e8f0); }
-.stat-label { font-size: 11px; color: #94a3b8; }
+.stat-val { font-size: 18px; font-weight: 700; color: var(--text-primary, #e2e8f0); line-height: 1; }
+.stat-info { min-width: 0; }
+.stat-label { font-size: 11px; color: #94a3b8; white-space: nowrap; line-height: 1.2; }
 
 /* ====== 拓扑容器 ====== */
 .topo-container {

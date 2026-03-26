@@ -8,6 +8,7 @@ from . import k8s_views
 from . import nginx_views
 router = DefaultRouter()
 router.register(r'hosts', views.HostViewSet)
+router.register(r'deployment-approval-flows', views.DeploymentApprovalFlowViewSet, basename='deployment-approval-flow')
 router.register(r'deployments', views.DeploymentViewSet)
 router.register(r'alerts', views.AlertViewSet)
 router.register(r'logs', views.LogEntryViewSet)
