@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="fade-in">
     <div class="page-header">
       <h2>🗄️ CMDB 资产管理</h2>
@@ -138,7 +138,21 @@
       </div>
     </div>
 
-    <!-- ============ Tab 2: 资源地图 ============ -->
+    <!-- ============ Tab 2: 主机管理 ============ -->
+    <div v-if="activeTab === 'host-manage'" class="tab-content">
+      <el-tabs v-model="activeHostTab" class="host-manage-tabs">
+        <el-tab-pane
+          v-for="tab in hostManageTabs"
+          :key="tab.key"
+          :label="tab.label"
+          :name="tab.key"
+        >
+          <CmdbHostsPanel v-if="tab.key === 'assets'" :resource-tree="resourceTree" />
+          <CmdbRequestsPanel v-else-if="tab.key === 'requests'" :resource-tree="resourceTree" />
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+
     <div v-if="activeTab === 'topology'" class="tab-content">
       <CmdbTopologyPanel
         :ci-types="ciTypes"
@@ -566,52 +580,6 @@
       </div>
     </div>
 
-    <!-- ============ Tab 5: 资源申请 ============ -->
-    <div v-if="activeTab === 'requests'" class="tab-content">
-      <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
-        <el-select v-model="reqStatusFilter" placeholder="状态筛选" clearable style="width:120px" size="small" @change="fetchRequests">
-          <el-option label="待审批" value="pending" /><el-option label="已批准" value="approved" />
-          <el-option label="已拒绝" value="rejected" /><el-option label="已完成" value="completed" />
-        </el-select>
-        <el-button v-if="canSubmitRequests" type="primary" size="small" @click="openRequestDialog"><el-icon><Plus /></el-icon> 新建申请</el-button>
-      </div>
-      <el-table :data="requests" stripe v-loading="loading" style="width:100%">
-        <el-table-column prop="title" label="申请标题" min-width="200">
-          <template #default="{ row }">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="state-pulse" :class="row.status==='pending'?'restarting':row.status==='approved'?'running':'exited'"></span>
-              <span style="font-weight:600">{{ row.title }}</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="resource_type" label="资源类型" width="100" />
-        <el-table-column prop="specification" label="规格" width="140" show-overflow-tooltip />
-        <el-table-column prop="business_line" label="业务线" width="120" />
-        <el-table-column prop="environment_display" label="环境" width="80">
-          <template #default="{ row }"><el-tag size="small" :type="row.environment==='production'?'danger':'info'">{{ row.environment_display }}</el-tag></template>
-        </el-table-column>
-        <el-table-column prop="requester" label="申请人" width="80" />
-        <el-table-column prop="status_display" label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.status==='pending'?'warning':row.status==='approved'?'success':row.status==='completed'?'':'danger'">{{ row.status_display }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="created_at" label="申请时间" width="160">
-          <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-        </el-table-column>
-        <el-table-column v-if="canApproveRequests" label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <template v-if="canApproveRequests && row.status==='pending'">
-              <el-button link type="success" size="small" @click="doApprove(row)">批准</el-button>
-              <el-button link type="danger" size="small" @click="doReject(row)">拒绝</el-button>
-            </template>
-            <el-button v-if="canApproveRequests && row.status==='approved'" link type="primary" size="small" @click="doComplete(row)">标记完成</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </div>
-
-    <!-- ============ 配置项新增/编辑弹窗 ============ -->
     <el-dialog v-if="canManageCi" v-model="itemDialogVisible" :title="editingItemId ? '编辑配置项' : '新增配置项'" width="90%" style="max-width:640px;" top="5vh" append-to-body destroy-on-close>
       <el-form :model="itemForm" label-width="90px">
         <el-form-item label="名称"><el-input v-model="itemForm.name" placeholder="如 order-service-01" /></el-form-item>
@@ -735,9 +703,11 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, CircleCheck, Files, Monitor, Edit, Delete, Connection } from '@element-plus/icons-vue'
 import CmdbTopologyPanel from '@/components/cmdb/CmdbTopologyPanel.vue'
+import CmdbHostsPanel from '@/components/cmdb/CmdbHostsPanel.vue'
+import CmdbRequestsPanel from '@/components/cmdb/CmdbRequestsPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   getCITypes, createCIType, deleteCIType,
@@ -746,6 +716,7 @@ import {
   getCmdbCostReport, getCmdbOptimization,
   getResourceNodeTree, createResourceNode, updateResourceNode, deleteResourceNode
 } from '@/api/modules/cmdb'
+import { getHosts, createHost, updateHost, deleteHost, testHostConnection, refreshHostInfo } from '@/api/modules/ops'
 
 const route = useRoute()
 const router = useRouter()
@@ -756,23 +727,39 @@ const canViewTopology = computed(() => authStore.hasPermission('cmdb.topology.vi
 const canViewCost = computed(() => authStore.hasPermission('cmdb.cost.view'))
 const canSubmitRequests = computed(() => authStore.hasPermission('cmdb.request.submit'))
 const canApproveRequests = computed(() => authStore.hasPermission('cmdb.request.approve'))
+const canViewHosts = computed(() => authStore.hasAnyPermission(['ops.host.view', 'ops.host.manage', 'ops.host.terminal']))
+const hostManageTabs = computed(() => [
+  canViewHosts.value && { key: 'assets', label: '主机资产', icon: 'Monitor' },
+  (canSubmitRequests.value || canApproveRequests.value) && { key: 'requests', label: '主机申请', icon: 'Ticket' },
+].filter(Boolean))
 
 const mainTabs = computed(() => [
   canViewCi.value && { key: 'items', label: '配置项管理', icon: 'Grid' },
+  hostManageTabs.value.length && { key: 'host-manage', label: '主机管理', icon: 'Monitor' },
   canViewTopology.value && { key: 'topology', label: '资源地图', icon: 'Share' },
   canViewCost.value && { key: 'cost', label: '成本分析', icon: 'TrendCharts' },
   canViewCost.value && { key: 'optimize', label: '资源优化', icon: 'Lightning' },
-  canViewCi.value && { key: 'requests', label: '资源申请', icon: 'Ticket' },
 ].filter(Boolean))
 
 const activeTab = ref('items')
+const activeHostTab = ref('assets')
 
 function getDefaultTab() {
   return mainTabs.value[0]?.key || 'items'
 }
 
+function getDefaultHostTab() {
+  return hostManageTabs.value[0]?.key || 'assets'
+}
+
 function normalizeTab(tab) {
-  return mainTabs.value.some(item => item.key === tab) ? tab : getDefaultTab()
+  const normalizedTab = tab === 'hosts' || tab === 'requests' ? 'host-manage' : tab
+  return mainTabs.value.some(item => item.key === normalizedTab) ? normalizedTab : getDefaultTab()
+}
+
+function normalizeHostTab(tab) {
+  const normalizedTab = tab === 'hosts' ? 'assets' : tab
+  return hostManageTabs.value.some(item => item.key === normalizedTab) ? normalizedTab : getDefaultHostTab()
 }
 const loading = ref(false)
 const saving = ref(false)
@@ -1467,7 +1454,6 @@ function loadTabData(tab) {
   if (tab === 'items' && canViewCi.value) fetchItems()
   else if (tab === 'cost' && canViewCost.value) fetchCostReport()
   else if (tab === 'optimize' && canViewCost.value) fetchOptimization()
-  else if (tab === 'requests' && canViewCi.value) fetchRequests()
 }
 
 function switchTab(tab) {
@@ -1476,36 +1462,58 @@ function switchTab(tab) {
   activeTab.value = nextTab
 }
 
-watch(mainTabs, (tabs) => {
-  if (!tabs.length) return
+function syncTabStateFromRoute() {
+  if (!mainTabs.value.length) return
   const routeTab = typeof route.query.tab === 'string' ? route.query.tab : ''
   const nextTab = normalizeTab(routeTab || activeTab.value)
-  if (activeTab.value !== nextTab) {
-    activeTab.value = nextTab
-    return
-  }
-  if (routeTab !== nextTab) {
-    router.replace({ query: { ...route.query, tab: nextTab } })
-  }
-}, { immediate: true })
+  const routeHostTab = typeof route.query.hostTab === 'string' ? route.query.hostTab : ''
+  const nextHostTab = normalizeHostTab(
+    routeTab === 'hosts' || routeTab === 'requests'
+      ? routeTab
+      : (routeHostTab || activeHostTab.value)
+  )
 
-watch(() => route.query.tab, (tab) => {
-  const nextTab = normalizeTab(typeof tab === 'string' ? tab : '')
   if (activeTab.value !== nextTab) {
     activeTab.value = nextTab
   }
-})
+  if (activeHostTab.value !== nextHostTab) {
+    activeHostTab.value = nextHostTab
+  }
 
-watch(activeTab, (tab) => {
+  const query = { ...route.query, tab: nextTab }
+  if (nextTab === 'host-manage') {
+    query.hostTab = nextHostTab
+  } else {
+    delete query.hostTab
+  }
+
+  if (route.query.tab !== query.tab || route.query.hostTab !== query.hostTab) {
+    router.replace({ query })
+  }
+}
+
+watch([mainTabs, hostManageTabs], syncTabStateFromRoute, { immediate: true })
+watch(() => route.query.tab, syncTabStateFromRoute)
+watch(() => route.query.hostTab, syncTabStateFromRoute)
+
+watch([activeTab, activeHostTab], ([tab, hostTab]) => {
   if (!tab) return
-  if (route.query.tab !== tab) {
-    router.replace({ query: { ...route.query, tab } })
+  const nextTab = normalizeTab(tab)
+  const nextHostTab = normalizeHostTab(hostTab)
+  const query = { ...route.query, tab: nextTab }
+  if (nextTab === 'host-manage') {
+    query.hostTab = nextHostTab
+  } else {
+    delete query.hostTab
   }
-  loadTabData(tab)
+  if (route.query.tab !== query.tab || route.query.hostTab !== query.hostTab) {
+    router.replace({ query })
+  }
+  loadTabData(nextTab)
 }, { immediate: true })
 
 onMounted(() => {
-  if (canViewCi.value || canViewTopology.value) {
+  if (canViewCi.value || canViewTopology.value || canViewHosts.value || canSubmitRequests.value || canApproveRequests.value) {
     fetchTypes()
     fetchResourceTree()
   }
@@ -1519,6 +1527,8 @@ onMounted(() => {
 .tree-actions { opacity: 0; transition: opacity 0.2s; }
 .el-tree-node__content:hover .tree-actions { opacity: 1; }
 .cmdb-items-layout { display: flex; gap: 16px; }
+.host-manage-tabs { margin-top: -8px; }
+.host-manage-tabs :deep(.el-tabs__header) { margin-bottom: 8px; }
 .cmdb-resource-tree-panel {
   width: 188px;
   flex: 0 0 188px;
@@ -2124,3 +2134,5 @@ onMounted(() => {
 .fade-in { animation: fadeInUp 0.3s ease; }
 @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 </style>
+
+

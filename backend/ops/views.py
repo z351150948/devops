@@ -70,6 +70,7 @@ class HostViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = Host.objects.all()
     serializer_class = HostSerializer
     search_fields = ['hostname', 'ip_address']
+    filterset_fields = ['status', 'business_line', 'environment']
     rbac_permissions = {
         'list': ['ops.host.view'],
         'retrieve': ['ops.host.view'],

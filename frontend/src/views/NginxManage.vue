@@ -4,39 +4,43 @@
     <div class="page-header">
       <h2><el-icon style="vertical-align: middle; margin-right: 8px;"><Location /></el-icon>Nginx 管理</h2>
       <div class="k8s-toolbar" v-if="activeTab === 'domains'">
-        <div class="cluster-selector-group">
-          <span class="toolbar-label"><el-icon><Monitor /></el-icon> 当前环境</span>
-          <el-select v-model="filterEnvId" placeholder="选择环境" @change="onEnvChange" style="width: 160px" class="industrial-select" popper-class="industrial-popper">
+        <div class="toolbar-filter-bar">
+          <div class="toolbar-filter-pill toolbar-filter-pill--env">
+            <span class="toolbar-filter-label"><el-icon><Monitor /></el-icon> 当前环境</span>
+            <el-select v-model="filterEnvId" placeholder="选择环境" @change="onEnvChange" class="industrial-select toolbar-filter-select" popper-class="industrial-popper">
             <el-option v-for="e in envs" :key="e.id" :label="e.name" :value="e.id">
               <div style="display:flex;align-items:center;gap:8px;font-weight:600;">
                 <span class="state-pulse" :class="e.status==='connected'?'running':'exited'"></span> {{ e.name }}
               </div>
             </el-option>
-          </el-select>
+            </el-select>
+          </div>
         </div>
       </div>
       <div class="k8s-toolbar" v-if="activeTab === 'routes'">
-        <div class="cluster-selector-group">
-          <span class="toolbar-label"><el-icon><Monitor /></el-icon> 环境</span>
-          <el-select v-model="filterEnvId" placeholder="选择环境" @change="onEnvChange" style="width: 140px" class="industrial-select" popper-class="industrial-popper">
+        <div class="toolbar-filter-bar">
+          <div class="toolbar-filter-pill toolbar-filter-pill--env">
+            <span class="toolbar-filter-label"><el-icon><Monitor /></el-icon> 环境</span>
+            <el-select v-model="filterEnvId" placeholder="选择环境" @change="onEnvChange" class="industrial-select toolbar-filter-select toolbar-filter-select--compact" popper-class="industrial-popper">
             <el-option v-for="e in envs" :key="e.id" :label="e.name" :value="e.id">
               <div style="display:flex;align-items:center;gap:8px;font-weight:600;">
                 <span class="state-pulse" :class="e.status==='connected'?'running':'exited'"></span> {{ e.name }}
               </div>
             </el-option>
-          </el-select>
-        </div>
-        <div class="cluster-selector-group" v-if="filterEnvId">
-          <span class="toolbar-label"><el-icon><Connection /></el-icon> 域名</span>
-          <el-select v-model="filterDomainId" placeholder="选择域名" @change="onDomainChange" style="width: 180px" class="industrial-select" popper-class="industrial-popper">
-            <el-option v-for="d in filteredDomains" :key="d.id" :label="`${d.domain}:${d.listen_port}`" :value="d.id" />
-          </el-select>
+            </el-select>
+          </div>
+          <div class="toolbar-filter-pill toolbar-filter-pill--domain" v-if="filterEnvId">
+            <span class="toolbar-filter-label"><el-icon><Connection /></el-icon> 域名</span>
+            <el-select v-model="filterDomainId" placeholder="选择域名" @change="onDomainChange" class="industrial-select toolbar-filter-select" popper-class="industrial-popper">
+              <el-option v-for="d in filteredDomains" :key="d.id" :label="`${d.domain}:${d.listen_port}`" :value="d.id" />
+            </el-select>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 主 Tab 栏 (Pill Tab Theme: Green) -->
-    <div class="neo-tabs theme-green">
+    <div class="neo-tabs theme-blue">
       <button v-for="tab in mainTabs" :key="tab.key" class="neo-tab-btn" :class="{ active: activeTab === tab.key }" @click="switchTab(tab.key)">
         <el-icon style="margin-right:4px;"><component :is="tab.icon" /></el-icon>
         {{ tab.label }}
@@ -667,12 +671,111 @@ async function handlePushAll(row) {
 <style scoped>
 .w-full { width: 100%; }
 
+.k8s-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.toolbar-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 10px;
+  border: 1px solid rgba(74, 222, 128, 0.24);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(240, 253, 244, 0.96) 0%, rgba(220, 252, 231, 0.92) 100%);
+  box-shadow: 0 8px 20px rgba(22, 163, 74, 0.08);
+}
+
+.toolbar-filter-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar-filter-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+  background: #ffffff;
+}
+
+.toolbar-filter-pill--env .toolbar-filter-label {
+  color: #047857;
+  background: #ffffff;
+  border-color: rgba(74, 222, 128, 0.28);
+}
+
+.toolbar-filter-pill--domain .toolbar-filter-label {
+  color: #0f766e;
+  background: #ffffff;
+  border-color: rgba(45, 212, 191, 0.24);
+}
+
+.toolbar-filter-select {
+  width: 180px;
+}
+
+.toolbar-filter-select--compact {
+  width: 140px;
+}
+
+:deep(.toolbar-filter-select .el-select__wrapper) {
+  min-height: 30px;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: none;
+  border: 1px solid rgba(203, 213, 225, 0.8);
+}
+
+:deep(.toolbar-filter-select .el-select__selected-item) {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+:deep(.toolbar-filter-select.is-focus .el-select__wrapper) {
+  border-color: rgba(34, 197, 94, 0.36);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
+}
+
 /* 多行 alert 的 icon 顶部对齐微调 */
 :deep(.cert-alert) {
   align-items: flex-start;
 }
 :deep(.cert-alert .el-alert__icon) {
   margin-top: 3px;
+}
+
+@media (max-width: 768px) {
+  .toolbar-filter-bar {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .toolbar-filter-pill {
+    width: 100%;
+  }
+
+  .toolbar-filter-select,
+  .toolbar-filter-select--compact {
+    width: 100%;
+  }
 }
 </style>
 

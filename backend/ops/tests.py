@@ -759,3 +759,72 @@ class ContainerManagementTests(TestCase):
         issued_command = mock_ssh_exec.call_args.args[1]
         self.assertEqual(issued_command, 'docker image prune -f 2>&1')
         client.close.assert_called_once()
+
+    @patch('ops.docker_views._get_ssh_client_from_docker_host')
+    def test_demo_docker_host_returns_cached_container_and_image_inventory(self, mock_get_client):
+        host = DockerHost.objects.create(name='app-release-test', ip_address='192.168.1.120', docker_api_version='24.0')
+
+        container_response = self.client.get('/api/docker/containers/', {'host_id': host.id})
+        image_response = self.client.get('/api/docker/images/', {'host_id': host.id})
+
+        self.assertEqual(container_response.status_code, 200)
+        self.assertEqual(image_response.status_code, 200)
+        self.assertTrue(any(item['name'] == 'order-center-batch-1' for item in container_response.json()))
+        self.assertTrue(any(item['repository'] == 'registry.demo.local/order-center' for item in image_response.json()))
+        mock_get_client.assert_not_called()
+
+    def test_demo_docker_container_action_logs_and_inspect_update_cached_state(self):
+        host = DockerHost.objects.create(name='gateway-prod', ip_address='192.168.1.121', docker_api_version='24.0')
+
+        container_response = self.client.get('/api/docker/containers/', {'host_id': host.id})
+        self.assertEqual(container_response.status_code, 200)
+        target = next(item for item in container_response.json() if item['name'] == 'member-center-failed')
+
+        stop_response = self.client.post(
+            f"/api/docker/containers/{quote(target['id'], safe='')}/action/",
+            {'host_id': host.id, 'action': 'start'},
+            format='json',
+        )
+        self.assertEqual(stop_response.status_code, 200)
+
+        updated_list = self.client.get('/api/docker/containers/', {'host_id': host.id}).json()
+        updated = next(item for item in updated_list if item['id'] == target['id'])
+        self.assertEqual(updated['state'], 'running')
+
+        logs_response = self.client.get(
+            f"/api/docker/containers/{quote(target['id'], safe='')}/logs/",
+            {'host_id': host.id, 'tail': 50},
+        )
+        inspect_response = self.client.get(
+            f"/api/docker/containers/{quote(target['id'], safe='')}/inspect/",
+            {'host_id': host.id},
+        )
+
+        self.assertEqual(logs_response.status_code, 200)
+        self.assertEqual(inspect_response.status_code, 200)
+        self.assertIn('member-center-failed', logs_response.json()['logs'])
+        self.assertEqual(inspect_response.json()['State']['Status'], 'running')
+
+    def test_demo_docker_image_remove_and_prune_update_cached_state(self):
+        host = DockerHost.objects.create(name='member-prod', ip_address='192.168.1.122', docker_api_version='24.0')
+
+        initial_images = self.client.get('/api/docker/images/', {'host_id': host.id}).json()
+        dangling = next(item for item in initial_images if item['repository'] == '<none>')
+        in_use = next(item for item in initial_images if item['repository'] == 'redis')
+
+        remove_response = self.client.delete(
+            '/api/docker/images/remove/',
+            {'host_id': host.id, 'image_ids': [dangling['id'], in_use['id']]},
+            format='json',
+        )
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertIn('跳过 1', remove_response.json()['message'])
+
+        after_remove = self.client.get('/api/docker/images/', {'host_id': host.id}).json()
+        self.assertFalse(any(item['id'] == dangling['id'] for item in after_remove))
+        self.assertTrue(any(item['id'] == in_use['id'] for item in after_remove))
+
+        prune_response = self.client.post('/api/docker/images/prune/', {'host_id': host.id}, format='json')
+        self.assertEqual(prune_response.status_code, 200)
+        after_prune = self.client.get('/api/docker/images/', {'host_id': host.id}).json()
+        self.assertFalse(any(item['repository'] == '<none>' or item['tag'] == '<none>' for item in after_prune))

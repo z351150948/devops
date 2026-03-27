@@ -1,10 +1,15 @@
+﻿import json
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
 
-from .models import CIType, CIRelation, ConfigItem, CostRecord
+from rbac.models import PermissionDefinition, Role
+from rbac.services import ensure_builtin_rbac
+from ops.models import Host
+
+from .models import CIType, CIRelation, ConfigItem, CostRecord, ResourceNode, ResourceRequest
 
 
 class AuthenticatedTestCase(TestCase):
@@ -197,7 +202,7 @@ class CmdbTopologyTests(AuthenticatedTestCase):
         self.assertIn('shared-cache-prod', node_names)
         self.assertEqual(len(payload['meta']['matched_node_ids']), 2)
         self.assertTrue(any(edge['target_name'] == 'shared-cache-prod' for edge in payload['edges']))
-        self.assertTrue(any(edge['label'] == '连接到' for edge in payload['edges']))
+        self.assertTrue(any(edge['type'] == 'connects_to' for edge in payload['edges']))
 
     def test_topology_scope_exact_only_returns_matching_nodes(self):
         response = self.client.get(
@@ -272,3 +277,160 @@ class CmdbRelationValidationTests(AuthenticatedTestCase):
 
         self.assertEqual(duplicate_response.status_code, 400)
         self.assertEqual(CIRelation.objects.count(), 1)
+
+
+class CmdbResourceRequestTests(AuthenticatedTestCase):
+    def setUp(self):
+        super().setUp()
+        core = ResourceNode.objects.create(name='core', node_type='biz')
+        ResourceNode.objects.create(name='prod', node_type='env', parent=core)
+        ResourceNode.objects.create(name='test', node_type='env', parent=core)
+
+    def test_request_workflow_records_applicant_approver_and_completion(self):
+        create_response = self.client.post(
+            '/api/cmdb/resource-requests/',
+            data=json.dumps({
+                'title': 'Order service prod host expansion',
+                'resource_type': 'host',
+                'specification': '4C8G',
+                'business_line': 'core',
+                'environment': 'prod',
+                'quantity': 1,
+                'priority': 'high',
+                'reason': 'Traffic increase requires one more node',
+                'specs': {
+                    'hostname': 'order-api-ecs-03',
+                    'ip_address': '10.0.0.23',
+                    'os_type': 'Alibaba Cloud Linux 3',
+                    'admin_user': 'sre-core',
+                    'instance_type': 'ecs.g7.xlarge',
+                },
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(create_response.status_code, 201)
+        request_id = create_response.json()['id']
+        request_obj = ResourceRequest.objects.get(pk=request_id)
+        self.assertEqual(request_obj.applicant, 'cmdb-admin')
+        self.assertEqual(request_obj.status, 'pending')
+
+        approve_response = self.client.post(
+            f'/api/cmdb/resource-requests/{request_id}/approve/',
+            {'comment': 'capacity approved'},
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        request_obj.refresh_from_db()
+        self.assertEqual(request_obj.status, 'approved')
+        self.assertEqual(request_obj.approver, 'cmdb-admin')
+        self.assertEqual(request_obj.approval_comment, 'capacity approved')
+        self.assertIsNotNone(request_obj.approved_at)
+
+        complete_response = self.client.post(
+            f'/api/cmdb/resource-requests/{request_id}/complete/',
+            {'note': 'host provisioned and synced'},
+        )
+        self.assertEqual(complete_response.status_code, 200)
+        request_obj.refresh_from_db()
+        self.assertEqual(request_obj.status, 'completed')
+        self.assertEqual(request_obj.fulfillment_note, 'host provisioned and synced')
+        self.assertIsNotNone(request_obj.completed_at)
+
+        host = Host.objects.get(hostname='order-api-ecs-03')
+        self.assertEqual(host.ip_address, '10.0.0.23')
+        self.assertEqual(host.business_line, 'core')
+        self.assertEqual(host.environment, 'prod')
+        self.assertEqual(host.admin_user, 'sre-core')
+        self.assertEqual(host.status, 'online')
+
+        ci = ConfigItem.objects.get(name='order-api-ecs-03')
+        self.assertIn('ECS', ci.ci_type.name)
+        self.assertEqual(ci.business_line, 'core')
+        self.assertEqual(ci.environment, 'prod')
+        self.assertEqual(ci.admin_user, 'sre-core')
+        self.assertEqual(ci.status, 'active')
+        self.assertEqual(ci.attributes['ip_address'], '10.0.0.23')
+        self.assertEqual(ci.attributes['os_type'], 'Alibaba Cloud Linux 3')
+        self.assertEqual(ci.attributes['instance_type'], 'ecs.g7.xlarge')
+        self.assertEqual(ci.attributes['source'], 'host_request')
+        self.assertEqual(ci.attributes['request_id'], request_id)
+
+    def test_complete_requires_hostname_and_ip(self):
+        request_obj = ResourceRequest.objects.create(
+            title='Host request without delivery target',
+            applicant='cmdb-admin',
+            approver='cmdb-admin',
+            resource_type='host',
+            specification='2C4G',
+            business_line='core',
+            environment='prod',
+            priority='medium',
+            quantity=1,
+            status='approved',
+            reason='missing delivery info',
+            specs={'os_type': 'Linux'},
+            approved_at=timezone.now(),
+        )
+
+        response = self.client.post(
+            f'/api/cmdb/resource-requests/{request_obj.id}/complete/',
+            {'note': 'try to fulfill'},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('detail', response.json())
+        request_obj.refresh_from_db()
+        self.assertEqual(request_obj.status, 'approved')
+        self.assertEqual(Host.objects.count(), 0)
+
+    def test_submitter_only_sees_own_requests(self):
+        ensure_builtin_rbac()
+        submit_permission = PermissionDefinition.objects.get(code='cmdb.request.submit')
+        role = Role.objects.create(code='request-submit-only', name='Request Submit Only')
+        role.permissions.add(submit_permission)
+
+        submitter = get_user_model().objects.create_user('submitter', 'submitter@example.com', 'Admin@123456')
+        role.users.add(submitter)
+
+        ResourceRequest.objects.create(
+            title='鎴戠殑鐢宠',
+            applicant='submitter',
+            resource_type='涓绘満',
+            business_line='core',
+            environment='prod',
+            reason='self',
+        )
+        ResourceRequest.objects.create(
+            title='someone else request',
+            applicant='someone-else',
+            resource_type='Redis',
+            business_line='core',
+            environment='test',
+            reason='other',
+        )
+
+        self.client.force_login(submitter)
+        response = self.client.get('/api/cmdb/resource-requests/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        rows = payload['results'] if 'results' in payload else payload
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['applicant'], 'submitter')
+
+    def test_request_api_only_accepts_host_resource_type(self):
+        response = self.client.post(
+            '/api/cmdb/resource-requests/',
+            {
+                'title': '鐢宠 Redis',
+                'resource_type': 'Redis',
+                'business_line': 'core',
+                'environment': 'prod',
+                'reason': 'not allowed',
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('resource_type', response.json())
+
+

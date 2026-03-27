@@ -7,6 +7,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import api_view, action, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from django.db import transaction
 from django.db.models import Count, F, Q
 from django.utils import timezone
 from .models import CIType, ConfigItem, CIRelation, CostRecord, ResourceRequest, ResourceNode
@@ -14,7 +15,9 @@ from .serializers import (
     CITypeSerializer, ConfigItemSerializer, CIRelationSerializer,
     CostRecordSerializer, ResourceRequestSerializer, ResourceNodeSerializer
 )
+from ops.models import Host
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
+from rbac.services import user_has_permissions
 
 
 SEVERITY_ORDER = {'danger': 3, 'warning': 2, 'info': 1}
@@ -638,13 +641,13 @@ class CostRecordViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
 
 class ResourceRequestViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     """资源申请管理"""
-    queryset = ResourceRequest.objects.all()
+    queryset = ResourceRequest.objects.all().order_by('-created_at', '-id')
     serializer_class = ResourceRequestSerializer
-    search_fields = ['applicant', 'resource_type', 'reason']
-    filterset_fields = ['status', 'resource_type']
+    search_fields = ['title', 'applicant', 'resource_type', 'business_line', 'specification', 'reason']
+    filterset_fields = ['status', 'resource_type', 'business_line', 'environment', 'priority']
     rbac_permissions = {
-        'list': ['cmdb.ci.view'],
-        'retrieve': ['cmdb.ci.view'],
+        'list': [],
+        'retrieve': [],
         'create': ['cmdb.request.submit'],
         'update': ['cmdb.request.approve'],
         'partial_update': ['cmdb.request.approve'],
@@ -654,8 +657,120 @@ class ResourceRequestViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         'complete': ['cmdb.request.approve'],
     }
 
+    def _can_view_requests(self, user):
+        return (
+            user_has_permissions(user, ['cmdb.ci.view'])
+            or user_has_permissions(user, ['cmdb.request.submit'])
+            or user_has_permissions(user, ['cmdb.request.approve'])
+        )
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = getattr(self.request, 'user', None)
+        if not user or not user.is_authenticated:
+            return qs.none()
+        if user_has_permissions(user, ['cmdb.ci.view']) or user_has_permissions(user, ['cmdb.request.approve']):
+            return qs
+        if user_has_permissions(user, ['cmdb.request.submit']):
+            return qs.filter(applicant=user.username)
+        return qs.none()
+
+    def list(self, request, *args, **kwargs):
+        if not self._can_view_requests(request.user):
+            return Response({'detail': '缺少资源申请查看权限'}, status=403)
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        if not self._can_view_requests(request.user):
+            return Response({'detail': '缺少资源申请查看权限'}, status=403)
+        return super().retrieve(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         serializer.save(applicant=self.request.user.username)
+
+    def _build_host_sync_payload(self, obj, fulfillment_note=''):
+        specs = obj.specs or {}
+        hostname = (specs.get('hostname') or '').strip()
+        ip_address = (specs.get('ip_address') or '').strip()
+        if obj.quantity and obj.quantity > 1:
+            raise ValueError('当前一次仅支持将单台主机申请转为主机资产，请拆分申请后再交付')
+        if not hostname or not ip_address:
+            raise ValueError('完成交付前请先在主机申请中填写主机名和 IP 地址')
+
+        description_parts = [obj.title, obj.reason, fulfillment_note]
+        description = '；'.join([part.strip() for part in description_parts if part and part.strip()])[:200]
+        return {
+            'hostname': hostname,
+            'ip_address': ip_address,
+            'business_line': (obj.business_line or '').strip(),
+            'environment': (obj.environment or '').strip(),
+            'admin_user': (specs.get('admin_user') or obj.applicant or '').strip(),
+            'os_type': (specs.get('os_type') or 'Linux').strip() or 'Linux',
+            'instance_type': (specs.get('instance_type') or '').strip(),
+            'specification': (obj.specification or specs.get('specification') or '').strip(),
+            'description': description,
+        }
+
+    def _sync_request_to_host_assets(self, obj, fulfillment_note=''):
+        payload = self._build_host_sync_payload(obj, fulfillment_note=fulfillment_note)
+        host, _ = Host.objects.update_or_create(
+            hostname=payload['hostname'],
+            defaults={
+                'ip_address': payload['ip_address'],
+                'business_line': payload['business_line'],
+                'environment': payload['environment'],
+                'admin_user': payload['admin_user'],
+                'os_type': payload['os_type'],
+                'description': payload['description'],
+                'status': 'online',
+            },
+        )
+
+        ci_type, _ = CIType.objects.get_or_create(
+            name='云主机(ECS)',
+            defaults={
+                'icon': 'Monitor',
+                'color': '#64748b',
+                'description': '承载应用与数据服务的云主机',
+            },
+        )
+        config_item = ConfigItem.objects.filter(name=payload['hostname']).first()
+        attributes = dict((config_item.attributes or {}) if config_item else {})
+        attributes.update({
+            'ip_address': payload['ip_address'],
+            'os_type': payload['os_type'],
+            'instance_type': payload['instance_type'],
+            'specification': payload['specification'],
+            'description': payload['description'],
+            'source': 'host_request',
+            'request_id': obj.id,
+            'request_title': obj.title,
+        })
+        attributes = {
+            key: value for key, value in attributes.items()
+            if value not in (None, '')
+        }
+
+        if config_item is None:
+            config_item = ConfigItem.objects.create(
+                name=payload['hostname'],
+                ci_type=ci_type,
+                business_line=payload['business_line'],
+                environment=payload['environment'] or 'prod',
+                admin_user=payload['admin_user'],
+                status='active',
+                attributes=attributes,
+            )
+        else:
+            config_item.ci_type = ci_type
+            config_item.business_line = payload['business_line']
+            config_item.environment = payload['environment'] or config_item.environment or 'prod'
+            config_item.admin_user = payload['admin_user']
+            config_item.status = 'active'
+            config_item.attributes = attributes
+            config_item.save()
+
+        return host, config_item
 
     @action(detail=True, methods=['post'])
     def approve(self, request, pk=None):
@@ -663,7 +778,10 @@ class ResourceRequestViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         if obj.status != 'pending':
             return Response({'detail': '只能审批待审批资源'}, status=400)
         obj.status = 'approved'
-        obj.save(update_fields=['status'])
+        obj.approver = request.user.username
+        obj.approval_comment = (request.data.get('comment') or request.data.get('approval_comment') or '').strip()
+        obj.approved_at = timezone.now()
+        obj.save(update_fields=['status', 'approver', 'approval_comment', 'approved_at', 'updated_at'])
         return Response(ResourceRequestSerializer(obj).data)
 
     @action(detail=True, methods=['post'])
@@ -672,7 +790,9 @@ class ResourceRequestViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         if obj.status != 'pending':
             return Response({'detail': '只能审批待审批资源'}, status=400)
         obj.status = 'rejected'
-        obj.save(update_fields=['status'])
+        obj.approver = request.user.username
+        obj.approval_comment = (request.data.get('comment') or request.data.get('approval_comment') or '').strip()
+        obj.save(update_fields=['status', 'approver', 'approval_comment', 'updated_at'])
         return Response(ResourceRequestSerializer(obj).data)
     
     @action(detail=True, methods=['post'])
@@ -680,8 +800,16 @@ class ResourceRequestViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         obj = self.get_object()
         if obj.status != 'approved':
             return Response({'detail': '只能完成已批准资源'}, status=400)
-        obj.status = 'provisioned'
-        obj.save(update_fields=['status'])
+        fulfillment_note = (request.data.get('note') or request.data.get('fulfillment_note') or '').strip()
+        try:
+            with transaction.atomic():
+                self._sync_request_to_host_assets(obj, fulfillment_note=fulfillment_note)
+                obj.status = 'completed'
+                obj.fulfillment_note = fulfillment_note
+                obj.completed_at = timezone.now()
+                obj.save(update_fields=['status', 'fulfillment_note', 'completed_at', 'updated_at'])
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
         return Response(ResourceRequestSerializer(obj).data)
 
 @api_view(['GET'])

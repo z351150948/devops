@@ -523,4 +523,90 @@ def seed_cmdb_demo(stdout=None):
                 defaults={'amount': amount, 'provider': provider},
             )
 
-    _log(stdout, f'Seeded {ConfigItem.objects.count()} config items, {CIRelation.objects.count()} relations and {CostRecord.objects.count()} cost records.')
+    _log(stdout, 'Creating host requests...')
+    ResourceRequest.objects.bulk_create([
+        ResourceRequest(
+            title='订单服务生产扩容（order-api-ecs-02）',
+            applicant='研发-张晨',
+            approver='应用运维-李俊',
+            resource_type='主机',
+            specification='ecs.g7.2xlarge / 8C16G / 200G',
+            business_line=BIZ_COMMERCE,
+            environment='prod',
+            priority='high',
+            quantity=1,
+            specs={
+                'hostname': 'order-api-ecs-02',
+                'ip_address': '10.10.1.11',
+                'instance_type': 'ecs.g7.2xlarge',
+            },
+            reason='订单服务生产流量上涨，需要补齐第二台应用节点。',
+            approval_comment='生产扩容方案确认，通过后已安排交付。',
+            fulfillment_note='已交付并纳入主机资产与 CMDB 配置项。',
+            status='completed',
+            approved_at=timezone.now() - timezone.timedelta(days=12),
+            completed_at=timezone.now() - timezone.timedelta(days=10),
+        ),
+        ResourceRequest(
+            title='压测环境主机保留申请（order-perf-test-ecs）',
+            applicant='测试平台-陈芳',
+            approver='平台架构组',
+            resource_type='主机',
+            specification='ecs.g7.4xlarge / 16C32G / 500G',
+            business_line=BIZ_COMMERCE,
+            environment='test',
+            priority='medium',
+            quantity=1,
+            specs={
+                'hostname': 'order-perf-test-ecs',
+                'ip_address': '10.10.20.10',
+                'instance_type': 'ecs.g7.4xlarge',
+            },
+            reason='压测环境希望继续保留现有主机一个迭代周期。',
+            approval_comment='当前利用率偏低，建议压测结束后及时回收，不同意长期保留。',
+            status='rejected',
+            approved_at=timezone.now() - timezone.timedelta(days=6),
+        ),
+        ResourceRequest(
+            title='遗留同步主机替换申请（legacy-data-sync）',
+            applicant='数据集成-孙博',
+            approver='SRE-王涛',
+            resource_type='主机',
+            specification='通用型主机 / 4C8G / 100G',
+            business_line=BIZ_DATA,
+            environment='prod',
+            priority='medium',
+            quantity=1,
+            specs={
+                'hostname': 'legacy-data-sync',
+                'ip_address': '10.20.30.20',
+                'replacement': True,
+            },
+            reason='遗留同步主机已离线，需审批后执行替换或下线回收。',
+            approval_comment='同意先保留窗口，待迁移计划落地后执行交付。',
+            status='approved',
+            approved_at=timezone.now() - timezone.timedelta(days=2),
+        ),
+        ResourceRequest(
+            title='开发调度节点续用申请（airflow-worker-dev）',
+            applicant='数据平台-韩梅',
+            resource_type='主机',
+            specification='开发环境调度节点 / 8C16G / 200G',
+            business_line=BIZ_DATA,
+            environment='dev',
+            priority='low',
+            quantity=1,
+            specs={
+                'hostname': 'airflow-worker-dev',
+                'ip_address': '10.20.10.10',
+            },
+            reason='当前开发调度任务持续使用该主机，希望保留并补充资源说明。',
+            status='pending',
+        ),
+    ])
+
+    _log(
+        stdout,
+        f'Seeded {ConfigItem.objects.count()} config items, {CIRelation.objects.count()} relations, '
+        f'{CostRecord.objects.count()} cost records and {ResourceRequest.objects.count()} host requests.',
+    )

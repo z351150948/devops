@@ -31,8 +31,8 @@ const routes = [
       {
         path: 'hosts',
         name: 'Hosts',
-        component: () => import('@/views/Hosts.vue'),
-        meta: { title: '主机管理', icon: 'Monitor', permission: 'ops.host.view' },
+        redirect: { path: '/cmdb', query: { tab: 'host-manage', hostTab: 'assets' } },
+        meta: { title: '主机管理', icon: 'Monitor', permission: 'ops.host.view', hidden: true },
       },
       {
         path: 'cmdb',
@@ -41,7 +41,17 @@ const routes = [
         meta: {
           title: 'CMDB',
           icon: 'Files',
-          anyPermissions: ['cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view', 'cmdb.cost.view', 'cmdb.request.submit'],
+          anyPermissions: [
+            'cmdb.dashboard.view',
+            'cmdb.ci.view',
+            'cmdb.topology.view',
+            'cmdb.cost.view',
+            'cmdb.request.submit',
+            'cmdb.request.approve',
+            'ops.host.view',
+            'ops.host.manage',
+            'ops.host.terminal',
+          ],
         },
       },
       {

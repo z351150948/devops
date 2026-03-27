@@ -5,6 +5,12 @@ from django.utils.text import slugify
 
 
 class Host(models.Model):
+    ENV_CHOICES = [
+        ('prod', '生产'),
+        ('test', '测试'),
+        ('dev', '开发'),
+    ]
+
     STATUS_CHOICES = [
         ('online', '在线'),
         ('offline', '离线'),
@@ -13,7 +19,11 @@ class Host(models.Model):
 
     hostname = models.CharField('主机名', max_length=128, unique=True)
     ip_address = models.GenericIPAddressField('IP 地址')
+    business_line = models.CharField('业务线', max_length=50, blank=True, default='')
+    environment = models.CharField('环境', max_length=20, choices=ENV_CHOICES, blank=True, default='')
+    admin_user = models.CharField('负责人', max_length=50, blank=True, default='')
     os_type = models.CharField('操作系统', max_length=64, default='Linux')
+    description = models.CharField('描述', max_length=200, blank=True, default='')
     status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default='online')
     cpu_usage = models.FloatField('CPU 使用率(%)', default=0)
     memory_usage = models.FloatField('内存使用率(%)', default=0)

@@ -33,9 +33,9 @@ export const createCostRecord = (data) => request.post('/cmdb/cost-records/', da
 // 资源申请
 export const getResourceRequests = (params) => request.get('/cmdb/resource-requests/', { params })
 export const createResourceRequest = (data) => request.post('/cmdb/resource-requests/', data)
-export const approveRequest = (id, data) => request.post(`/cmdb/resource-requests/${id}/approve/`, data)
-export const rejectRequest = (id, data) => request.post(`/cmdb/resource-requests/${id}/reject/`, data)
-export const completeRequest = (id) => request.post(`/cmdb/resource-requests/${id}/complete/`)
+export const approveRequest = (id, data = {}) => request.post(`/cmdb/resource-requests/${id}/approve/`, data)
+export const rejectRequest = (id, data = {}) => request.post(`/cmdb/resource-requests/${id}/reject/`, data)
+export const completeRequest = (id, data = {}) => request.post(`/cmdb/resource-requests/${id}/complete/`, data)
 
 // 聚合 API
 export const getCmdbDashboard = () => request.get('/cmdb/dashboard/stats/')

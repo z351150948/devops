@@ -31,10 +31,31 @@ LOG_SENSITIVE_KEYS = {
 
 class HostSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    environment_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Host
         fields = '__all__'
+
+    def get_environment_display(self, obj):
+        return obj.get_environment_display() if obj.environment else ''
+
+    def validate(self, attrs):
+        business_line = (attrs.get('business_line') if 'business_line' in attrs else getattr(self.instance, 'business_line', '')) or ''
+        environment = (attrs.get('environment') if 'environment' in attrs else getattr(self.instance, 'environment', '')) or ''
+
+        business_line = business_line.strip()
+        if business_line and not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
+            raise serializers.ValidationError({'business_line': '所选业务线未在资源树中配置'})
+
+        if environment:
+            if not business_line:
+                raise serializers.ValidationError({'environment': '请先选择业务线'})
+            if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
+                raise serializers.ValidationError({'environment': '所选环境未在当前业务线下配置'})
+
+        attrs['business_line'] = business_line
+        return attrs
 
 
 class DeploymentApprovalNodeSerializer(serializers.ModelSerializer):

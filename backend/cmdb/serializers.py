@@ -60,9 +60,47 @@ class CostRecordSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class ResourceRequestSerializer(serializers.ModelSerializer):
+    requester = serializers.CharField(source='applicant', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    environment_display = serializers.SerializerMethodField()
+
     class Meta:
         model = ResourceRequest
         fields = '__all__'
+        read_only_fields = ['applicant', 'approver', 'approved_at', 'completed_at', 'created_at', 'updated_at']
+
+    def get_environment_display(self, obj):
+        return obj.get_environment_display() if obj.environment else ''
+
+    def validate(self, attrs):
+        business_line = (attrs.get('business_line') if 'business_line' in attrs else getattr(self.instance, 'business_line', '')) or ''
+        environment = (attrs.get('environment') if 'environment' in attrs else getattr(self.instance, 'environment', '')) or ''
+        title = (attrs.get('title') if 'title' in attrs else getattr(self.instance, 'title', '')) or ''
+        resource_type = (attrs.get('resource_type') if 'resource_type' in attrs else getattr(self.instance, 'resource_type', '')) or ''
+        quantity = attrs.get('quantity', getattr(self.instance, 'quantity', 1))
+
+        business_line = business_line.strip()
+        title = title.strip()
+        resource_type = resource_type.strip()
+        if not title:
+            raise serializers.ValidationError({'title': '请填写申请标题'})
+        normalized_resource_type = '主机' if resource_type in ['主机', 'host', 'Host', 'HOST'] else resource_type
+        if normalized_resource_type != '主机':
+            raise serializers.ValidationError({'resource_type': '当前仅支持主机申请'})
+        if quantity < 1:
+            raise serializers.ValidationError({'quantity': '数量必须大于 0'})
+        if business_line and not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
+            raise serializers.ValidationError({'business_line': '所选业务线未在资源树中配置'})
+        if environment:
+            if not business_line:
+                raise serializers.ValidationError({'environment': '请先选择业务线'})
+            if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
+                raise serializers.ValidationError({'environment': '所选环境未在当前业务线下配置'})
+
+        attrs['title'] = title
+        attrs['resource_type'] = normalized_resource_type
+        attrs['business_line'] = business_line
+        return attrs
 
 class ResourceNodeSerializer(serializers.ModelSerializer):
     class Meta:

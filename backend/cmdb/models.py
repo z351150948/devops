@@ -54,12 +54,33 @@ class CostRecord(models.Model):
     computed_at = models.DateTimeField(auto_now_add=True)
 
 class ResourceRequest(models.Model):
+    ENV_CHOICES = [('prod', '生产'), ('test', '测试'), ('dev', '开发')]
+    PRIORITY_CHOICES = [('low', '低'), ('medium', '中'), ('high', '高')]
+    STATUS_CHOICES = [
+        ('pending', '待审批'),
+        ('approved', '已批准'),
+        ('rejected', '已拒绝'),
+        ('completed', '已完成'),
+    ]
+
+    title = models.CharField("申请标题", max_length=120, blank=True, default='')
     applicant = models.CharField("申请人", max_length=50)
+    approver = models.CharField("审批人", max_length=50, blank=True, default='')
     resource_type = models.CharField("资源类型", max_length=50)
-    specs = models.JSONField("规格要求", default=dict)
+    specification = models.CharField("规格说明", max_length=200, blank=True, default='')
+    business_line = models.CharField("业务线", max_length=50, blank=True, default='')
+    environment = models.CharField("环境", max_length=20, choices=ENV_CHOICES, blank=True, default='')
+    priority = models.CharField("优先级", max_length=16, choices=PRIORITY_CHOICES, default='medium')
+    quantity = models.PositiveIntegerField("数量", default=1)
+    specs = models.JSONField("规格要求", default=dict, blank=True)
     reason = models.TextField("申请理由")
-    status = models.CharField("状态", max_length=20, choices=[('pending', '待审批'), ('approved', '已批准'), ('rejected', '已拒绝'), ('provisioned', '已交付')], default='pending')
+    approval_comment = models.TextField("审批说明", blank=True, default='')
+    fulfillment_note = models.TextField("交付说明", blank=True, default='')
+    status = models.CharField("状态", max_length=20, choices=STATUS_CHOICES, default='pending')
+    approved_at = models.DateTimeField("审批时间", null=True, blank=True)
+    completed_at = models.DateTimeField("完成时间", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
 class ResourceNode(models.Model):
     name = models.CharField("节点名称", max_length=100)
