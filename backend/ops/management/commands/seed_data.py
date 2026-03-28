@@ -650,4 +650,5 @@ class Command(BaseCommand):
 
         self.stdout.write('正在生成 CMDB 演示数据...')
         seed_cmdb_demo(self.stdout)
+        call_command('seed_multicloud_demo')
         sync_current_deployments_to_cmdb()

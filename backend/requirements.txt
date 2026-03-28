@@ -10,3 +10,6 @@ paramiko>=3.4
 channels>=4.0
 daphne>=4.1
 kubernetes>=31.0
+aliyun-python-sdk-ecs>=4.24
+huaweicloudsdkcore>=3.1
+huaweicloudsdkecs>=3.1

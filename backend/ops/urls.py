@@ -5,6 +5,7 @@ from . import loki_views
 from . import log_views
 from . import docker_views
 from . import k8s_views
+from . import middleware_views
 from . import nginx_views
 router = DefaultRouter()
 router.register(r'hosts', views.HostViewSet)
@@ -41,6 +42,8 @@ urlpatterns = [
     path('docker/containers/<str:container_id>/remove/', docker_views.container_remove, name='docker-container-remove'),
     path('docker/containers/<str:container_id>/logs/', docker_views.container_logs, name='docker-container-logs'),
     path('docker/containers/<str:container_id>/inspect/', docker_views.container_inspect, name='docker-container-inspect'),
+    path('middleware/overview/', middleware_views.middleware_overview, name='middleware-overview'),
+    path('middleware/action/', middleware_views.middleware_action, name='middleware-action'),
 
     path('', include(router.urls)),
 ]

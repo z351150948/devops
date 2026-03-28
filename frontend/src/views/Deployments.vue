@@ -807,7 +807,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.release-page{display:flex;flex-direction:column;gap:8px}
+.release-page{display:flex;flex-direction:column;gap:6px}
 .panel{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid #dbe4f0;border-radius:24px;box-shadow:0 14px 34px rgba(15,23,42,.06);padding:14px 22px}
 .hero{background:linear-gradient(135deg,#fff7ed 0%,#f8fbff 100%);display:flex;gap:12px;justify-content:space-between}
 .hero h2{color:#0f172a;margin:0}
@@ -828,7 +828,7 @@ onMounted(async () => {
 .danger-card::after{background:radial-gradient(circle,rgba(239,68,68,.18) 0%,rgba(239,68,68,0) 70%)}
 .release-stat-card .stat-value{font-size:26px;line-height:1.05}
 .release-stat-card .stat-label{margin-top:4px;color:#64748b}
-.release-tabs{margin-top:-8px}
+.release-tabs{margin-top:-8px;padding:18px;border-radius:20px;background:rgba(255,255,255,.86);box-shadow:0 18px 36px rgba(15,23,42,.06)}
 .release-tabs :deep(.el-tabs__header){margin-bottom:8px}.release-filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;margin-bottom:10px;overflow-x:auto;padding-bottom:2px}.flow-toolbar-spacer{flex:1}.app-cell,.stack-cell,.strategy-cell{display:flex;flex-direction:column;gap:6px}.app-cell-title{display:flex;align-items:center;gap:8px}.app-name{font-weight:600}
 .filter-refresh-btn{margin-left:auto;flex-shrink:0}
 .tag-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}

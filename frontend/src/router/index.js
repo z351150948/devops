@@ -87,16 +87,50 @@ const routes = [
         meta: { title: 'Docker 环境', icon: 'Platform', permission: 'ops.docker.view' },
       },
       {
-        path: 'nginx',
+        path: 'middleware/redis',
+        name: 'RedisManage',
+        component: () => import('@/views/MiddlewareManage.vue'),
+        meta: { title: 'Redis 管理', icon: 'Coin', permission: 'ops.middleware.view', moduleKey: 'redis' },
+      },
+      {
+        path: 'middleware/rocketmq',
+        name: 'RocketMqManage',
+        component: () => import('@/views/MiddlewareManage.vue'),
+        meta: { title: 'RocketMQ 管理', icon: 'Promotion', permission: 'ops.middleware.view', moduleKey: 'rocketmq' },
+      },
+      {
+        path: 'middleware/elasticsearch',
+        name: 'ElasticsearchManage',
+        component: () => import('@/views/MiddlewareManage.vue'),
+        meta: { title: 'Elasticsearch 管理', icon: 'Search', permission: 'ops.middleware.view', moduleKey: 'elasticsearch' },
+      },
+      {
+        path: 'middleware/nginx',
         name: 'NginxManage',
         component: () => import('@/views/NginxManage.vue'),
         meta: { title: 'Nginx 管理', icon: 'Location', permission: 'ops.nginx.view' },
       },
       {
+        path: 'middleware/common',
+        redirect: '/middleware/redis',
+        meta: { hidden: true, permission: 'ops.middleware.view' },
+      },
+      {
+        path: 'nginx',
+        redirect: '/middleware/nginx',
+        meta: { hidden: true, permission: 'ops.nginx.view' },
+      },
+      {
         path: 'terraform',
         name: 'TerraformIac',
         component: () => import('@/views/TerraformIac.vue'),
-        meta: { title: 'IaC 资源编排', icon: 'SetUp', permission: 'ops.iac.view' },
+        meta: { title: 'IaC 编排', icon: 'SetUp', permission: 'ops.iac.view' },
+      },
+      {
+        path: 'multicloud',
+        name: 'MultiCloudManage',
+        component: () => import('@/views/MultiCloudManage.vue'),
+        meta: { title: '多云环境', icon: 'MostlyCloudy', permission: 'ops.multicloud.view' },
       },
       {
         path: 'logs',

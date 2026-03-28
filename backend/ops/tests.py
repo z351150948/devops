@@ -828,3 +828,113 @@ class ContainerManagementTests(TestCase):
         self.assertEqual(prune_response.status_code, 200)
         after_prune = self.client.get('/api/docker/images/', {'host_id': host.id}).json()
         self.assertFalse(any(item['repository'] == '<none>' or item['tag'] == '<none>' for item in after_prune))
+
+
+class MiddlewareViewsTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_superuser('middleware-admin', 'middleware@example.com', 'Admin@123456')
+        self.client.force_authenticate(user=self.user)
+
+    def test_middleware_overview_returns_all_sections(self):
+        response = self.client.get('/api/middleware/overview/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn('overview', payload)
+        self.assertIn('redis', payload)
+        self.assertIn('rocketmq', payload)
+        self.assertIn('elasticsearch', payload)
+        self.assertTrue(any(item['cluster'] == 'order-cache' for item in payload['redis']['instances']))
+        self.assertTrue(any(item['group'] == 'GID_AUDIT_ETL' for item in payload['rocketmq']['consumer_groups']))
+        self.assertTrue(any(item['health'] == 'yellow' for item in payload['elasticsearch']['clusters']))
+
+    def test_redis_promote_action_swaps_master_role(self):
+        initial = self.client.get('/api/middleware/overview/').json()
+        replica = next(item for item in initial['redis']['instances'] if item['id'] == 'redis-order-replica-01')
+
+        response = self.client.post(
+            '/api/middleware/action/',
+            {'module': 'redis', 'target_id': replica['id'], 'action': 'promote'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated_instances = response.json()['data']['redis']['instances']
+        promoted = next(item for item in updated_instances if item['id'] == 'redis-order-replica-01')
+        previous_master = next(item for item in updated_instances if item['id'] == 'redis-order-master')
+        self.assertEqual(promoted['role'], 'master')
+        self.assertEqual(promoted['replication_delay_ms'], 0)
+        self.assertEqual(previous_master['role'], 'replica')
+        self.assertEqual(previous_master['status'], 'warning')
+
+    def test_elasticsearch_reroute_clears_yellow_cluster(self):
+        response = self.client.post(
+            '/api/middleware/action/',
+            {'module': 'elasticsearch', 'target_id': 'es-observe-logs', 'action': 'reroute'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated_clusters = response.json()['data']['elasticsearch']['clusters']
+        updated_cluster = next(item for item in updated_clusters if item['id'] == 'es-observe-logs')
+        self.assertEqual(updated_cluster['health'], 'green')
+        self.assertEqual(updated_cluster['unassigned_shards'], 0)
+
+    def test_create_redis_cluster_and_instance_updates_demo_state(self):
+        create_cluster = self.client.post(
+            '/api/middleware/action/',
+            {
+                'module': 'redis',
+                'action': 'create_cluster',
+                'payload': {
+                    'name': 'promo-cache',
+                    'environment': 'test',
+                    'mode': 'Sentinel',
+                    'memory_total_gb': 24,
+                },
+            },
+            format='json',
+        )
+        self.assertEqual(create_cluster.status_code, 200)
+        self.assertTrue(any(item['name'] == 'promo-cache' for item in create_cluster.json()['data']['redis']['clusters']))
+
+        create_instance = self.client.post(
+            '/api/middleware/action/',
+            {
+                'module': 'redis',
+                'action': 'create_instance',
+                'payload': {
+                    'cluster': 'promo-cache',
+                    'name': 'redis-promo-master',
+                    'environment': 'test',
+                    'role': 'master',
+                    'endpoint': '10.99.0.10:6379',
+                },
+            },
+            format='json',
+        )
+        self.assertEqual(create_instance.status_code, 200)
+        self.assertTrue(any(item['name'] == 'redis-promo-master' for item in create_instance.json()['data']['redis']['instances']))
+
+    def test_create_elasticsearch_node_updates_cluster_size(self):
+        response = self.client.post(
+            '/api/middleware/action/',
+            {
+                'module': 'elasticsearch',
+                'action': 'create_instance',
+                'payload': {
+                    'cluster': 'search-prod',
+                    'name': 'es-search-07',
+                    'endpoint': '10.23.0.17:9200',
+                    'role': 'data_hot,ingest',
+                },
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()['data']['elasticsearch']
+        self.assertTrue(any(item['name'] == 'es-search-07' for item in data['nodes']))
+        updated_cluster = next(item for item in data['clusters'] if item['name'] == 'search-prod')
+        self.assertEqual(updated_cluster['nodes'], 3)

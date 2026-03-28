@@ -6,7 +6,7 @@
           <span class="title-icon">
             <el-icon><SetUp /></el-icon>
           </span>
-          <h2>IaC资源编排</h2>
+          <h2>IaC 编排</h2>
         </div>
         <p class="page-subtitle">基于 Terraform 实现。按模块完成云资源编排，生成阿里云 / 华为云 Terraform 工程文件，并支持执行与同步 CMDB。</p>
       </div>

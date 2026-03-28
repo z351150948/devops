@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/marketplace/', include('marketplace.urls')),
     path('api/cmdb/', include('cmdb.urls')),
     path('api/iac/', include('iac.urls')),
+    path('api/multicloud/', include('multicloud.urls')),
     re_path(r'^(assets/.*)$', frontend_views.frontend_asset),
     path('', frontend_views.frontend_index),
     re_path(r'^(?!api/|admin/|ws/).*$' , frontend_views.frontend_index),

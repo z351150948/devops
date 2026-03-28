@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'marketplace',
     'cmdb',
     'iac',
+    'multicloud',
     'rbac',
 ]
 

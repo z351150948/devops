@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div ref="containerRef" class="topology-stage">
     <canvas
       ref="canvasRef"
@@ -234,15 +234,19 @@ function fitView() {
     return
   }
 
+  const topSafeInset = 58
+  const bottomSafeInset = 28
+  const leftBias = 32
   const availableWidth = Math.max(canvasSize.value.width - 52, 120)
-  const availableHeight = Math.max(canvasSize.value.height - 52, 120)
+  const availableHeight = Math.max(canvasSize.value.height - topSafeInset - bottomSafeInset, 120)
   const scale = Math.min(1.18, availableWidth / Math.max(bounds.width, 1), availableHeight / Math.max(bounds.height, 1))
-  const finalScale = Math.max(scale, 0.5)
+  const finalScale = Math.max(Math.min(scale * 1.04, 1.24), 0.5)
+  const centeredYOffset = (availableHeight - bounds.height * finalScale) / 2 + 8
 
   viewport.value = {
     scale: finalScale,
-    x: (canvasSize.value.width - bounds.width * finalScale) / 2 - bounds.minX * finalScale,
-    y: (canvasSize.value.height - bounds.height * finalScale) / 2 - bounds.minY * finalScale,
+    x: (canvasSize.value.width - bounds.width * finalScale) / 2 - bounds.minX * finalScale - leftBias,
+    y: topSafeInset + centeredYOffset - bounds.minY * finalScale,
   }
   scheduleDraw()
 }
@@ -1210,4 +1214,9 @@ defineExpose({ fitView })
   background: rgba(59, 130, 246, 0.08);
 }
 </style>
+
+
+
+
+
 

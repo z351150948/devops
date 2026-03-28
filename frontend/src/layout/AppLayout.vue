@@ -113,6 +113,14 @@ const menuItems = [
     ],
   },
   {
+    title: '多云管理',
+    icon: 'MostlyCloudy',
+    children: [
+      { path: '/multicloud', title: '多云环境', icon: 'MostlyCloudy', permission: 'ops.multicloud.view' },
+      { path: '/terraform', title: 'IaC 编排', icon: 'SetUp', permission: 'ops.iac.view' },
+    ],
+  },
+  {
     path: '/deployments',
     title: '应用发布',
     icon: 'Promotion',
@@ -132,8 +140,16 @@ const menuItems = [
       { path: '/containers/docker', title: 'Docker 环境', icon: 'Platform', permission: 'ops.docker.view' },
     ],
   },
-  { path: '/nginx', title: 'Nginx 管理', icon: 'Location', permission: 'ops.nginx.view' },
-  { path: '/terraform', title: 'IaC 资源编排', icon: 'SetUp', permission: 'ops.iac.view' },
+  {
+    title: '中间件管理',
+    icon: 'DataBoard',
+    children: [
+      { path: '/middleware/redis', title: 'Redis 管理', icon: 'Coin', permission: 'ops.middleware.view' },
+      { path: '/middleware/rocketmq', title: 'RocketMQ 管理', icon: 'Promotion', permission: 'ops.middleware.view' },
+      { path: '/middleware/elasticsearch', title: 'Elasticsearch 管理', icon: 'Search', permission: 'ops.middleware.view' },
+      { path: '/middleware/nginx', title: 'Nginx 管理', icon: 'Location', permission: 'ops.nginx.view' },
+    ],
+  },
   {
     key: 'log-center',
     title: '日志中心',
