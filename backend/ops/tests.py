@@ -29,6 +29,23 @@ TEST_LOG_PROVIDER_CONFIGS = {
     },
 }
 
+TEST_OBSERVABILITY_CONFIG = {
+    'skywalking': {
+        'enabled': True,
+        'ui_url': 'http://skywalking.example.com',
+        'oap_url': 'http://skywalking-oap.example.com',
+        'graphql_path': '/graphql',
+        'default_layer': '',
+        'demo_mode': True,
+    },
+    'grafana': {
+        'enabled': True,
+        'url': 'http://grafana.example.com',
+        'default_path': '/d/apm-overview',
+        'demo_mode': True,
+    },
+}
+
 
 class MockHttpResponse:
     def __init__(self, payload, status_code=200):
@@ -404,6 +421,223 @@ class LogViewsTests(TestCase):
         payload = query_response.json()
         self.assertGreaterEqual(payload['total'], 200)
         self.assertEqual(len(payload['logs']), 200)
+
+
+@override_settings(LOG_PROVIDER_CONFIGS=TEST_LOG_PROVIDER_CONFIGS, OBSERVABILITY_CONFIG=TEST_OBSERVABILITY_CONFIG)
+class ObservabilityViewsTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_superuser('observer-admin', 'observer@example.com', 'Admin@123456')
+        self.client.force_authenticate(user=self.user)
+
+    def test_observability_overview_falls_back_to_demo_without_skywalking_oap(self):
+        with override_settings(
+            OBSERVABILITY_CONFIG={
+                'skywalking': {
+                    'enabled': True,
+                    'ui_url': '',
+                    'oap_url': '',
+                    'graphql_path': '/graphql',
+                    'default_layer': '',
+                    'demo_mode': True,
+                },
+                'grafana': {
+                    'enabled': True,
+                    'url': '',
+                    'default_path': '',
+                    'demo_mode': True,
+                },
+            }
+        ):
+            response = self.client.get('/api/observability/overview/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['modules']['tracing']['source'], 'demo')
+        self.assertEqual(payload['modules']['grafana']['source'], 'demo')
+        self.assertEqual(payload['summary']['dashboard_count'], 4)
+        self.assertGreaterEqual(payload['summary']['service_count'], 1)
+
+    @patch('ops.observability_views.user_has_permissions')
+    def test_observability_overview_allows_log_only_user_without_trace_visibility(self, mock_permissions):
+        existing_payload = self.client.get('/api/log/datasources/').json()
+        existing_count = existing_payload.get('count', 0) if isinstance(existing_payload, dict) else len(existing_payload)
+        self.client.post(
+            '/api/log/datasources/',
+            {
+                'name': 'Overview Loki',
+                'provider': 'loki',
+                'config': {'endpoint': 'http://overview-loki:3100'},
+            },
+            format='json',
+        )
+        limited_user = get_user_model().objects.create_user('log-viewer', password='Admin@123456')
+        self.client.force_authenticate(user=limited_user)
+
+        def permission_side_effect(user, codes):
+            code = codes[0] if codes else ''
+            return code == 'ops.log.datasource.view'
+
+        mock_permissions.side_effect = permission_side_effect
+
+        response = self.client.get('/api/observability/overview/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIsNone(payload['modules']['tracing'])
+        self.assertIsNone(payload['modules']['grafana'])
+        self.assertEqual(payload['modules']['logs']['datasource_count'], existing_count + 1)
+        self.assertEqual(len(payload['navigation']), 1)
+        self.assertEqual(payload['navigation'][0]['path'], '/logs')
+
+    def test_observability_overview_uses_configured_grafana_dashboards(self):
+        with override_settings(
+            OBSERVABILITY_CONFIG={
+                **TEST_OBSERVABILITY_CONFIG,
+                'grafana': {
+                    'enabled': True,
+                    'url': 'http://grafana.example.com',
+                    'default_path': '',
+                    'demo_mode': True,
+                    'dashboards': [
+                        {
+                            'key': 'custom-trace',
+                            'title': '自定义链路总览',
+                            'slug': 'custom-trace',
+                            'path': '/d/custom-trace',
+                            'panel_count': 6,
+                            'tags': ['custom', 'trace'],
+                            'description': '自定义链路看板',
+                        }
+                    ],
+                },
+            }
+        ):
+            response = self.client.get('/api/observability/overview/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['modules']['grafana']['dashboard_count'], 1)
+        self.assertEqual(payload['modules']['grafana']['dashboards'][0]['key'], 'custom-trace')
+        self.assertEqual(payload['modules']['grafana']['dashboards'][0]['url'], 'http://grafana.example.com/d/custom-trace')
+
+    @patch('ops.observability_views.http_requests.post')
+    def test_tracing_catalog_uses_skywalking_graphql_when_configured(self, mock_post):
+        mock_post.side_effect = [
+            MockHttpResponse({
+                'data': {
+                    'listServices': [
+                        {'id': 'service-1', 'name': 'gateway-service', 'shortName': 'gateway', 'group': 'agdevops', 'layers': ['GENERAL']},
+                        {'id': 'service-2', 'name': 'payment-service', 'shortName': 'payment', 'group': 'agdevops', 'layers': ['GENERAL']},
+                    ]
+                }
+            }),
+            MockHttpResponse({
+                'data': {
+                    'getGlobalTopology': {
+                        'nodes': [{'id': 'service-1', 'name': 'gateway-service', 'type': 'SERVICE', 'layers': ['GENERAL']}],
+                        'calls': [{'id': 'call-1', 'source': 'service-1', 'target': 'service-2'}],
+                    }
+                }
+            }),
+            MockHttpResponse({
+                'data': {
+                    'queryBasicTraces': {
+                        'traces': [
+                            {
+                                'segmentId': 'segment-1',
+                                'endpointNames': ['GET /api/orders/{id}'],
+                                'duration': 212,
+                                'start': '2026-03-29 09:15',
+                                'isError': False,
+                                'traceIds': ['trace-1'],
+                            }
+                        ]
+                    }
+                }
+            }),
+        ]
+
+        response = self.client.get('/api/observability/tracing/catalog/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['tracing']['source'], 'skywalking')
+        self.assertEqual(payload['summary']['service_count'], 2)
+        self.assertEqual(payload['summary']['topology_calls'], 1)
+        self.assertEqual(payload['recent_traces'][0]['trace_id'], 'trace-1')
+        self.assertEqual(mock_post.call_count, 3)
+
+    @patch('ops.observability_views.http_requests.post')
+    def test_trace_detail_returns_span_summary_from_skywalking(self, mock_post):
+        mock_post.side_effect = [
+            MockHttpResponse({
+                'data': {
+                    'listServices': [
+                        {'id': 'service-1', 'name': 'gateway-service', 'shortName': 'gateway', 'group': 'agdevops', 'layers': ['GENERAL']},
+                    ]
+                }
+            }),
+            MockHttpResponse({
+                'data': {
+                    'getGlobalTopology': {
+                        'nodes': [{'id': 'service-1', 'name': 'gateway-service', 'type': 'SERVICE', 'layers': ['GENERAL']}],
+                        'calls': [],
+                    }
+                }
+            }),
+            MockHttpResponse({
+                'data': {
+                    'queryBasicTraces': {
+                        'traces': [
+                            {
+                                'segmentId': 'segment-1',
+                                'endpointNames': ['GET /api/orders/{id}'],
+                                'duration': 212,
+                                'start': '2026-03-29 09:15',
+                                'isError': False,
+                                'traceIds': ['trace-1'],
+                            }
+                        ]
+                    }
+                }
+            }),
+            MockHttpResponse({
+                'data': {
+                    'queryTrace': {
+                        'spans': [
+                            {
+                                'traceId': 'trace-1',
+                                'segmentId': 'segment-1',
+                                'spanId': 0,
+                                'parentSpanId': -1,
+                                'serviceCode': 'gateway-service',
+                                'serviceInstanceName': 'gateway-prod-01',
+                                'startTime': 1711674900000,
+                                'endTime': 1711674900212,
+                                'endpointName': 'GET /api/orders/{id}',
+                                'type': 'Entry',
+                                'peer': '',
+                                'component': 'SpringMVC',
+                                'isError': False,
+                                'layer': 'HTTP',
+                                'tags': [{'key': 'http.status_code', 'value': '200'}],
+                                'logs': [],
+                            }
+                        ]
+                    }
+                }
+            }),
+        ]
+
+        response = self.client.get('/api/observability/tracing/traces/trace-1/')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['trace']['trace_id'], 'trace-1')
+        self.assertEqual(payload['trace']['span_count'], 1)
+        self.assertEqual(payload['trace']['duration_ms'], 212)
+        self.assertIn('gateway-service', payload['trace']['services'])
 
     @patch('ops.log_views.http_requests.request')
     def test_sls_catalog_lists_logstores(self, mock_request):

@@ -151,12 +151,21 @@ const menuItems = [
     ],
   },
   {
-    key: 'log-center',
-    title: '日志中心',
-    icon: 'Document',
-    anyPermissions: ['ops.log.query', 'ops.log.datasource.view'],
+    title: '可观测性平台',
+    icon: 'DataLine',
+    children: [
+      {
+        path: '/observability/overview',
+        title: '平台总览',
+        icon: 'DataLine',
+        anyPermissions: ['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.grafana.view'],
+      },
+      { path: '/logs', title: '日志中心', icon: 'Search', anyPermissions: ['ops.log.query', 'ops.log.datasource.view'] },
+      { path: '/alerts', title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
+      { path: '/observability/tracing', title: '链路追踪', icon: 'Connection', permission: 'ops.trace.view' },
+      { path: '/observability/grafana', title: 'Grafana 大屏', icon: 'Histogram', permission: 'ops.grafana.view' },
+    ],
   },
-  { path: '/alerts', title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
   {
     path: '/users',
     title: '用户管理',
@@ -187,30 +196,28 @@ function canAccess(item) {
 
 const visibleMenuItems = computed(() => menuItems
   .map((item) => {
-    if (item.key === 'log-center') {
-      return {
-        ...item,
-        path: authStore.hasPermission('ops.log.query') ? '/logs/query' : '/logs/datasources',
-      }
-    }
     if (!item.children) return item
     const children = item.children.filter(canAccess)
     return { ...item, children }
   })
   .filter((item) => item.children ? item.children.length > 0 : canAccess(item)))
 
-const activeMenuPath = computed(() => {
-  if (route.path.startsWith('/logs')) {
-    return authStore.hasPermission('ops.log.query') ? '/logs/query' : '/logs/datasources'
-  }
+const normalizedMenuPath = computed(() => {
   if (route.path.startsWith('/sql')) {
     return '/sql'
+  }
+  if (route.path.startsWith('/logs/')) {
+    return '/logs'
   }
   return route.path
 })
 
+const activeMenuPath = computed(() => {
+  return normalizedMenuPath.value
+})
+
 const currentTitle = computed(() => {
-  const currentPath = route.path
+  const currentPath = normalizedMenuPath.value
   for (const item of visibleMenuItems.value) {
     if (item.path === currentPath) return item.title
     if (item.children) {

@@ -7,6 +7,7 @@ from . import docker_views
 from . import k8s_views
 from . import middleware_views
 from . import nginx_views
+from . import observability_views
 router = DefaultRouter()
 router.register(r'hosts', views.HostViewSet)
 router.register(r'deployment-approval-flows', views.DeploymentApprovalFlowViewSet, basename='deployment-approval-flow')
@@ -44,6 +45,10 @@ urlpatterns = [
     path('docker/containers/<str:container_id>/inspect/', docker_views.container_inspect, name='docker-container-inspect'),
     path('middleware/overview/', middleware_views.middleware_overview, name='middleware-overview'),
     path('middleware/action/', middleware_views.middleware_action, name='middleware-action'),
+    path('observability/overview/', observability_views.observability_overview, name='observability-overview'),
+    path('observability/tracing/catalog/', observability_views.observability_tracing_catalog, name='observability-tracing-catalog'),
+    path('observability/tracing/search/', observability_views.observability_tracing_search, name='observability-tracing-search'),
+    path('observability/tracing/traces/<str:trace_id>/', observability_views.observability_trace_detail, name='observability-trace-detail'),
 
     path('', include(router.urls)),
 ]

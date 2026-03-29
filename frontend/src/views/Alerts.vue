@@ -1,71 +1,126 @@
 <template>
-  <div class="fade-in">
-    <div class="page-header">
-      <h2>告警中心</h2>
+  <div class="alerts-page">
+    <section class="hero panel">
+      <div class="hero-copy">
+        <div class="hero-title-row">
+          <span class="hero-icon">
+            <el-icon><Bell /></el-icon>
+          </span>
+          <h2>告警中心</h2>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <el-button @click="fetchData" :loading="loading">刷新告警</el-button>
+        <el-button v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
+        <el-button v-if="canViewTracing" @click="router.push('/observability/tracing')">链路追踪</el-button>
+        <el-button v-if="canViewGrafana" @click="router.push('/observability/grafana')">Grafana 大屏</el-button>
+      </div>
+    </section>
+
+    <div class="stats-grid release-stats">
+      <div class="stat-card release-stat-card">
+        <div class="stat-value">{{ total }}</div>
+        <div class="stat-label">告警总数</div>
+      </div>
+      <div class="stat-card release-stat-card danger-card">
+        <div class="stat-value">{{ criticalCount }}</div>
+        <div class="stat-label">严重告警</div>
+      </div>
+      <div class="stat-card release-stat-card warning-card">
+        <div class="stat-value">{{ warningCount }}</div>
+        <div class="stat-label">警告告警</div>
+      </div>
+      <div class="stat-card release-stat-card success-card">
+        <div class="stat-value">{{ acknowledgedCount }}</div>
+        <div class="stat-label">已确认</div>
+      </div>
     </div>
 
-    <div class="table-card">
+    <div class="runtime-strip">
+      <el-icon><InfoFilled /></el-icon>
+      <span>运行提示：建议优先处理未确认的严重告警，再结合日志中心与链路追踪继续定位。</span>
+    </div>
+
+    <section class="panel">
       <div class="filter-bar">
-        <el-input v-model="search" placeholder="搜索告警标题 / 来源" clearable style="width: 300px"
-          :prefix-icon="Search" @input="fetchData" />
-        <el-select v-model="levelFilter" placeholder="级别" clearable style="width: 120px" @change="fetchData">
+        <el-input
+          v-model="search"
+          placeholder="搜索告警标题 / 来源"
+          clearable
+          style="width: 320px"
+          :prefix-icon="Search"
+          @input="handleFilterChange"
+        />
+        <el-select v-model="levelFilter" placeholder="级别" clearable style="width: 120px" @change="handleFilterChange">
           <el-option label="严重" value="critical" />
           <el-option label="警告" value="warning" />
           <el-option label="信息" value="info" />
         </el-select>
-        <el-select v-model="ackFilter" placeholder="状态" clearable style="width: 120px" @change="fetchData">
+        <el-select v-model="ackFilter" placeholder="状态" clearable style="width: 120px" @change="handleFilterChange">
           <el-option label="未确认" :value="false" />
           <el-option label="已确认" :value="true" />
         </el-select>
       </div>
 
       <el-table :data="alerts" stripe v-loading="loading" style="width: 100%">
-        <el-table-column prop="title" label="告警标题" min-width="200" />
-        <el-table-column prop="level" label="级别" width="90">
+        <el-table-column prop="title" label="告警标题" min-width="220" />
+        <el-table-column prop="level" label="级别" width="100">
           <template #default="{ row }">
             <el-tag :type="levelType(row.level)" size="small">{{ row.level_display }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="source" label="来源" width="130" />
-        <el-table-column prop="host_name" label="主机" width="140" />
-        <el-table-column prop="is_acknowledged" label="状态" width="100">
+        <el-table-column prop="source" label="来源" width="140" />
+        <el-table-column prop="host_name" label="主机" width="150" />
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
             <el-tag :type="row.is_acknowledged ? 'success' : 'danger'" size="small">
               {{ row.is_acknowledged ? '已确认' : '未确认' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="时间" width="170">
+        <el-table-column prop="created_at" label="时间" width="180">
           <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
         </el-table-column>
-        <el-table-column v-if="canManageAlerts" label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="!row.is_acknowledged" link type="primary" size="small"
-              @click="handleAck(row)">确认</el-button>
-            <el-popconfirm title="确定删除？" @confirm="handleDelete(row.id)">
-              <template #reference>
-                <el-button link type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
+            <div class="row-actions">
+              <el-button v-if="canQueryLogs" link type="primary" size="small" @click="openAlertLogs(row)">日志</el-button>
+              <el-button v-if="canViewTracing" link type="warning" size="small" @click="openAlertTrace(row)">链路</el-button>
+              <el-button v-if="canViewGrafana" link type="success" size="small" @click="openAlertDashboard(row)">大屏</el-button>
+              <el-button v-if="canManageAlerts && !row.is_acknowledged" link type="primary" size="small" @click="handleAck(row)">确认</el-button>
+              <el-popconfirm v-if="canManageAlerts" title="确认删除该告警？" @confirm="handleDelete(row.id)">
+                <template #reference>
+                  <el-button link type="danger" size="small">删除</el-button>
+                </template>
+              </el-popconfirm>
+            </div>
           </template>
         </el-table-column>
       </el-table>
 
-      <div style="display:flex; justify-content:flex-end; margin-top:16px;">
-        <el-pagination v-model:current-page="page" :page-size="20" :total="total"
-          layout="total, prev, pager, next" @current-change="fetchData" />
+      <div class="pager">
+        <el-pagination
+          v-model:current-page="page"
+          :page-size="20"
+          :total="total"
+          layout="total, prev, pager, next"
+          @current-change="fetchData"
+        />
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
-import { Search } from '@element-plus/icons-vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Bell, InfoFilled, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getAlerts, updateAlert, deleteAlert } from '@/api/modules/ops'
+import { deleteAlert, getAlerts, updateAlert } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 
+const route = useRoute()
+const router = useRouter()
 const authStore = useAuthStore()
 const alerts = ref([])
 const loading = ref(false)
@@ -74,40 +129,262 @@ const levelFilter = ref('')
 const ackFilter = ref('')
 const page = ref(1)
 const total = ref(0)
+
 const canManageAlerts = computed(() => authStore.hasPermission('ops.alert.manage'))
+const canQueryLogs = computed(() => authStore.hasPermission('ops.log.query'))
+const canViewTracing = computed(() => authStore.hasPermission('ops.trace.view'))
+const canViewGrafana = computed(() => authStore.hasPermission('ops.grafana.view'))
+const criticalCount = computed(() => alerts.value.filter((item) => item.level === 'critical').length)
+const warningCount = computed(() => alerts.value.filter((item) => item.level === 'warning').length)
+const acknowledgedCount = computed(() => alerts.value.filter((item) => item.is_acknowledged).length)
 
-const levelType = (level) => {
-  const map = { critical: 'danger', warning: 'warning', info: 'info' }
-  return map[level] || 'info'
+function levelType(level) {
+  return { critical: 'danger', warning: 'warning', info: 'info' }[level] || 'info'
 }
-const formatTime = (t) => t ? new Date(t).toLocaleString('zh-CN') : ''
 
-const fetchData = async () => {
+function formatTime(value) {
+  return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '--'
+}
+
+function applyRouteFilters() {
+  search.value = typeof route.query.search === 'string' ? route.query.search.trim() : ''
+  levelFilter.value = typeof route.query.level === 'string' ? route.query.level.trim() : ''
+  if (route.query.ack === '0') {
+    ackFilter.value = false
+  } else if (route.query.ack === '1') {
+    ackFilter.value = true
+  } else {
+    ackFilter.value = ''
+  }
+}
+
+function alertText(row) {
+  return [row?.title, row?.source, row?.message, row?.host_name].filter(Boolean).join(' ').toLowerCase()
+}
+
+function resolveAlertKeyword(row) {
+  return [row?.title, row?.source, row?.host_name].find((item) => typeof item === 'string' && item.trim()) || ''
+}
+
+function inferAlertService(row) {
+  const candidate = [row?.source, row?.host_name, row?.title, row?.message]
+    .find((item) => typeof item === 'string' && item.trim()) || ''
+  const matched = candidate.match(/([a-z0-9-]+(?:service|gateway|nginx|member|payment|order))/i)
+  return matched?.[1] || ''
+}
+
+function inferDashboardKey(row) {
+  const text = alertText(row)
+  if (/(nginx|ingress|gateway|slb|load.?balanc)/.test(text)) return 'ingress-slo'
+  if (/(log|loki|sls|elk|audit)/.test(text)) return 'log-drilldown'
+  if (/(cpu|memory|disk|node|host|pod|k8s|network)/.test(text)) return 'infra-overview'
+  return 'apm-overview'
+}
+
+function openAlertLogs(row) {
+  const keyword = resolveAlertKeyword(row)
+  router.push({
+    path: '/logs',
+    query: {
+      keyword: keyword || undefined,
+      title: row?.title ? `告警 ${row.title}` : undefined,
+      autoRun: '1',
+      window: '60',
+    },
+  })
+}
+
+function openAlertTrace(row) {
+  const keyword = resolveAlertKeyword(row)
+  const service = inferAlertService(row)
+  router.push({
+    path: '/observability/tracing',
+    query: {
+      keyword: keyword || undefined,
+      service: service || undefined,
+      window: '60',
+    },
+  })
+}
+
+function openAlertDashboard(row) {
+  router.push({
+    path: '/observability/grafana',
+    query: {
+      dashboard: inferDashboardKey(row),
+    },
+  })
+}
+
+function handleFilterChange() {
+  page.value = 1
+  fetchData()
+}
+
+async function fetchData() {
   loading.value = true
   try {
     const params = { page: page.value }
     if (search.value) params.search = search.value
     if (levelFilter.value) params.level = levelFilter.value
     if (ackFilter.value !== '') params.is_acknowledged = ackFilter.value
-    const res = await getAlerts(params)
-    alerts.value = res.results || res
-    total.value = res.count || alerts.value.length
-  } catch (e) { console.error(e) }
-  finally { loading.value = false }
+    const response = await getAlerts(params)
+    alerts.value = response.results || response || []
+    total.value = response.count || alerts.value.length
+  } finally {
+    loading.value = false
+  }
 }
 
-const handleAck = async (row) => {
-  try {
-    await updateAlert(row.id, { is_acknowledged: true })
-    ElMessage.success('已确认')
-    fetchData()
-  } catch (e) { console.error(e) }
+async function handleAck(row) {
+  await updateAlert(row.id, { is_acknowledged: true })
+  ElMessage.success('告警已确认')
+  await fetchData()
 }
 
-const handleDelete = async (id) => {
-  try { await deleteAlert(id); ElMessage.success('删除成功'); fetchData() }
-  catch (e) { console.error(e) }
+async function handleDelete(id) {
+  await deleteAlert(id)
+  ElMessage.success('告警已删除')
+  await fetchData()
 }
 
-onMounted(fetchData)
+watch(
+  () => [route.query.search || '', route.query.level || '', route.query.ack || ''].join('|'),
+  async () => {
+    applyRouteFilters()
+    page.value = 1
+    await fetchData()
+  }
+)
+
+onMounted(async () => {
+  applyRouteFilters()
+  await fetchData()
+})
 </script>
+
+<style scoped>
+.alerts-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel {
+  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+  padding: 18px 20px;
+}
+
+.hero,
+.hero-copy,
+.hero-title-row,
+.hero-actions,
+.filter-bar,
+.row-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hero {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hero-copy {
+  flex-direction: column;
+}
+
+.hero-title-row {
+  align-items: center;
+}
+
+.hero-icon {
+  align-items: center;
+  background: linear-gradient(135deg, #dc2626, #f97316);
+  border-radius: 14px;
+  color: #fff;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.release-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.release-stat-card {
+  border-radius: 18px;
+  min-height: 94px;
+  padding: 16px 18px;
+}
+
+.danger-card {
+  background: linear-gradient(135deg, #fee2e2, #fca5a5);
+}
+
+.warning-card {
+  background: linear-gradient(135deg, #fef3c7, #fdba74);
+}
+
+.success-card {
+  background: linear-gradient(135deg, #dcfce7, #86efac);
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-label {
+  color: #475569;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.runtime-strip {
+  align-items: center;
+  background: linear-gradient(90deg, rgba(248, 113, 113, 0.12), rgba(251, 191, 36, 0.1));
+  border: 1px solid rgba(248, 113, 113, 0.16);
+  border-radius: 14px;
+  color: #0f172a;
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.filter-bar {
+  margin-bottom: 16px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .release-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .hero,
+  .filter-bar,
+  .release-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .hero {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

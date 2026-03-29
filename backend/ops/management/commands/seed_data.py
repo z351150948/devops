@@ -54,12 +54,22 @@ def seed_marketplace_demo(stdout, hosts):
         )
     }
     host_map = {host.hostname: host for host in hosts}
+    host_list = list(hosts)
+
+    def resolve_host(*preferred_names, fallback_index=0):
+        for name in preferred_names:
+            host = host_map.get(name)
+            if host:
+                return host
+        if 0 <= fallback_index < len(host_list):
+            return host_list[fallback_index]
+        return host_list[0] if host_list else None
 
     deployments = [
         {
             'template': template_map['Redis'],
             'deploy_mode': 'docker_compose',
-            'host': host_map['feature-x-dev-ecs'],
+            'host': resolve_host('feature-x-dev-ecs', 'redis-01', fallback_index=0),
             'version': '7.0',
             'status': 'running',
             'env_config': {'port': '6379', 'password': 'redis@2024'},
@@ -70,7 +80,7 @@ def seed_marketplace_demo(stdout, hosts):
         {
             'template': template_map['MongoDB'],
             'deploy_mode': 'docker_compose',
-            'host': host_map['legacy-data-sync'],
+            'host': resolve_host('legacy-data-sync', 'db-master', fallback_index=1),
             'version': '7.0',
             'status': 'stopped',
             'env_config': {'port': '27017', 'root_username': 'admin', 'root_password': 'mongo@2024'},
@@ -81,7 +91,7 @@ def seed_marketplace_demo(stdout, hosts):
         {
             'template': template_map['Nginx'],
             'deploy_mode': 'docker_compose',
-            'host': host_map['order-api-ecs-01'],
+            'host': resolve_host('order-api-ecs-01', 'nginx-lb-01', fallback_index=2),
             'version': '1.25',
             'status': 'failed',
             'env_config': {'http_port': '80', 'https_port': '443'},

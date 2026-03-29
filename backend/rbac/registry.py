@@ -13,6 +13,8 @@
     ('ops.log.datasource.view', '查看日志数据源', 'ops', '查看日志数据源与供应商能力'),
     ('ops.log.datasource.manage', '管理日志数据源', 'ops', '新增、编辑、删除、测试日志数据源'),
     ('ops.log.query', '查询日志', 'ops', '执行 Loki、ELK、SLS 日志检索'),
+    ('ops.trace.view', '查看链路追踪', 'ops', '查看 SkyWalking 链路、调用拓扑与 Span 详情'),
+    ('ops.grafana.view', '查看 Grafana 大屏', 'ops', '查看 Grafana 观测大屏与推荐仪表板'),
     ('ops.k8s.view', '查看 K8s 集群', 'ops', '查看集群、命名空间与资源列表'),
     ('ops.k8s.manage', '管理 K8s 集群', 'ops', '维护集群连接并执行集群管理动作'),
     ('ops.k8s.exec', '执行 K8s Pod 命令', 'ops', '通过浏览器对 Pod 执行命令并进入轻量控制台'),
@@ -71,6 +73,7 @@ BUILTIN_ROLES = [
             'ops.dashboard.view', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal',
             'ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve', 'ops.alert.view', 'ops.alert.manage',
             'ops.log.entry.view', 'ops.log.datasource.view', 'ops.log.datasource.manage', 'ops.log.query',
+            'ops.trace.view', 'ops.grafana.view',
             'ops.k8s.view', 'ops.k8s.manage', 'ops.k8s.exec', 'ops.docker.view', 'ops.docker.manage',
             'ops.middleware.view', 'ops.middleware.manage',
             'ops.nginx.view', 'ops.nginx.manage', 'ops.iac.view', 'ops.iac.manage', 'ops.iac.execute',
@@ -87,7 +90,7 @@ BUILTIN_ROLES = [
         'description': '可查看环境信息、日志并提交 SQL 与资源申请。',
         'permissions': [
             'ops.dashboard.view', 'ops.host.view', 'ops.deployment.view', 'ops.alert.view',
-            'ops.log.query', 'ops.log.datasource.view', 'ops.middleware.view',
+            'ops.log.query', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.middleware.view',
             'ops.iac.view', 'ops.iac.manage', 'ops.iac.execute', 'ops.multicloud.view',
             'cmdb.dashboard.view', 'cmdb.ci.view',
             'cmdb.topology.view', 'cmdb.cost.view', 'cmdb.request.submit', 'marketplace.template.view',
@@ -100,7 +103,7 @@ BUILTIN_ROLES = [
         'name': '审计员',
         'description': '查看日志、安全告警并审核 SQL 工单。',
         'permissions': [
-            'ops.dashboard.view', 'ops.alert.view', 'ops.log.datasource.view', 'ops.log.query',
+            'ops.dashboard.view', 'ops.alert.view', 'ops.log.datasource.view', 'ops.log.query', 'ops.trace.view', 'ops.grafana.view',
             'ops.multicloud.view', 'cmdb.dashboard.view', 'cmdb.topology.view', 'cmdb.cost.view', 'sqlaudit.datasource.view',
             'sqlaudit.order.view', 'sqlaudit.order.review', 'sqlaudit.query.view',
         ],
@@ -111,7 +114,7 @@ BUILTIN_ROLES = [
         'description': '只能浏览各模块的只读信息。',
         'permissions': [
             'ops.dashboard.view', 'ops.host.view', 'ops.deployment.view', 'ops.alert.view',
-            'ops.log.entry.view', 'ops.log.datasource.view', 'ops.k8s.view', 'ops.docker.view',
+            'ops.log.entry.view', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.k8s.view', 'ops.docker.view',
             'ops.middleware.view', 'ops.nginx.view', 'ops.iac.view', 'ops.multicloud.view',
             'cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view',
             'cmdb.cost.view', 'marketplace.template.view', 'marketplace.deployment.view',

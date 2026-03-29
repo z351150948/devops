@@ -1,0 +1,487 @@
+<template>
+  <div class="observability-page">
+    <section class="hero panel">
+      <div class="hero-copy">
+        <div class="hero-title-row">
+          <span class="hero-icon">
+            <el-icon><DataLine /></el-icon>
+          </span>
+          <h2>可观测性平台</h2>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <el-button @click="loadOverview" :loading="loading">
+          <el-icon><RefreshRight /></el-icon>
+          刷新总览
+        </el-button>
+      </div>
+    </section>
+
+    <div class="stats-grid release-stats">
+      <div v-for="item in statCards" :key="item.label" class="stat-card release-stat-card" :class="item.tone">
+        <div class="stat-value">{{ item.value }}</div>
+        <div class="stat-label">{{ item.label }}</div>
+      </div>
+    </div>
+
+    <div class="runtime-strip">
+      <el-icon><InfoFilled /></el-icon>
+      <span>{{ overview.tips?.[0] || '可观测性总览会根据当前权限收敛可见模块。' }}</span>
+    </div>
+
+    <section class="panel">
+      <div class="section-head">
+        <h3>模块入口</h3>
+        <el-tag size="small" type="info">按当前账号权限显示</el-tag>
+      </div>
+      <div class="nav-grid">
+        <article v-for="item in overview.navigation || []" :key="item.path" class="nav-card" :class="`tone-${item.tone || 'info'}`">
+          <strong>{{ item.title }}</strong>
+          <p>{{ item.description }}</p>
+          <el-button type="primary" plain @click="go(item.path)">进入模块</el-button>
+        </article>
+      </div>
+    </section>
+
+    <div class="content-grid">
+      <section class="panel">
+        <div class="section-head">
+          <h3>模块摘要</h3>
+        </div>
+
+        <div class="module-grid">
+          <article v-if="overview.modules?.logs" class="module-card">
+            <div class="module-head">
+              <div class="module-title">
+                <el-icon><Search /></el-icon>
+                <strong>日志能力</strong>
+              </div>
+              <el-tag size="small" type="success">已接入</el-tag>
+            </div>
+            <div class="module-meta">
+              <span>数据源总数 {{ overview.modules.logs.datasource_count }}</span>
+              <span>启用 {{ overview.modules.logs.enabled_count }}</span>
+              <span>默认 {{ overview.modules.logs.default_count }}</span>
+            </div>
+            <div class="module-actions">
+              <el-button link type="primary" @click="go('/logs')">进入日志中心</el-button>
+              <el-button v-if="canViewLogDatasources" link @click="go('/logs/datasources')">管理数据源</el-button>
+            </div>
+          </article>
+
+          <article v-if="overview.modules?.alerts" class="module-card">
+            <div class="module-head">
+              <div class="module-title">
+                <el-icon><Bell /></el-icon>
+                <strong>告警中心</strong>
+              </div>
+              <el-tag size="small" :type="overview.modules.alerts.unacknowledged ? 'danger' : 'success'">
+                {{ overview.modules.alerts.unacknowledged ? '待处理' : '稳定' }}
+              </el-tag>
+            </div>
+            <div class="module-meta">
+              <span>未确认 {{ overview.modules.alerts.unacknowledged }}</span>
+              <span>严重 {{ overview.modules.alerts.critical }}</span>
+              <span>警告 {{ overview.modules.alerts.warning }}</span>
+            </div>
+            <div class="module-actions">
+              <el-button link type="primary" @click="go('/alerts')">处理告警</el-button>
+            </div>
+          </article>
+
+          <article v-if="overview.modules?.tracing" class="module-card">
+            <div class="module-head">
+              <div class="module-title">
+                <el-icon><Connection /></el-icon>
+                <strong>链路追踪</strong>
+              </div>
+              <el-tag size="small" :type="overview.modules.tracing.source === 'skywalking' ? 'success' : 'warning'">
+                {{ overview.modules.tracing.source === 'skywalking' ? 'SkyWalking' : '演示模式' }}
+              </el-tag>
+            </div>
+            <div class="module-meta">
+              <span>服务 {{ overview.summary?.service_count || 0 }}</span>
+              <span>Trace {{ overview.summary?.trace_count || 0 }}</span>
+              <span>错误 {{ overview.summary?.error_count || 0 }}</span>
+            </div>
+            <div class="module-actions">
+              <el-button link type="primary" @click="go('/observability/tracing')">查看链路</el-button>
+              <el-button v-if="overview.modules.tracing.ui_url" link @click="openExternal(overview.modules.tracing.ui_url)">打开 SkyWalking</el-button>
+            </div>
+          </article>
+
+          <article v-if="overview.modules?.grafana" class="module-card">
+            <div class="module-head">
+              <div class="module-title">
+                <el-icon><Histogram /></el-icon>
+                <strong>Grafana 大屏</strong>
+              </div>
+              <el-tag size="small" :type="overview.modules.grafana.configured ? 'success' : 'warning'">
+                {{ overview.modules.grafana.configured ? '已配置' : '待接入' }}
+              </el-tag>
+            </div>
+            <div class="module-meta">
+              <span>看板 {{ overview.modules.grafana.dashboard_count }}</span>
+              <span>面板 {{ overview.modules.grafana.panel_count }}</span>
+              <span>数据源 {{ overview.modules.grafana.datasource_count }}</span>
+            </div>
+            <div class="module-actions">
+              <el-button link type="primary" @click="go('/observability/grafana')">查看大屏</el-button>
+              <el-button v-if="overview.modules.grafana.url" link @click="openExternal(overview.modules.grafana.url)">外部打开</el-button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h3>运行提示</h3>
+        </div>
+        <div class="tips-list">
+          <article v-for="item in overview.tips || []" :key="item" class="tip-card">
+            <span>{{ item }}</span>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div class="content-grid">
+      <section v-if="overview.recent_alerts?.length" class="panel">
+        <div class="section-head">
+          <h3>最近告警</h3>
+          <el-button link type="primary" @click="go('/alerts')">全部告警</el-button>
+        </div>
+        <el-table :data="overview.recent_alerts" stripe style="width: 100%">
+          <el-table-column prop="title" label="标题" min-width="180" />
+          <el-table-column prop="level_display" label="级别" width="90">
+            <template #default="{ row }">
+              <el-tag :type="levelType(row.level)" size="small">{{ row.level_display }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="source" label="来源" width="120" />
+          <el-table-column prop="host_name" label="主机" width="140" />
+          <el-table-column label="操作" width="110" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openAlert(row)">查看</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+
+      <section v-if="overview.recent_traces?.length" class="panel">
+        <div class="section-head">
+          <h3>最近 Trace</h3>
+          <el-button link type="primary" @click="go('/observability/tracing')">全部链路</el-button>
+        </div>
+        <el-table :data="overview.recent_traces" stripe style="width: 100%">
+          <el-table-column prop="trace_id" label="Trace ID" min-width="170" show-overflow-tooltip />
+          <el-table-column prop="service_name" label="服务" min-width="140" />
+          <el-table-column label="耗时" width="100">
+            <template #default="{ row }">{{ row.duration_ms }} ms</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.is_error ? 'danger' : 'success'">{{ row.is_error ? '错误' : '正常' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" :width="canQueryLogs ? 156 : 88" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openTrace(row)">查看</el-button>
+              <el-button v-if="canQueryLogs" link type="warning" @click="openTraceLogs(row)">日志</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </section>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { Bell, Connection, DataLine, Histogram, InfoFilled, RefreshRight, Search } from '@element-plus/icons-vue'
+import { getObservabilityOverview } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
+
+const router = useRouter()
+const authStore = useAuthStore()
+const loading = ref(false)
+const overview = ref({ modules: {}, summary: {}, navigation: [], tips: [], recent_alerts: [], recent_traces: [] })
+const canQueryLogs = computed(() => authStore.hasPermission('ops.log.query'))
+const canViewLogDatasources = computed(() => authStore.hasPermission('ops.log.datasource.view'))
+
+const statCards = computed(() => [
+  { label: '日志数据源', value: overview.value.summary?.datasource_count || 0, tone: '' },
+  { label: '待处理告警', value: overview.value.summary?.unacknowledged_alerts || 0, tone: 'danger-card' },
+  { label: '当前 Trace', value: overview.value.summary?.trace_count || 0, tone: 'warning-card' },
+  { label: 'Grafana 看板', value: overview.value.summary?.dashboard_count || 0, tone: 'success-card' },
+])
+
+function levelType(level) {
+  return { critical: 'danger', warning: 'warning', info: 'info' }[level] || 'info'
+}
+
+async function loadOverview() {
+  loading.value = true
+  try {
+    overview.value = await getObservabilityOverview()
+  } finally {
+    loading.value = false
+  }
+}
+
+function go(path) {
+  if (path) router.push(path)
+}
+
+function openAlert(row) {
+  if (!row) return
+  router.push({
+    path: '/alerts',
+    query: {
+      search: row.title || '',
+      level: row.level || '',
+      ack: row.is_acknowledged === false ? '0' : undefined,
+    },
+  })
+}
+
+function openTrace(row) {
+  if (!row?.trace_id) return
+  router.push({
+    path: '/observability/tracing',
+    query: {
+      traceId: row.trace_id,
+      service: row.service_name || row.service_id || '',
+    },
+  })
+}
+
+function openTraceLogs(row) {
+  if (!row?.trace_id) return
+  router.push({
+    path: '/logs/query',
+    query: {
+      traceId: row.trace_id,
+      service: row.service_name || row.service_id || '',
+      autoRun: '1',
+    },
+  })
+}
+
+function openExternal(url) {
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+onMounted(loadOverview)
+</script>
+
+<style scoped>
+.observability-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel {
+  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+  padding: 18px 20px;
+}
+
+.hero,
+.hero-copy,
+.hero-title-row,
+.hero-actions,
+.section-head,
+.module-head,
+.module-title,
+.module-actions,
+.module-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hero {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hero-title-row {
+  align-items: center;
+}
+
+.hero-icon {
+  align-items: center;
+  background: linear-gradient(135deg, #0f766e, #2563eb);
+  border-radius: 14px;
+  color: #fff;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.release-stats {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.release-stat-card {
+  border-radius: 18px;
+  min-height: 94px;
+  padding: 16px 18px;
+}
+
+.warning-card {
+  background: linear-gradient(135deg, #fef3c7, #fdba74);
+}
+
+.danger-card {
+  background: linear-gradient(135deg, #fee2e2, #fca5a5);
+}
+
+.success-card {
+  background: linear-gradient(135deg, #dcfce7, #86efac);
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-label {
+  color: #475569;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.runtime-strip {
+  align-items: center;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.1));
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 14px;
+  color: #0f172a;
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.section-head {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.nav-grid,
+.module-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.content-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.nav-card,
+.module-card,
+.tip-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.nav-card strong,
+.module-title strong {
+  font-size: 16px;
+}
+
+.nav-card p,
+.tip-card span,
+.module-meta span {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.tone-info {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.06), rgba(14, 165, 233, 0.05));
+}
+
+.tone-warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(251, 191, 36, 0.05));
+}
+
+.tone-danger {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08), rgba(248, 113, 113, 0.05));
+}
+
+.tone-success {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(45, 212, 191, 0.05));
+}
+
+.tone-accent {
+  background: linear-gradient(135deg, rgba(234, 88, 12, 0.08), rgba(251, 146, 60, 0.05));
+}
+
+.module-card {
+  background: linear-gradient(180deg, #fff, #f8fafc);
+}
+
+.module-head {
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.module-title {
+  align-items: center;
+}
+
+.module-meta {
+  margin-bottom: 12px;
+}
+
+.tips-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tip-card {
+  background: #f8fafc;
+}
+
+@media (max-width: 1200px) {
+  .release-stats,
+  .nav-grid,
+  .module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .hero,
+  .section-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .release-stats,
+  .nav-grid,
+  .module-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

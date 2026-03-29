@@ -249,6 +249,9 @@
                   <span>{{ attr.value }}</span>
                 </div>
               </div>
+              <div v-if="canViewTracing && item.attributes?.trace_id" class="detail-actions">
+                <el-button size="small" type="primary" plain @click="openTraceFromLog(item)">查看链路追踪</el-button>
+              </div>
               <pre>{{ item.message }}</pre>
             </div>
           </article>
@@ -329,9 +332,11 @@ import { useRoute, useRouter } from 'vue-router'
 import echarts from '@/lib/echarts'
 import { ElMessage } from 'element-plus'
 import { getLogDataSources, getLogProviderCatalog, queryLogs } from '@/api/modules/ops'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const LAST_DATASOURCE_KEY = 'logs:last-datasource-id'
 const QUERY_HISTORY_KEY = 'logs:query-history'
 const QUERY_FAVORITES_KEY = 'logs:query-favorites'
@@ -430,6 +435,7 @@ const isSls = computed(() => activeProvider.value === 'sls')
 const currentResults = computed(() => currentTab.value?.results || { total: 0, source: '', took_ms: null, progress: '', logs: [] })
 const errorCount = computed(() => currentResults.value.logs.filter((item) => item.level === 'error').length)
 const currentHelpDoc = computed(() => SYNTAX_HELP_DOCS[helpProvider.value] || SYNTAX_HELP_DOCS.loki)
+const canViewTracing = computed(() => authStore.hasPermission('ops.trace.view'))
 const currentSummary = computed(() => {
   const config = currentDataSource.value?.config || {}
   if (activeProvider.value === 'loki') return [{ label: '接入地址', value: config.endpoint || '--' }]
@@ -564,6 +570,15 @@ function getPreferredDatasourceId() {
   return dataSources.value[0]?.id || null
 }
 
+function getPreferredDatasourceByProvider(provider) {
+  if (!provider) {
+    return dataSources.value.find((item) => item.id === getPreferredDatasourceId()) || dataSources.value[0] || null
+  }
+  const preferred = dataSources.value.find((item) => item.provider === provider && item.is_default)
+    || dataSources.value.find((item) => item.provider === provider)
+  return preferred || dataSources.value.find((item) => item.id === getPreferredDatasourceId()) || dataSources.value[0] || null
+}
+
 function persistDatasource(id) {
   if (id) localStorage.setItem(LAST_DATASOURCE_KEY, String(id))
 }
@@ -690,6 +705,153 @@ function resetTabState(tab) {
   tab.errorMessage = ''
   tab.results = emptyResults()
   tab.expandedRows = []
+}
+
+function routeTraceId() {
+  const raw = route.query.traceId
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeTraceProvider() {
+  const raw = route.query.provider
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeLogKeyword() {
+  const raw = route.query.keyword
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeLogSource() {
+  const raw = route.query.source
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeLogTitle() {
+  const raw = route.query.title
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function buildTraceLogTitle(traceId) {
+  return `Trace ${traceId.slice(0, 8)}`
+}
+
+function buildKeywordLogTitle(keyword) {
+  return routeLogTitle() || `检索 ${keyword.slice(0, 10)}`
+}
+
+function traceServiceFromLog(item) {
+  const attributes = item?.attributes || {}
+  return [
+    attributes.service_name,
+    attributes.service,
+    attributes['service.name'],
+    attributes.serviceName,
+    item?.source,
+  ].find((value) => typeof value === 'string' && value.trim()) || ''
+}
+
+async function applyTraceRoutePreset(force = false) {
+  const traceId = routeTraceId()
+  if (!traceId || !dataSources.value.length) return false
+  const currentFingerprint = JSON.stringify({
+    traceId,
+    provider: routeTraceProvider(),
+    source: route.query.source || '',
+  })
+  if (!force && currentTab.value?.routeFingerprint === currentFingerprint) return false
+
+  let tab = currentTab.value
+  if (!tab) {
+    tab = createQueryTab()
+    queryTabs.value = [tab]
+    activeTabName.value = tab.id
+  }
+
+  const datasource = getPreferredDatasourceByProvider(routeTraceProvider())
+  if (!datasource) return false
+
+  tab.title = buildTraceLogTitle(traceId)
+  tab.datasourceId = datasource.id
+  tab.timeRange = defaultTimeRange(Number(route.query.window || 60))
+  tab.quickRange = ''
+  tab.limit = 200
+  tab.routeFingerprint = currentFingerprint
+  await prepareTab(tab)
+
+  if (datasource.provider === 'loki') {
+    tab.lokiContentQuery = traceId
+  } else {
+    tab.queryText = traceId
+  }
+
+  if (typeof route.query.source === 'string' && route.query.source.trim()) {
+    tab.sourceName = route.query.source.trim()
+  }
+
+  if (route.query.autoRun !== '0') {
+    await runQuery(tab)
+  }
+  return true
+}
+
+async function applyKeywordRoutePreset(force = false) {
+  const keyword = routeLogKeyword()
+  if (!keyword || routeTraceId() || !dataSources.value.length) return false
+  const currentFingerprint = JSON.stringify({
+    keyword,
+    provider: routeTraceProvider(),
+    source: routeLogSource(),
+    title: routeLogTitle(),
+    window: route.query.window || '',
+  })
+  if (!force && currentTab.value?.routeFingerprint === currentFingerprint) return false
+
+  let tab = currentTab.value
+  if (!tab) {
+    tab = createQueryTab()
+    queryTabs.value = [tab]
+    activeTabName.value = tab.id
+  }
+
+  const datasource = getPreferredDatasourceByProvider(routeTraceProvider())
+  if (!datasource) return false
+
+  tab.title = buildKeywordLogTitle(keyword)
+  tab.datasourceId = datasource.id
+  tab.timeRange = defaultTimeRange(Number(route.query.window || 60))
+  tab.quickRange = ''
+  tab.limit = 200
+  tab.routeFingerprint = currentFingerprint
+  await prepareTab(tab)
+
+  if (datasource.provider === 'loki') {
+    tab.lokiContentQuery = keyword
+  } else {
+    tab.queryText = keyword
+  }
+
+  if (routeLogSource()) {
+    tab.sourceName = routeLogSource()
+  }
+
+  if (route.query.autoRun !== '0') {
+    await runQuery(tab)
+  }
+  return true
+}
+
+function openTraceFromLog(item) {
+  const traceId = item?.attributes?.trace_id
+  if (!traceId) return
+  const service = traceServiceFromLog(item)
+  router.push({
+    path: '/observability/tracing',
+    query: {
+      traceId,
+      service: service || undefined,
+    },
+  })
 }
 
 async function initializeTabs() {
@@ -1069,10 +1231,24 @@ onMounted(async () => {
   loadSavedQueries()
   await fetchDataSources()
   await initializeTabs()
+  if (!(await applyTraceRoutePreset())) {
+    await applyKeywordRoutePreset()
+  }
   await nextTick()
   renderChart()
   window.addEventListener('resize', handleResize)
 })
+
+watch(
+  () => [route.query.traceId, route.query.keyword, route.query.provider, route.query.source, route.query.title, route.query.window, route.query.autoRun].join('|'),
+  async () => {
+    if (route.path === '/logs/query') {
+      if (!(await applyTraceRoutePreset())) {
+        await applyKeywordRoutePreset()
+      }
+    }
+  }
+)
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
@@ -1471,6 +1647,10 @@ onUnmounted(() => {
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
   padding: 12px;
+}
+
+.detail-actions {
+  margin-bottom: 10px;
 }
 
 .compact-grid {

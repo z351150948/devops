@@ -51,3 +51,8 @@ export const createLogDataSource = (data) => request.post('/log/datasources/', d
 export const updateLogDataSource = (id, data) => request.put(`/log/datasources/${id}/`, data)
 export const deleteLogDataSource = (id) => request.delete(`/log/datasources/${id}/`)
 export const testLogDataSource = (id) => request.post(`/log/datasources/${id}/test_connection/`)
+
+export const getObservabilityOverview = (params) => request.get('/observability/overview/', { params })
+export const getTracingCatalog = (params) => request.get('/observability/tracing/catalog/', { params })
+export const searchTracing = (data) => request.post('/observability/tracing/search/', data)
+export const getTraceDetail = (traceId, params) => request.get(`/observability/tracing/traces/${traceId}/`, { params })

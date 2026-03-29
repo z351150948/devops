@@ -10,11 +10,62 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import json
 import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+DEFAULT_GRAFANA_DASHBOARDS = [
+    {
+        'key': 'apm-overview',
+        'title': 'APM 全链路总览',
+        'slug': 'apm-overview',
+        'path': '/d/apm-overview',
+        'panel_count': 18,
+        'tags': ['SkyWalking', '应用', 'SLA'],
+        'description': '面向应用负责人查看服务吞吐、慢调用与错误率。',
+    },
+    {
+        'key': 'infra-overview',
+        'title': '基础设施总览',
+        'slug': 'infra-overview',
+        'path': '/d/infra-overview',
+        'panel_count': 14,
+        'tags': ['Node', 'CPU', 'Memory'],
+        'description': '聚合节点 CPU、内存、磁盘与 Pod 负载走势。',
+    },
+    {
+        'key': 'log-drilldown',
+        'title': '日志钻取看板',
+        'slug': 'log-drilldown',
+        'path': '/d/log-drilldown',
+        'panel_count': 12,
+        'tags': ['Loki', 'Error', 'Audit'],
+        'description': '配合日志中心快速回放错误时段与关键日志。',
+    },
+    {
+        'key': 'ingress-slo',
+        'title': '入口流量与 SLO',
+        'slug': 'ingress-slo',
+        'path': '/d/ingress-slo',
+        'panel_count': 10,
+        'tags': ['Nginx', 'Latency', 'Availability'],
+        'description': '聚焦入口 QPS、响应时间分位和可用性目标。',
+    },
+]
+
+
+def _json_env(name, default):
+    raw = os.getenv(name, '').strip()
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return default
 
 
 # Quick-start development settings - unsuitable for production
@@ -181,6 +232,25 @@ LOG_PROVIDER_CONFIGS = {
         'topic': os.getenv('ALIYUN_SLS_TOPIC', ''),
         'access_key_id': os.getenv('ALIYUN_SLS_ACCESS_KEY_ID', ''),
         'access_key_secret': os.getenv('ALIYUN_SLS_ACCESS_KEY_SECRET', ''),
+    },
+}
+
+OBSERVABILITY_CONFIG = {
+    'skywalking': {
+        'provider': 'skywalking',
+        'enabled': os.getenv('SKYWALKING_ENABLED', '1') != '0',
+        'ui_url': os.getenv('SKYWALKING_UI_URL', ''),
+        'oap_url': os.getenv('SKYWALKING_OAP_URL', ''),
+        'graphql_path': os.getenv('SKYWALKING_GRAPHQL_PATH', '/graphql'),
+        'default_layer': os.getenv('SKYWALKING_DEFAULT_LAYER', ''),
+        'demo_mode': os.getenv('SKYWALKING_DEMO_MODE', '1') == '1',
+    },
+    'grafana': {
+        'enabled': os.getenv('GRAFANA_ENABLED', '1') != '0',
+        'url': os.getenv('GRAFANA_URL', ''),
+        'default_path': os.getenv('GRAFANA_DEFAULT_PATH', ''),
+        'demo_mode': os.getenv('GRAFANA_DEMO_MODE', '1') == '1',
+        'dashboards': _json_env('GRAFANA_DASHBOARDS_JSON', DEFAULT_GRAFANA_DASHBOARDS),
     },
 }
 

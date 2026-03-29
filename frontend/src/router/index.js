@@ -134,7 +134,10 @@ const routes = [
       },
       {
         path: 'logs',
-        redirect: '/logs/query',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          return authStore.hasPermission('ops.log.query') ? '/logs/query' : '/logs/datasources'
+        },
         meta: { hidden: true },
       },
       {
@@ -154,6 +157,39 @@ const routes = [
         name: 'Alerts',
         component: () => import('@/views/Alerts.vue'),
         meta: { title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
+      },
+      {
+        path: 'observability',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasAnyPermission(['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.grafana.view'])) {
+            return '/observability/overview'
+          }
+          return '/403'
+        },
+        meta: { hidden: true },
+      },
+      {
+        path: 'observability/overview',
+        name: 'ObservabilityOverview',
+        component: () => import('@/views/ObservabilityOverview.vue'),
+        meta: {
+          title: '平台总览',
+          icon: 'DataLine',
+          anyPermissions: ['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.grafana.view'],
+        },
+      },
+      {
+        path: 'observability/tracing',
+        name: 'TraceObservability',
+        component: () => import('@/views/TraceObservability.vue'),
+        meta: { title: '链路追踪', icon: 'Connection', permission: 'ops.trace.view' },
+      },
+      {
+        path: 'observability/grafana',
+        name: 'GrafanaDashboard',
+        component: () => import('@/views/GrafanaDashboard.vue'),
+        meta: { title: 'Grafana 大屏', icon: 'Histogram', permission: 'ops.grafana.view' },
       },
       {
         path: 'users',
