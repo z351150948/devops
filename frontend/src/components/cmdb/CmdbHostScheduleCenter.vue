@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="schedule-center-page">
     <div class="inner-tabs">
       <button v-for="tab in innerTabs" :key="tab.key" class="inner-tab-btn" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">
@@ -235,11 +235,68 @@
           <el-table-column label="成功/失败" width="120"><template #default="{ row }">{{ row.success_count }}/{{ row.failed_count }}</template></el-table-column>
           <el-table-column prop="summary" label="执行摘要" min-width="260" show-overflow-tooltip />
           <el-table-column label="触发时间" width="170"><template #default="{ row }">{{ formatDateTime(row.requested_at) }}</template></el-table-column>
-          <el-table-column label="关联任务" min-width="180" show-overflow-tooltip><template #default="{ row }">{{ row.host_task_name || row.host_task || '-' }}</template></el-table-column>
+          <el-table-column label="关联任务" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <el-button v-if="row.host_task" link type="primary" size="small" @click="openExecutionDetail(row)">{{ row.host_task_name || `任务 #${row.host_task}` }}</el-button>
+              <span v-else>-</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="90" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openExecutionDetail(row)">详情</el-button>
+            </template>
+          </el-table-column>
         </el-table>
         <div class="pagination-row"><el-pagination v-model:current-page="executionPage" :page-size="20" :total="executionTotal" layout="total, prev, pager, next" @current-change="fetchExecutions" /></div>
       </div>
     </template>
+    <el-drawer v-model="detailVisible" title="执行记录详情" size="68%">
+      <div v-loading="detailLoading" class="schedule-detail-shell">
+        <template v-if="detailExecution">
+          <div class="detail-summary">
+            <div class="detail-chip"><strong>{{ detailExecution.schedule_name }}</strong></div>
+            <div class="detail-chip">{{ detailExecution.trigger_source_display }}</div>
+            <div class="detail-chip">状态：{{ detailExecution.status_display }}</div>
+            <div class="detail-chip">触发人：{{ detailExecution.requested_by }}</div>
+            <div class="detail-chip">触发时间：{{ formatDateTime(detailExecution.requested_at) }}</div>
+          </div>
+          <div class="schedule-metric-grid">
+            <div class="schedule-metric-card"><span class="schedule-metric-label">目标主机</span><strong>{{ detailExecution.target_count || 0 }}</strong></div>
+            <div class="schedule-metric-card success"><span class="schedule-metric-label">成功</span><strong>{{ detailExecution.success_count || 0 }}</strong></div>
+            <div class="schedule-metric-card danger"><span class="schedule-metric-label">失败</span><strong>{{ detailExecution.failed_count || 0 }}</strong></div>
+            <div class="schedule-metric-card warning"><span class="schedule-metric-label">跳过</span><strong>{{ detailExecution.skipped_count || 0 }}</strong></div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">执行摘要</div>
+            <div class="detail-kv">{{ detailExecution.summary || "暂无摘要" }}</div>
+            <div v-if="detailExecution.error_message" class="detail-kv danger-text">错误信息：{{ detailExecution.error_message }}</div>
+          </div>
+          <div v-if="detailTask" class="detail-section">
+            <div class="detail-section-title">关联任务详情</div>
+            <div class="detail-summary">
+              <div class="detail-chip"><strong>{{ detailTask.name }}</strong></div>
+              <div class="detail-chip">{{ detailTask.task_type_display }}</div>
+              <div class="detail-chip">执行方式：{{ executionModeLabel(detailTask.execution_mode, detailTask.execution_mode_display) }}</div>
+              <div class="detail-chip">状态：{{ detailTask.status_display }}</div>
+              <div class="detail-chip">成功率：{{ taskSuccessRate(detailTask) }}%</div>
+            </div>
+            <div class="detail-kv">{{ detailTask.summary || detailTask.description || "暂无任务说明" }}</div>
+            <el-table :data="detailTask.executions || []" max-height="420" empty-text="暂无执行明细">
+              <el-table-column prop="host_name" label="主机名" min-width="140" />
+              <el-table-column prop="host_ip" label="IP" width="140" />
+              <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" :type="statusTagType(row.status)">{{ row.status_display }}</el-tag></template></el-table-column>
+              <el-table-column label="耗时" width="90"><template #default="{ row }">{{ row.duration_ms }}ms</template></el-table-column>
+              <el-table-column prop="command" label="执行命令" min-width="200" show-overflow-tooltip />
+              <el-table-column label="输出 / 错误" min-width="280"><template #default="{ row }"><div class="output-block">{{ row.error_message || row.output || '-' }}</div></template></el-table-column>
+            </el-table>
+          </div>
+          <div v-else class="detail-section">
+            <div class="detail-section-title">关联任务详情</div>
+            <div class="detail-kv">当前执行记录尚未关联真实主机任务。</div>
+          </div>
+        </template>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -250,6 +307,8 @@ import { Search } from '@element-plus/icons-vue'
 import {
   createHostTaskSchedule,
   deleteHostTaskSchedule,
+  getHostTask,
+  getHostTaskScheduleExecution,
   getHostTaskScheduleExecutions,
   getHostTaskSchedules,
   getHostTaskTargets,
@@ -298,10 +357,14 @@ const previewLoading = ref(false)
 const targetLoading = ref(false)
 const scheduleLoading = ref(false)
 const executionLoading = ref(false)
+const detailLoading = ref(false)
+const detailVisible = ref(false)
 const availableHosts = ref([])
 const selectedRows = ref([])
 const schedules = ref([])
 const executions = ref([])
+const detailExecution = ref(null)
+const detailTask = ref(null)
 const schedulePage = ref(1)
 const scheduleTotal = ref(0)
 const executionPage = ref(1)
@@ -322,6 +385,7 @@ const executionModeHint = computed(() => scheduleForm.value.task_type === 'run_p
 function executionModeLabel(mode, display) { return display || (mode === 'ansible' ? 'Ansible 分发' : 'SSH 直连') }
 function statusTagType(status) { if (status === 'success') return 'success'; if (status === 'partial' || status === 'running') return 'warning'; if (status === 'failed' || status === 'canceled') return 'danger'; return 'info' }
 function formatDateTime(value) { return value ? String(value).replace('T', ' ').slice(0, 19) : '-' }
+function taskSuccessRate(task) { if (!task?.target_count) return 0; return Math.round(((task.success_count || 0) / task.target_count) * 1000) / 10 }
 function normalizePayloadByType(taskType, source = {}) { if (taskType === 'run_command') return { command: (source.command || '').trim() }; if (taskType === 'run_playbook') return { playbook_name: (source.playbook_name || '').trim(), playbook_content: (source.playbook_content || '').trim() }; if (taskType === 'service_status') return { service_name: (source.service_name || '').trim() }; return {} }
 function validatePayload() { const payload = normalizePayloadByType(scheduleForm.value.task_type, scheduleForm.value.payload || {}); if (scheduleForm.value.task_type === 'run_command' && !payload.command) return ElMessage.warning('请填写执行命令'), null; if (scheduleForm.value.task_type === 'run_playbook' && !payload.playbook_content) return ElMessage.warning('请填写 Playbook 内容'), null; if (scheduleForm.value.task_type === 'service_status' && !payload.service_name) return ElMessage.warning('请填写服务名称'), null; return payload }
 function buildSubmitPayload() { const payload = validatePayload(); if (!payload) return null; if (!scheduleForm.value.name) return ElMessage.warning('请填写编排名称'), null; return { name: scheduleForm.value.name, description: scheduleForm.value.description, task_type: scheduleForm.value.task_type, payload, selection_filters: { ...targetFilters.value }, target_host_ids: selectedHostIds.value, execution_mode: scheduleForm.value.task_type === 'run_playbook' ? 'ansible' : scheduleForm.value.execution_mode, execution_strategy: scheduleForm.value.execution_strategy, timeout_seconds: scheduleForm.value.timeout_seconds, schedule_type: scheduleForm.value.schedule_type, cron_expression: scheduleForm.value.schedule_type === 'cron' ? scheduleForm.value.cron_expression : '', interval_seconds: scheduleForm.value.schedule_type === 'interval' ? scheduleForm.value.interval_seconds : null, run_at: ['once', 'interval'].includes(scheduleForm.value.schedule_type) ? (scheduleForm.value.run_at || null) : null, timezone: scheduleForm.value.timezone, overlap_policy: scheduleForm.value.overlap_policy, enabled: scheduleForm.value.enabled } }
@@ -335,6 +399,28 @@ function editSchedule(row) { editingId.value = row.id; scheduleForm.value = { pr
 async function fetchTargets() { targetLoading.value = true; try { const res = await getHostTaskTargets({ ...targetFilters.value }); availableHosts.value = Array.isArray(res) ? res : (res.results || []) } catch (error) { ElMessage.error('加载目标主机失败') } finally { targetLoading.value = false } }
 async function fetchSchedules() { scheduleLoading.value = true; try { const res = await getHostTaskSchedules({ page: schedulePage.value, search: scheduleFilters.value.search || undefined, schedule_type: scheduleFilters.value.schedule_type || undefined, enabled: scheduleFilters.value.enabled || undefined }); schedules.value = res.results || res || []; scheduleTotal.value = res.count || schedules.value.length } catch (error) { ElMessage.error('加载编排列表失败') } finally { scheduleLoading.value = false } }
 async function fetchExecutions() { executionLoading.value = true; try { const res = await getHostTaskScheduleExecutions({ page: executionPage.value, search: executionFilters.value.search || undefined, status: executionFilters.value.status || undefined, trigger_source: executionFilters.value.trigger_source || undefined }); executions.value = res.results || res || []; executionTotal.value = res.count || executions.value.length } catch (error) { ElMessage.error('加载执行记录失败') } finally { executionLoading.value = false } }
+async function openExecutionDetail(row) {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailExecution.value = row
+  detailTask.value = null
+  try {
+    const execution = await getHostTaskScheduleExecution(row.id)
+    detailExecution.value = execution
+    if (execution?.host_task) {
+      try {
+        detailTask.value = await getHostTask(execution.host_task)
+      } catch (error) {
+        ElMessage.warning('已打开执行记录，关联任务明细加载失败')
+      }
+    }
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || '加载执行记录详情失败')
+    detailVisible.value = false
+  } finally {
+    detailLoading.value = false
+  }
+}
 async function runPreview() { const payload = buildSubmitPayload(); if (!payload) return; previewLoading.value = true; try { previewState.value = await previewHostTaskSchedule(payload) } catch (error) { ElMessage.error(error?.response?.data?.detail || '预览编排失败') } finally { previewLoading.value = false } }
 async function submitSchedule() { const payload = buildSubmitPayload(); if (!payload) return; saving.value = true; try { await (editingId.value ? updateHostTaskSchedule(editingId.value, payload) : createHostTaskSchedule(payload)); ElMessage.success(editingId.value ? '编排已更新' : '编排已创建'); await Promise.all([fetchSchedules(), fetchExecutions()]); activeTab.value = 'list'; resetEditor() } catch (error) { ElMessage.error(error?.response?.data?.detail || '保存编排失败') } finally { saving.value = false } }
 async function toggleSchedule(row) { try { await toggleHostTaskSchedule(row.id); ElMessage.success(row.enabled ? '编排已停用' : '编排已启用'); await Promise.all([fetchSchedules(), fetchExecutions()]) } catch (error) { ElMessage.error(error?.response?.data?.detail || '切换编排状态失败') } }
@@ -349,6 +435,6 @@ onMounted(async () => { applyPreset(presets[0]); await Promise.all([fetchTargets
 </script>
 
 <style scoped>
-.schedule-center-page{display:flex;flex-direction:column;gap:4px}.inner-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:-2px;padding:3px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.92) 0%,rgba(248,250,252,.82) 100%);border:1px solid rgba(148,163,184,.12);box-shadow:0 10px 22px rgba(15,23,42,.04)}.inner-tab-btn{position:relative;min-height:60px;padding:8px 11px 8px 13px;border:1px solid rgba(148,163,184,.1);border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;cursor:pointer;transition:.2s ease box-shadow,.2s ease transform,.2s ease border-color,.2s ease background;box-shadow:0 8px 18px rgba(15,23,42,.035);overflow:hidden}.inner-tab-btn::after{content:'';position:absolute;inset:0 auto 0 0;width:3px;border-radius:14px;background:linear-gradient(180deg,rgba(96,165,250,.14) 0%,rgba(56,189,248,.02) 100%)}.inner-tab-btn:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.28);box-shadow:0 12px 22px rgba(37,99,235,.08)}.inner-tab-btn.active{border-color:rgba(59,130,246,.28);background:linear-gradient(180deg,#fdfefe 0%,#eef6ff 100%);box-shadow:0 14px 24px rgba(59,130,246,.11)}.inner-tab-btn.active::after{background:linear-gradient(180deg,#3b82f6 0%,#22c55e 100%)}.inner-tab-title{font-size:13px;font-weight:700;color:#0f172a;line-height:1.1}.inner-tab-desc{font-size:11px;color:#64748b;line-height:1.35}.glass-card{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 16px 34px rgba(15,23,42,.07);padding:14px 16px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;font-weight:600;color:#0f172a}.compact-head{margin-bottom:12px}.planner-grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}.side-card{display:flex;flex-direction:column;gap:14px}.head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.preset-grid{display:grid;gap:10px}.preset-card{padding:14px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);box-shadow:0 10px 24px rgba(15,23,42,.04);text-align:left;cursor:pointer;transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease}.preset-card:hover{border-color:rgba(96,165,250,.35);box-shadow:0 16px 30px rgba(37,99,235,.1);transform:translateY(-2px)}.preset-card.active{border-color:#3b82f6;box-shadow:0 18px 32px rgba(59,130,246,.14)}.preset-title{color:#0f172a;font-weight:600}.preset-desc,.task-inline-tip{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}.task-inline-tip{margin-bottom:12px;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg, rgba(59,130,246,.08) 0%, rgba(14,165,233,.04) 100%);border:1px solid rgba(59,130,246,.14)}.mini-panel{padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.mini-panel-title{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:10px}.mini-bullet{position:relative;padding-left:14px;color:#64748b;font-size:12px;line-height:1.7}.mini-bullet::before{content:'';position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:#60a5fa}.task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}.submit-row{margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.preview-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.preview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.preview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.compact-kv{padding:7px 0;min-height:32px;color:#475569;font-size:13px;line-height:1.6}.history-toolbar{margin:14px 0}.pagination-row{display:flex;justify-content:flex-end;margin-top:16px}@media (max-width:1100px){.planner-grid,.inner-tabs,.preview-strip{grid-template-columns:1fr}}@media (max-width:900px){.form-row,.submit-row{flex-direction:column;align-items:stretch}}
+.schedule-center-page{display:flex;flex-direction:column;gap:4px}.inner-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:-2px;padding:3px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.92) 0%,rgba(248,250,252,.82) 100%);border:1px solid rgba(148,163,184,.12);box-shadow:0 10px 22px rgba(15,23,42,.04)}.inner-tab-btn{position:relative;min-height:60px;padding:8px 11px 8px 13px;border:1px solid rgba(148,163,184,.1);border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;cursor:pointer;transition:.2s ease box-shadow,.2s ease transform,.2s ease border-color,.2s ease background;box-shadow:0 8px 18px rgba(15,23,42,.035);overflow:hidden}.inner-tab-btn::after{content:'';position:absolute;inset:0 auto 0 0;width:3px;border-radius:14px;background:linear-gradient(180deg,rgba(96,165,250,.14) 0%,rgba(56,189,248,.02) 100%)}.inner-tab-btn:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.28);box-shadow:0 12px 22px rgba(37,99,235,.08)}.inner-tab-btn.active{border-color:rgba(59,130,246,.28);background:linear-gradient(180deg,#fdfefe 0%,#eef6ff 100%);box-shadow:0 14px 24px rgba(59,130,246,.11)}.inner-tab-btn.active::after{background:linear-gradient(180deg,#3b82f6 0%,#22c55e 100%)}.inner-tab-title{font-size:13px;font-weight:700;color:#0f172a;line-height:1.1}.inner-tab-desc{font-size:11px;color:#64748b;line-height:1.35}.glass-card{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 16px 34px rgba(15,23,42,.07);padding:14px 16px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;font-weight:600;color:#0f172a}.compact-head{margin-bottom:12px}.planner-grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}.side-card{display:flex;flex-direction:column;gap:14px}.head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.preset-grid{display:grid;gap:10px}.preset-card{padding:14px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);box-shadow:0 10px 24px rgba(15,23,42,.04);text-align:left;cursor:pointer;transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease}.preset-card:hover{border-color:rgba(96,165,250,.35);box-shadow:0 16px 30px rgba(37,99,235,.1);transform:translateY(-2px)}.preset-card.active{border-color:#3b82f6;box-shadow:0 18px 32px rgba(59,130,246,.14)}.preset-title{color:#0f172a;font-weight:600}.preset-desc,.task-inline-tip{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}.task-inline-tip{margin-bottom:12px;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg, rgba(59,130,246,.08) 0%, rgba(14,165,233,.04) 100%);border:1px solid rgba(59,130,246,.14)}.mini-panel{padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.mini-panel-title{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:10px}.mini-bullet{position:relative;padding-left:14px;color:#64748b;font-size:12px;line-height:1.7}.mini-bullet::before{content:'';position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:#60a5fa}.task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}.submit-row{margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.preview-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.preview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.preview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.compact-kv{padding:7px 0;min-height:32px;color:#475569;font-size:13px;line-height:1.6}.history-toolbar{margin:14px 0}.pagination-row{display:flex;justify-content:flex-end;margin-top:16px}.schedule-detail-shell{display:flex;flex-direction:column;gap:16px}.detail-summary{display:flex;flex-wrap:wrap;gap:8px}.detail-chip{padding:7px 12px;border-radius:999px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.14);color:#1e3a8a;font-size:12px;line-height:1.4}.schedule-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.schedule-metric-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.schedule-metric-card.success{background:linear-gradient(180deg,#f0fdf4 0%,#f7fee7 100%)}.schedule-metric-card.danger{background:linear-gradient(180deg,#fff1f2 0%,#fef2f2 100%)}.schedule-metric-card.warning{background:linear-gradient(180deg,#fffbeb 0%,#fefce8 100%)}.schedule-metric-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.detail-section{display:flex;flex-direction:column;gap:10px}.detail-section-title{font-size:13px;font-weight:700;color:#0f172a}.detail-kv{color:#475569;font-size:13px;line-height:1.7}.danger-text{color:#b91c1c}.output-block{max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px 12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6}@media (max-width:1100px){.planner-grid,.inner-tabs,.preview-strip,.schedule-metric-grid{grid-template-columns:1fr}}@media (max-width:900px){.form-row,.submit-row{flex-direction:column;align-items:stretch}}
 </style>
 
