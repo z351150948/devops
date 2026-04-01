@@ -505,32 +505,94 @@
         </div>
       </template>
     </el-drawer>
-    <el-drawer v-model="detailVisible" :title="ui.detailTitle" size="64%">
-      <template v-if="detailTask">
-        <div class="detail-summary">
-          <div class="detail-chip"><strong>{{ detailTask.name }}</strong></div>
-          <div class="detail-chip">{{ detailTask.task_type_display }}</div>
-          <div class="detail-chip">{{ ui.executionMode }}: {{ executionModeLabel(detailTask.execution_mode, detailTask.execution_mode_display) }}</div>
-          <div class="detail-chip">{{ ui.status }}: {{ detailTask.status_display }}</div>
-          <div class="detail-chip">{{ ui.successRate }}: {{ detailTask.success_rate }}%</div>
-          <div class="detail-chip">{{ ui.executor }}: {{ detailTask.created_by }}</div>
-        </div>
-        <div class="detail-desc">{{ detailTask.summary || detailTask.description || ui.emptyDesc }}</div>
-        <el-table :data="detailTask.executions || []" max-height="520" :empty-text="ui.emptyExecutions">
-          <el-table-column prop="host_name" :label="ui.host" min-width="140" />
-          <el-table-column prop="host_ip" label="IP" width="140" />
-          <el-table-column :label="ui.status" width="100">
-            <template #default="{ row }"><el-tag size="small" :type="executionStatusType(row.status)">{{ row.status_display }}</el-tag></template>
-          </el-table-column>
-          <el-table-column prop="duration_ms" :label="ui.duration" width="90">
-            <template #default="{ row }">{{ row.duration_ms }}ms</template>
-          </el-table-column>
-          <el-table-column prop="command" :label="ui.command" min-width="200" show-overflow-tooltip />
-          <el-table-column :label="ui.output" min-width="280">
-            <template #default="{ row }"><div class="output-block">{{ row.error_message || row.output || '-' }}</div></template>
-          </el-table-column>
-        </el-table>
-      </template>
+    <el-drawer v-model="detailVisible" :title="ui.detailTitle" size="68%">
+      <div v-loading="detailLoading" class="task-detail-shell">
+        <template v-if="detailTask">
+          <div class="detail-summary">
+            <div class="detail-chip"><strong>{{ detailTask.name }}</strong></div>
+            <div class="detail-chip">{{ detailTask.task_type_display }}</div>
+            <div class="detail-chip">{{ ui.executionMode }}: {{ executionModeLabel(detailTask.execution_mode, detailTask.execution_mode_display) }}</div>
+            <div class="detail-chip">{{ ui.status }}: {{ detailTask.status_display }}</div>
+            <div class="detail-chip">{{ ui.successRate }}: {{ detailTask.success_rate }}%</div>
+            <div class="detail-chip">{{ ui.executor }}: {{ detailTask.created_by || '-' }}</div>
+            <div class="detail-chip">{{ ui.createdAt }}: {{ formatDateTime(detailTask.created_at) }}</div>
+          </div>
+          <div class="task-metric-grid">
+            <div class="task-metric-card">
+              <span class="task-metric-label">{{ ui.targetCount }}</span>
+              <strong>{{ detailTask.target_count || 0 }}</strong>
+            </div>
+            <div class="task-metric-card success">
+              <span class="task-metric-label">{{ ui.success }}</span>
+              <strong>{{ detailTask.success_count || 0 }}</strong>
+            </div>
+            <div class="task-metric-card danger">
+              <span class="task-metric-label">{{ ui.failed }}</span>
+              <strong>{{ detailTask.failed_count || 0 }}</strong>
+            </div>
+            <div class="task-metric-card warning">
+              <span class="task-metric-label">{{ ui.skipped }}</span>
+              <strong>{{ detailTask.skipped_count || 0 }}</strong>
+            </div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">{{ ui.summary }}</div>
+            <div class="detail-kv">{{ detailTask.summary || detailTask.description || ui.emptyDesc }}</div>
+            <div v-if="detailTask.cancel_requested" class="detail-kv danger-text">{{ ui.cancelRequestedBy }}: {{ detailTask.cancel_requested_by || '-' }} | {{ ui.cancelRequestedAt }}: {{ formatDateTime(detailTask.cancel_requested_at) }}</div>
+          </div>
+          <div class="detail-grid">
+            <div class="detail-section">
+              <div class="detail-section-title">{{ ui.executionOverview }}</div>
+              <div class="detail-kv">{{ ui.strategy }}: {{ executionStrategyLabel(detailTask.execution_strategy) }}</div>
+              <div class="detail-kv">{{ ui.timeout }}: {{ detailTask.timeout_seconds || 0 }}s</div>
+              <div class="detail-kv">{{ ui.triggerSource }}: {{ detailTask.trigger_source_display || '-' }}</div>
+              <div class="detail-kv">{{ ui.startedAt }}: {{ formatDateTime(detailTask.started_at) }}</div>
+              <div class="detail-kv">{{ ui.finishedAt }}: {{ formatDateTime(detailTask.finished_at) }}</div>
+            </div>
+            <div class="detail-section">
+              <div class="detail-section-title">{{ ui.targetHosts }}</div>
+              <div v-if="detailTask.target_snapshot?.length" class="target-chip-grid">
+                <div v-for="host in detailTask.target_snapshot" :key="`${detailTask.id}-${host.id || host.hostname}`" class="target-host-chip">
+                  <strong>{{ host.hostname || '-' }}</strong>
+                  <span>{{ host.ip_address || '-' }}</span>
+                </div>
+              </div>
+              <div v-else class="detail-kv">{{ ui.emptyTargets }}</div>
+            </div>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">{{ ui.taskPayload }}</div>
+            <pre v-if="detailTask.task_type === 'run_command'" class="detail-code-block">{{ detailTask.payload?.command || '-' }}</pre>
+            <template v-else-if="detailTask.task_type === 'run_playbook'">
+              <div class="detail-kv">{{ ui.playbookName }}: {{ detailTask.payload?.playbook_name || '-' }}</div>
+              <pre class="detail-code-block template-code-block">{{ detailTask.payload?.playbook_content || '-' }}</pre>
+            </template>
+            <div v-else-if="detailTask.task_type === 'service_status'" class="detail-kv">{{ ui.serviceDetail }}: {{ detailTask.payload?.service_name || '-' }}</div>
+            <div v-else class="detail-kv">{{ ui.noExtraParams }}</div>
+          </div>
+          <div v-if="Object.keys(detailTask.payload || {}).length" class="detail-section">
+            <div class="detail-section-title">{{ ui.taskPayload }} JSON</div>
+            <pre class="detail-code-block">{{ formatPayloadJson(detailTask.payload) }}</pre>
+          </div>
+          <div class="detail-section">
+            <div class="detail-section-title">{{ ui.executionDetails }}</div>
+            <el-table :data="detailTask.executions || []" max-height="520" :empty-text="ui.emptyExecutions">
+              <el-table-column prop="host_name" :label="ui.host" min-width="140" />
+              <el-table-column prop="host_ip" label="IP" width="140" />
+              <el-table-column :label="ui.status" width="100">
+                <template #default="{ row }"><el-tag size="small" :type="executionStatusType(row.status)">{{ row.status_display }}</el-tag></template>
+              </el-table-column>
+              <el-table-column :label="ui.duration" width="90">
+                <template #default="{ row }">{{ row.duration_ms }}ms</template>
+              </el-table-column>
+              <el-table-column prop="command" :label="ui.command" min-width="200" show-overflow-tooltip />
+              <el-table-column :label="ui.output" min-width="280">
+                <template #default="{ row }"><div class="output-block">{{ row.error_message || row.output || '-' }}</div></template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </template>
+      </div>
     </el-drawer>
   </div>
 </template>
@@ -661,11 +723,23 @@ const ui = {
   cancelTask: '\u7ec8\u6b62',
   batchCancel: '\u6279\u91cf\u7ec8\u6b62',
   successRate: '\u6210\u529f\u7387',
+  success: '\u6210\u529f',
+  failed: '\u5931\u8d25',
+  skipped: '\u8df3\u8fc7',
   detailTitle: '\u4efb\u52a1\u8be6\u60c5',
   emptyDesc: '\u6682\u65e0\u989d\u5916\u8bf4\u660e',
   host: '\u4e3b\u673a',
   duration: '\u8017\u65f6',
   output: '\u7ed3\u679c\u8f93\u51fa',
+  executionOverview: '\u6267\u884c\u6982\u89c8',
+  executionDetails: '\u4e3b\u673a\u6267\u884c\u660e\u7ec6',
+  triggerSource: '\u89e6\u53d1\u6765\u6e90',
+  startedAt: '\u5f00\u59cb\u65f6\u95f4',
+  targetHosts: '\u76ee\u6807\u4e3b\u673a',
+  emptyTargets: '\u6682\u65e0\u76ee\u6807\u4e3b\u673a\u5feb\u7167',
+  taskPayload: '\u4efb\u52a1\u53c2\u6570',
+  cancelRequestedBy: '\u7ec8\u6b62\u53d1\u8d77\u4eba',
+  cancelRequestedAt: '\u7ec8\u6b62\u7533\u8bf7\u65f6\u95f4',
   emptyHosts: '\u6682\u65e0\u5339\u914d\u4e3b\u673a',
   emptyTasks: '\u6682\u65e0\u4efb\u52a1\u8bb0\u5f55',
   emptyExecutions: '\u6682\u65e0\u6267\u884c\u660e\u7ec6',
@@ -753,6 +827,7 @@ const editingTemplateId = ref(null)
 const lastTemplateDraftType = ref('check_connection')
 const templateDetailVisible = ref(false)
 const detailVisible = ref(false)
+const detailLoading = ref(false)
 const detailTask = ref(null)
 const currentTemplate = ref(null)
 const availableHosts = ref([])
@@ -957,7 +1032,7 @@ function applyPreset(preset) {
   taskForm.value.payload = buildPresetPayload(preset.key)
 }
 function taskStatusType(status) { if (status === 'success') return 'success'; if (status === 'partial') return 'warning'; if (status === 'failed' || status === 'canceled') return 'danger'; return 'info' }
-function executionStatusType(status) { return status === 'success' ? 'success' : status === 'failed' ? 'danger' : 'info' }
+function executionStatusType(status) { if (status === 'success') return 'success'; if (status === 'failed' || status === 'canceled') return 'danger'; if (status === 'running' || status === 'partial') return 'warning'; return 'info' }
 function formatDateTime(value) { return value ? value.replace('T', ' ').slice(0, 19) : '-' }
 async function fetchTargets() {
   targetLoading.value = true
@@ -1031,11 +1106,16 @@ async function submitTemplateDraft() {
   } finally { creatingTemplate.value = false }
 }
 async function openDetail(task) {
+  detailVisible.value = true
+  detailLoading.value = true
+  detailTask.value = task
   try {
     detailTask.value = await getHostTask(task.id)
-    detailVisible.value = true
   } catch (error) {
+    detailVisible.value = false
     ElMessage.error(ui.loadTaskDetailFailed)
+  } finally {
+    detailLoading.value = false
   }
 }
 async function saveCurrentAsTemplate() {
@@ -1147,7 +1227,7 @@ onMounted(async () => { applyPreset(presets.find(item => item.key === 'check_con
 .task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.form-col.wide{flex:1 1 100%}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}
 .submit-row{margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-toolbar{margin-bottom:10px}.template-editor-topbar{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}.template-editor-presets{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-editor-label{color:#64748b;font-size:12px}.template-editor-chip{padding:6px 10px;border:none;border-radius:999px;background:rgba(59,130,246,.08);color:#2563eb;font-size:12px;cursor:pointer;transition:.2s ease background,.2s ease transform}.template-editor-chip:hover{background:rgba(59,130,246,.14);transform:translateY(-1px)}.template-editor-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px}.template-overview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.template-overview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.template-editor-layout{display:grid;grid-template-columns:minmax(0,1.28fr) minmax(280px,.72fr);gap:14px}.template-editor-main{min-width:0}.template-editor-side{display:flex;flex-direction:column;gap:12px}.template-editor-panel{padding:14px;border-radius:16px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.14)}.template-editor-section + .template-editor-section{margin-top:14px}.template-editor-section-title{margin-bottom:12px;color:#0f172a;font-size:13px;font-weight:600}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.template-editor-help{background:linear-gradient(180deg,#f8fbff 0%,#f3f7fd 100%)}.template-editor-preview{align-self:start}.template-code-block{margin-top:10px;max-height:320px;overflow:auto}.history-card{min-width:0}.history-head{margin-bottom:8px}.history-toolbar{margin:14px 0}
-.pagination-row{display:flex;justify-content:flex-end;margin-top:16px}.detail-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.detail-chip{padding:6px 10px;border-radius:999px;background:rgba(148,163,184,.12);color:#0f172a;font-size:12px}.detail-desc{margin-bottom:16px;color:#64748b;font-size:13px}.detail-section{margin-bottom:16px;padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.detail-section-title{margin-bottom:10px;color:#0f172a;font-size:13px;font-weight:600}.detail-kv{color:#475569;font-size:13px;line-height:1.6}.compact-kv{padding:7px 0;min-height:32px}.detail-code-block{margin:0;padding:12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}.detail-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:14px}.output-block{white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.5;color:#475569}
-@media (max-width: 1100px) { .composer-grid,.library-grid,.inner-tabs,.template-editor-layout,.template-editor-overview{grid-template-columns:1fr} }
+.pagination-row{display:flex;justify-content:flex-end;margin-top:16px}.task-detail-shell{display:flex;flex-direction:column;gap:16px}.detail-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:0}.detail-chip{padding:7px 12px;border-radius:999px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.14);color:#1e3a8a;font-size:12px;line-height:1.4}.detail-desc{margin-bottom:16px;color:#64748b;font-size:13px}.task-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-metric-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.task-metric-card.success{background:linear-gradient(180deg,#f0fdf4 0%,#f7fee7 100%)}.task-metric-card.danger{background:linear-gradient(180deg,#fff1f2 0%,#fef2f2 100%)}.task-metric-card.warning{background:linear-gradient(180deg,#fffbeb 0%,#fefce8 100%)}.task-metric-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.detail-section{display:flex;flex-direction:column;gap:10px;margin-bottom:0;padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.detail-section-title{margin-bottom:0;color:#0f172a;font-size:13px;font-weight:600}.detail-kv{color:#475569;font-size:13px;line-height:1.7}.compact-kv{padding:7px 0;min-height:32px}.detail-code-block{margin:0;padding:12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}.detail-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:14px}.danger-text{color:#b91c1c}.target-chip-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.target-host-chip{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16)}.target-host-chip strong{color:#0f172a;font-size:13px}.target-host-chip span{color:#64748b;font-size:12px}.output-block{max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px 12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6}
+@media (max-width: 1100px) { .composer-grid,.library-grid,.inner-tabs,.template-editor-layout,.template-editor-overview,.task-metric-grid,.detail-grid,.target-chip-grid{grid-template-columns:1fr} }
 @media (max-width: 900px) { .form-row,.submit-row,.template-title-row,.template-action-row{flex-direction:column;align-items:stretch} }
 </style>
