@@ -1,5 +1,6 @@
+from datetime import timedelta
 import paramiko
-from django.db.models import Avg, Count
+from django.db.models import Avg, Count, Q
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -9,7 +10,25 @@ from rest_framework.response import Response
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 
 from . import deployer
-from .models import Alert, Deployment, DeploymentApprovalFlow, DeploymentApprovalStep, Host, LogEntry
+from .host_task_schedules import (
+    build_schedule_snapshot,
+    preview_next_runs,
+    resolve_schedule_hosts,
+    trigger_schedule,
+)
+from .host_tasks import build_host_target_queryset, start_host_task
+from .models import (
+    Alert,
+    Deployment,
+    DeploymentApprovalFlow,
+    DeploymentApprovalStep,
+    Host,
+    HostTask,
+    HostTaskSchedule,
+    HostTaskScheduleExecution,
+    HostTaskTemplate,
+    LogEntry,
+)
 from .serializers import (
     AlertSerializer,
     ApprovalActionSerializer,
@@ -17,6 +36,15 @@ from .serializers import (
     DeploymentApprovalFlowSerializer,
     DeploymentSerializer,
     HostSerializer,
+    HostTaskBatchCancelSerializer,
+    HostTaskDetailSerializer,
+    HostTaskScheduleExecutionSerializer,
+    HostTaskSchedulePreviewSerializer,
+    HostTaskScheduleSerializer,
+    HostTaskSerializer,
+    HostTaskSubmitSerializer,
+    HostTaskTargetSerializer,
+    HostTaskTemplateSerializer,
     LogEntrySerializer,
 )
 
@@ -98,9 +126,9 @@ class HostViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             stdin, stdout, stderr = client.exec_command('uname -a', timeout=5)
             uname = stdout.read().decode('utf-8', errors='replace').strip()
             client.close()
-            return Response({'success': True, 'message': f'连接成功: {uname}'})
+            return Response({'success': True, 'message': f'\u8fde\u63a5\u6210\u529f: {uname}'})
         except Exception as exc:
-            return Response({'success': False, 'message': f'连接失败: {str(exc)}'})
+            return Response({'success': False, 'message': f'\u8fde\u63a5\u5931\u8d25: {str(exc)}'})
 
     @action(detail=True, methods=['post'])
     def refresh_info(self, request, pk=None):
@@ -140,8 +168,335 @@ class HostViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         except Exception as exc:
             host.status = 'offline'
             host.save(update_fields=['status'])
-            return Response({'detail': f'获取信息失败: {str(exc)}'}, status=400)
+            return Response({'detail': f'\u83b7\u53d6\u4fe1\u606f\u5931\u8d25: {str(exc)}'}, status=400)
 
+
+class HostTaskTemplateViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    serializer_class = HostTaskTemplateSerializer
+    search_fields = ['name', 'description', 'created_by']
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+    rbac_permissions = {
+        'list': ['ops.host.execute'],
+        'retrieve': ['ops.host.execute'],
+        'create': ['ops.host.execute'],
+        'update': ['ops.host.execute'],
+        'partial_update': ['ops.host.execute'],
+        'destroy': ['ops.host.execute'],
+    }
+
+    def get_queryset(self):
+        username = self.request.user.username
+        return HostTaskTemplate.objects.filter(Q(is_builtin=True) | Q(created_by=username)).order_by('-is_builtin', 'name', '-id')
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user.username)
+
+    def _validate_editable(self, instance):
+        if instance.is_builtin:
+            return Response({'detail': '\u5185\u7f6e\u6a21\u677f\u4e0d\u5141\u8bb8\u4fee\u6539\u6216\u5220\u9664'}, status=status.HTTP_400_BAD_REQUEST)
+        return None
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        error_response = self._validate_editable(instance)
+        if error_response:
+            return error_response
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        error_response = self._validate_editable(instance)
+        if error_response:
+            return error_response
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        error_response = self._validate_editable(instance)
+        if error_response:
+            return error_response
+        return super().destroy(request, *args, **kwargs)
+
+
+class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = HostTask.objects.prefetch_related('executions').all()
+    search_fields = ['name', 'description', 'created_by']
+    filterset_fields = ['task_type', 'status', 'created_by']
+    http_method_names = ['get', 'post', 'head', 'options']
+    rbac_permissions = {
+        'list': ['ops.host.execute'],
+        'retrieve': ['ops.host.execute'],
+        'create': ['ops.host.execute'],
+        'rerun': ['ops.host.execute'],
+        'cancel': ['ops.host.execute'],
+        'batch_cancel': ['ops.host.execute'],
+        'stats': ['ops.host.execute'],
+        'host_options': ['ops.host.execute'],
+    }
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return HostTaskSubmitSerializer
+        if self.action == 'retrieve':
+            return HostTaskDetailSerializer
+        return HostTaskSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated = serializer.validated_data
+        host_ids = validated['host_ids']
+        host_map = {host.id: host for host in Host.objects.filter(id__in=host_ids)}
+        hosts = [host_map[item] for item in host_ids if item in host_map]
+        if len(hosts) != len(host_ids):
+            return Response({'detail': '\u5b58\u5728\u65e0\u6548\u7684\u76ee\u6807\u4e3b\u673a\uff0c\u8bf7\u5237\u65b0\u540e\u91cd\u8bd5'}, status=status.HTTP_400_BAD_REQUEST)
+
+        task = HostTask.objects.create(
+            name=validated['name'],
+            task_type=validated['task_type'],
+            description=validated.get('description', ''),
+            payload=validated.get('payload') or {},
+            selection_filters=validated.get('selection_filters') or {},
+            execution_mode=validated.get('execution_mode', HostTask.EXECUTION_MODE_SSH),
+            execution_strategy=validated.get('execution_strategy', HostTask.STRATEGY_CONTINUE),
+            timeout_seconds=validated.get('timeout_seconds', 15),
+            created_by=request.user.username,
+            summary='\u4efb\u52a1\u5df2\u521b\u5efa\uff0c\u7b49\u5f85\u8c03\u5ea6\u6267\u884c',
+        )
+        start_host_task(task, hosts)
+        data = HostTaskDetailSerializer(self.get_queryset().get(pk=task.pk)).data
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        total = queryset.count()
+        success = queryset.filter(status=HostTask.STATUS_SUCCESS).count()
+        partial = queryset.filter(status=HostTask.STATUS_PARTIAL).count()
+        failed = queryset.filter(status=HostTask.STATUS_FAILED).count()
+        running = queryset.filter(status=HostTask.STATUS_RUNNING).count()
+        pending = queryset.filter(status=HostTask.STATUS_PENDING).count()
+        canceled = queryset.filter(status=HostTask.STATUS_CANCELED).count()
+        target_total = sum(item.target_count for item in queryset[:50]) if total else 0
+        latest = queryset.first()
+        rate_base = success + partial + failed + canceled
+        success_rate = round(((success + partial) / rate_base) * 100, 1) if rate_base else 0
+        return Response({
+            'total': total,
+            'running': running,
+            'pending': pending,
+            'success': success,
+            'partial': partial,
+            'failed': failed,
+            'canceled': canceled,
+            'target_total': target_total,
+            'success_rate': success_rate,
+            'latest_finished_at': latest.finished_at if latest else None,
+        })
+
+    @action(detail=False, methods=['get'])
+    def host_options(self, request):
+        filters = {
+            'search': request.query_params.get('search', ''),
+            'status': request.query_params.get('status', ''),
+            'business_line': request.query_params.get('business_line', ''),
+            'environment': request.query_params.get('environment', ''),
+        }
+        queryset = build_host_target_queryset(filters)
+        data = HostTaskTargetSerializer(queryset[:200], many=True).data
+        return Response(data)
+
+    @action(detail=True, methods=['post'])
+    def rerun(self, request, pk=None):
+        source = self.get_object()
+        host_ids = [item.get('id') for item in (source.target_snapshot or []) if item.get('id')]
+        host_map = {host.id: host for host in Host.objects.filter(id__in=host_ids)}
+        hosts = [host_map[item] for item in host_ids if item in host_map]
+        if not hosts:
+            return Response({'detail': '\u5df2\u63d0\u4ea4\u7ec8\u6b62\u8bf7\u6c42\uff0c\u7b49\u5f85\u6267\u884c\u5668\u505c\u6b62\u4efb\u52a1'}, status=status.HTTP_400_BAD_REQUEST)
+
+        rerun_task = HostTask.objects.create(
+            name=f'{source.name} / \u91cd\u8dd1',
+            task_type=source.task_type,
+            description=source.description,
+            payload=dict(source.payload or {}),
+            selection_filters=dict(source.selection_filters or {}),
+            execution_mode=source.execution_mode or HostTask.EXECUTION_MODE_SSH,
+            execution_strategy=source.execution_strategy,
+            timeout_seconds=source.timeout_seconds,
+            created_by=request.user.username,
+            summary='\u91cd\u8dd1\u4efb\u52a1\u5df2\u521b\u5efa\uff0c\u7b49\u5f85\u8c03\u5ea6\u6267\u884c',
+        )
+        start_host_task(rerun_task, hosts)
+        data = HostTaskDetailSerializer(self.get_queryset().get(pk=rerun_task.pk)).data
+        return Response(data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        task = self.get_object()
+        if task.status not in [HostTask.STATUS_PENDING, HostTask.STATUS_RUNNING]:
+            return Response({'detail': '\u5f53\u524d\u4efb\u52a1\u72b6\u6001\u4e0d\u5141\u8bb8\u7ec8\u6b62'}, status=status.HTTP_400_BAD_REQUEST)
+        if task.cancel_requested:
+            return Response({'detail': '\u8be5\u4efb\u52a1\u5df2\u63d0\u4ea4\u7ec8\u6b62\u7533\u8bf7'}, status=status.HTTP_400_BAD_REQUEST)
+        task.cancel_requested = True
+        task.cancel_requested_by = request.user.username
+        task.cancel_requested_at = timezone.now()
+        task.summary = '\u5df2\u63d0\u4ea4\u7ec8\u6b62\u8bf7\u6c42\uff0c\u7b49\u5f85\u6267\u884c\u5668\u505c\u6b62\u4efb\u52a1'
+        task.save(update_fields=['cancel_requested', 'cancel_requested_by', 'cancel_requested_at', 'summary'])
+        return Response(HostTaskSerializer(task).data)
+
+    @action(detail=False, methods=['post'])
+    def batch_cancel(self, request):
+        serializer = HostTaskBatchCancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ids = serializer.validated_data['ids']
+        queryset = self.get_queryset().filter(id__in=ids, status__in=[HostTask.STATUS_PENDING, HostTask.STATUS_RUNNING])
+        tasks = list(queryset)
+        if not tasks:
+            return Response({'detail': '\u6ca1\u6709\u53ef\u7ec8\u6b62\u7684\u4efb\u52a1'}, status=status.HTTP_400_BAD_REQUEST)
+        now = timezone.now()
+        queryset.update(
+            cancel_requested=True,
+            cancel_requested_by=request.user.username,
+            cancel_requested_at=now,
+            summary='\u5df2\u6279\u91cf\u63d0\u4ea4\u7ec8\u6b62\u8bf7\u6c42\uff0c\u7b49\u5f85\u6267\u884c\u5668\u505c\u6b62\u4efb\u52a1',
+        )
+        return Response({
+            'count': len(tasks),
+            'ids': [item.id for item in tasks],
+            'detail': f'\u5df2\u63d0\u4ea4 {len(tasks)} \u4e2a\u4efb\u52a1\u7684\u7ec8\u6b62\u8bf7\u6c42',
+        })
+
+
+class HostTaskScheduleViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = HostTaskSchedule.objects.all()
+    serializer_class = HostTaskScheduleSerializer
+    search_fields = ['name', 'description', 'created_by', 'updated_by']
+    filterset_fields = ['enabled', 'task_type', 'execution_mode', 'schedule_type']
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
+    rbac_permissions = {
+        'list': ['ops.host.schedule.view'],
+        'retrieve': ['ops.host.schedule.view'],
+        'create': ['ops.host.schedule.manage'],
+        'update': ['ops.host.schedule.manage'],
+        'partial_update': ['ops.host.schedule.manage'],
+        'destroy': ['ops.host.schedule.manage'],
+        'stats': ['ops.host.schedule.view'],
+        'preview_next_runs': ['ops.host.schedule.manage'],
+        'toggle_enabled': ['ops.host.schedule.manage'],
+        'run_now': ['ops.host.schedule.execute'],
+    }
+
+    def get_queryset(self):
+        return HostTaskSchedule.objects.order_by('-enabled', 'next_run_at', '-id')
+
+    def _persist_schedule(self, serializer, created=False):
+        next_run_at = serializer.validated_data.pop('computed_next_run_at', None)
+        actor_field = {'created_by': self.request.user.username} if created else {}
+        schedule = serializer.save(updated_by=self.request.user.username, **actor_field)
+        hosts = resolve_schedule_hosts(schedule)
+        schedule.target_count = len(hosts)
+        schedule.target_snapshot = build_schedule_snapshot(hosts)
+        schedule.next_run_at = next_run_at if schedule.enabled else None
+        schedule.save(update_fields=['updated_by', 'target_count', 'target_snapshot', 'next_run_at', 'updated_at'])
+        return schedule
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        schedule = self._persist_schedule(serializer, created=True)
+        return Response(self.get_serializer(schedule).data, status=status.HTTP_201_CREATED)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        schedule = self._persist_schedule(serializer, created=False)
+        return Response(self.get_serializer(schedule).data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        queryset = self.filter_queryset(self.get_queryset())
+        now = timezone.now()
+        total = queryset.count()
+        enabled = queryset.filter(enabled=True).count()
+        running = queryset.filter(generated_tasks__status__in=[HostTask.STATUS_PENDING, HostTask.STATUS_RUNNING]).distinct().count()
+        due_soon = queryset.filter(enabled=True, next_run_at__isnull=False, next_run_at__lte=now + timedelta(hours=1)).count()
+        recent_executions = HostTaskScheduleExecution.objects.filter(schedule__in=queryset, requested_at__gte=now - timedelta(days=7))
+        finished_total = recent_executions.filter(status__in=[HostTask.STATUS_SUCCESS, HostTask.STATUS_PARTIAL, HostTask.STATUS_FAILED, HostTask.STATUS_CANCELED]).count()
+        success_total = recent_executions.filter(status__in=[HostTask.STATUS_SUCCESS, HostTask.STATUS_PARTIAL]).count()
+        success_rate = round((success_total / finished_total) * 100, 1) if finished_total else 0
+        latest = recent_executions.order_by('-requested_at').first()
+        return Response({
+            'total': total,
+            'enabled': enabled,
+            'disabled': max(total - enabled, 0),
+            'running': running,
+            'due_soon': due_soon,
+            'success_rate': success_rate,
+            'latest_requested_at': latest.requested_at if latest else None,
+        })
+
+    @action(detail=False, methods=['post'])
+    def preview_next_runs(self, request):
+        serializer = HostTaskSchedulePreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        hosts = resolve_schedule_hosts(serializer.validated_data)
+        return Response({
+            'next_run_at': serializer.validated_data.get('computed_next_run_at'),
+            'next_runs': preview_next_runs(serializer.validated_data, count=5),
+            'target_count': len(hosts),
+            'target_snapshot': build_schedule_snapshot(hosts[:12]),
+        })
+
+    @action(detail=True, methods=['post'])
+    def toggle_enabled(self, request, pk=None):
+        schedule = self.get_object()
+        schedule.enabled = not schedule.enabled
+        schedule.updated_by = request.user.username
+        if schedule.enabled:
+            next_runs = preview_next_runs(schedule, count=1)
+            schedule.next_run_at = next_runs[0] if next_runs else None
+        else:
+            schedule.next_run_at = None
+        schedule.save(update_fields=['enabled', 'updated_by', 'next_run_at', 'updated_at'])
+        return Response(self.get_serializer(schedule).data)
+
+    @action(detail=True, methods=['post'])
+    def run_now(self, request, pk=None):
+        schedule = self.get_object()
+        execution, _task = trigger_schedule(
+            schedule,
+            actor=request.user.username,
+            trigger_source=HostTaskScheduleExecution.TRIGGER_MANUAL,
+            scheduled_run=False,
+        )
+        if not execution:
+            return Response({'detail': '当前已有执行中的同名编排，已按并发策略跳过本次触发'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(HostTaskScheduleExecutionSerializer(execution).data, status=status.HTTP_201_CREATED)
+
+
+class HostTaskScheduleExecutionViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
+    serializer_class = HostTaskScheduleExecutionSerializer
+    search_fields = ['schedule__name', 'summary', 'requested_by', 'host_task__name']
+    filterset_fields = ['schedule', 'status', 'trigger_source']
+    http_method_names = ['get', 'head', 'options']
+    rbac_permissions = {
+        'list': ['ops.host.schedule.view'],
+        'retrieve': ['ops.host.schedule.view'],
+    }
+
+    def get_queryset(self):
+        queryset = HostTaskScheduleExecution.objects.select_related('schedule', 'host_task').order_by('-requested_at', '-id')
+        schedule_id = self.request.query_params.get('schedule')
+        if schedule_id:
+            queryset = queryset.filter(schedule_id=schedule_id)
+        return queryset
 
 class DeploymentApprovalFlowViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = DeploymentApprovalFlow.objects.prefetch_related('nodes').all()
@@ -316,7 +671,7 @@ class DeploymentViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             deployment,
             actor=request.user.username,
             action_type='rerun',
-            change_summary=serializer.validated_data.get('change_summary') or f'重新执行 #{deployment.id}',
+            change_summary=serializer.validated_data.get('change_summary') or f'閲嶆柊鎵ц #{deployment.id}',
             previous_success=deployment if deployment.approval_status == 'approved' and deployment.execution_count else deployment.previous_success,
             rerun_source=deployment,
         )
@@ -334,7 +689,7 @@ class DeploymentViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             previous_release,
             actor=request.user.username,
             action_type='rollback',
-            change_summary=serializer.validated_data.get('change_summary') or f'回滚到 v{previous_release.version}',
+            change_summary=serializer.validated_data.get('change_summary') or f'鍥炴粴鍒?v{previous_release.version}',
             previous_success=deployment if deployment.approval_status == 'approved' and deployment.execution_count else deployment.previous_success,
             rollback_source=deployment,
         )
@@ -468,3 +823,4 @@ def dashboard_stats(request):
         'recent_deploys': recent_deploys,
         'recent_alerts': recent_alerts,
     })
+

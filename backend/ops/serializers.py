@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from cmdb.models import CIRelation, ConfigItem, ResourceNode
 
+from .host_task_schedules import CronExpressionError, compute_next_run, preview_next_runs, validate_cron_expression
 from .models import (
     Alert,
     Deployment,
@@ -10,6 +11,11 @@ from .models import (
     DeploymentApprovalStep,
     DockerHost,
     Host,
+    HostTask,
+    HostTaskExecution,
+    HostTaskSchedule,
+    HostTaskScheduleExecution,
+    HostTaskTemplate,
     K8sCluster,
     LogDataSource,
     LogEntry,
@@ -29,6 +35,66 @@ LOG_SENSITIVE_KEYS = {
 }
 
 
+def normalize_json_object(value):
+    return value if isinstance(value, dict) else {}
+
+
+def validate_host_task_payload(task_type, payload):
+    payload = normalize_json_object(payload)
+    if task_type == HostTask.TASK_RUN_COMMAND and not (payload.get('command') or '').strip():
+        raise serializers.ValidationError({'payload': '请填写需要执行的命令'})
+    if task_type == HostTask.TASK_RUN_PLAYBOOK and not (payload.get('playbook_content') or '').strip():
+        raise serializers.ValidationError({'payload': '请填写 Playbook 内容'})
+    if task_type == HostTask.TASK_SERVICE_STATUS and not (payload.get('service_name') or '').strip():
+        raise serializers.ValidationError({'payload': '请填写需要巡检的服务名'})
+    return payload
+
+
+def normalize_schedule_hosts(value):
+    value = value or []
+    return list(dict.fromkeys(int(item) for item in value if item))
+
+
+def validate_schedule_definition(attrs, instance=None):
+    schedule_type = attrs.get('schedule_type') or getattr(instance, 'schedule_type', HostTaskSchedule.SCHEDULE_TYPE_CRON)
+    timezone_name = attrs.get('timezone') or getattr(instance, 'timezone', 'Asia/Shanghai')
+    cron_expression = (attrs.get('cron_expression') if 'cron_expression' in attrs else getattr(instance, 'cron_expression', '')) or ''
+    interval_seconds = attrs.get('interval_seconds') if 'interval_seconds' in attrs else getattr(instance, 'interval_seconds', None)
+    run_at = attrs.get('run_at') if 'run_at' in attrs else getattr(instance, 'run_at', None)
+
+    if schedule_type == HostTaskSchedule.SCHEDULE_TYPE_CRON:
+        if not str(cron_expression).strip():
+            raise serializers.ValidationError({'cron_expression': '请填写 Cron 表达式'})
+        try:
+            validate_cron_expression(cron_expression)
+        except CronExpressionError as exc:
+            raise serializers.ValidationError({'cron_expression': str(exc)}) from exc
+        attrs['interval_seconds'] = None
+    elif schedule_type == HostTaskSchedule.SCHEDULE_TYPE_INTERVAL:
+        if not interval_seconds:
+            raise serializers.ValidationError({'interval_seconds': '请填写间隔秒数'})
+        if int(interval_seconds) < 60:
+            raise serializers.ValidationError({'interval_seconds': '间隔任务至少间隔 60 秒'})
+        attrs['cron_expression'] = ''
+    elif schedule_type == HostTaskSchedule.SCHEDULE_TYPE_ONCE:
+        if not run_at:
+            raise serializers.ValidationError({'run_at': '请选择执行时间'})
+        attrs['cron_expression'] = ''
+        attrs['interval_seconds'] = None
+    else:
+        raise serializers.ValidationError({'schedule_type': '不支持的调度类型'})
+
+    preview_source = {
+        'schedule_type': schedule_type,
+        'cron_expression': attrs.get('cron_expression', cron_expression),
+        'interval_seconds': attrs.get('interval_seconds', interval_seconds),
+        'run_at': attrs.get('run_at', run_at),
+        'timezone': timezone_name,
+    }
+    attrs['computed_next_run_at'] = compute_next_run(preview_source)
+    return attrs
+
+
 class HostSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     environment_display = serializers.SerializerMethodField()
@@ -46,17 +112,338 @@ class HostSerializer(serializers.ModelSerializer):
 
         business_line = business_line.strip()
         if business_line and not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
-            raise serializers.ValidationError({'business_line': '所选业务线未在资源树中配置'})
+            raise serializers.ValidationError({'business_line': '\u6240\u9009\u4e1a\u52a1\u7ebf\u672a\u5728\u8d44\u6e90\u6811\u4e2d\u914d\u7f6e'})
 
         if environment:
             if not business_line:
-                raise serializers.ValidationError({'environment': '请先选择业务线'})
+                raise serializers.ValidationError({'environment': '\u8bf7\u5148\u9009\u62e9\u4e1a\u52a1\u7ebf'})
             if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
-                raise serializers.ValidationError({'environment': '所选环境未在当前业务线下配置'})
+                raise serializers.ValidationError({'environment': '\u6240\u9009\u73af\u5883\u672a\u5728\u5f53\u524d\u4e1a\u52a1\u7ebf\u4e0b\u914d\u7f6e'})
 
         attrs['business_line'] = business_line
         return attrs
 
+
+class HostTaskExecutionSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = HostTaskExecution
+        fields = [
+            'id',
+            'host',
+            'host_name',
+            'host_ip',
+            'status',
+            'status_display',
+            'command',
+            'output',
+            'error_message',
+            'duration_ms',
+            'started_at',
+            'finished_at',
+            'created_at',
+        ]
+
+
+class HostTaskSerializer(serializers.ModelSerializer):
+    task_type_display = serializers.CharField(source='get_task_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    execution_mode_display = serializers.CharField(source='get_execution_mode_display', read_only=True)
+    trigger_source_display = serializers.CharField(source='get_trigger_source_display', read_only=True)
+    success_rate = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HostTask
+        fields = [
+            'id',
+            'name',
+            'task_type',
+            'task_type_display',
+            'execution_mode',
+            'execution_mode_display',
+            'trigger_source',
+            'trigger_source_display',
+            'status',
+            'status_display',
+            'description',
+            'payload',
+            'selection_filters',
+            'target_snapshot',
+            'execution_strategy',
+            'timeout_seconds',
+            'target_count',
+            'success_count',
+            'failed_count',
+            'skipped_count',
+            'success_rate',
+            'cancel_requested',
+            'cancel_requested_by',
+            'cancel_requested_at',
+            'created_by',
+            'summary',
+            'started_at',
+            'finished_at',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_success_rate(self, obj):
+        if not obj.target_count:
+            return 0
+        return round((obj.success_count / obj.target_count) * 100, 1)
+
+
+class HostTaskDetailSerializer(HostTaskSerializer):
+    executions = HostTaskExecutionSerializer(many=True, read_only=True)
+
+    class Meta(HostTaskSerializer.Meta):
+        fields = HostTaskSerializer.Meta.fields + ['executions']
+
+
+class HostTaskTemplateSerializer(serializers.ModelSerializer):
+    task_type_display = serializers.CharField(source='get_task_type_display', read_only=True)
+    execution_mode_display = serializers.CharField(source='get_execution_mode_display', read_only=True)
+
+    class Meta:
+        model = HostTaskTemplate
+        fields = [
+            'id',
+            'name',
+            'task_type',
+            'task_type_display',
+            'execution_mode',
+            'execution_mode_display',
+            'description',
+            'payload',
+            'execution_strategy',
+            'timeout_seconds',
+            'is_builtin',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['is_builtin', 'created_by', 'created_at', 'updated_at']
+
+    def validate_payload(self, value):
+        return normalize_json_object(value)
+
+    def validate(self, attrs):
+        task_type = attrs.get('task_type') or getattr(self.instance, 'task_type', '')
+        validate_host_task_payload(task_type, attrs.get('payload') or {})
+        if task_type == HostTask.TASK_RUN_PLAYBOOK:
+            attrs['execution_mode'] = HostTask.EXECUTION_MODE_ANSIBLE
+        return attrs
+
+
+class HostTaskSubmitSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=128)
+    task_type = serializers.ChoiceField(choices=HostTask.TASK_TYPE_CHOICES)
+    description = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    host_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+    payload = serializers.JSONField(required=False, default=dict)
+    selection_filters = serializers.JSONField(required=False, default=dict)
+    execution_mode = serializers.ChoiceField(choices=HostTask.EXECUTION_MODE_CHOICES, default=HostTask.EXECUTION_MODE_SSH)
+    execution_strategy = serializers.ChoiceField(choices=HostTask.STRATEGY_CHOICES, default=HostTask.STRATEGY_CONTINUE)
+    timeout_seconds = serializers.IntegerField(min_value=5, max_value=120, default=15)
+
+    def validate_host_ids(self, value):
+        deduplicated = list(dict.fromkeys(value))
+        if not deduplicated:
+            raise serializers.ValidationError('\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u53f0\u4e3b\u673a')
+        return deduplicated
+
+    def validate_payload(self, value):
+        return normalize_json_object(value)
+
+    def validate(self, attrs):
+        task_type = attrs.get('task_type')
+        validate_host_task_payload(task_type, attrs.get('payload') or {})
+        if task_type == HostTask.TASK_RUN_PLAYBOOK:
+            attrs['execution_mode'] = HostTask.EXECUTION_MODE_ANSIBLE
+        return attrs
+
+
+class HostTaskBatchCancelSerializer(serializers.Serializer):
+    ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+
+    def validate_ids(self, value):
+        deduplicated = list(dict.fromkeys(value))
+        if not deduplicated:
+            raise serializers.ValidationError('\u8bf7\u81f3\u5c11\u9009\u62e9\u4e00\u4e2a\u4efb\u52a1')
+        return deduplicated
+
+
+class HostTaskTargetSerializer(serializers.ModelSerializer):
+    environment_display = serializers.SerializerMethodField()
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = Host
+        fields = [
+            'id',
+            'hostname',
+            'ip_address',
+            'business_line',
+            'environment',
+            'environment_display',
+            'admin_user',
+            'os_type',
+            'status',
+            'status_display',
+        ]
+
+    def get_environment_display(self, obj):
+        return obj.get_environment_display() if obj.environment else ''
+
+
+class HostTaskScheduleExecutionSerializer(serializers.ModelSerializer):
+    schedule_name = serializers.CharField(source='schedule.name', read_only=True)
+    host_task_name = serializers.CharField(source='host_task.name', read_only=True)
+    trigger_source_display = serializers.CharField(source='get_trigger_source_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+
+    class Meta:
+        model = HostTaskScheduleExecution
+        fields = [
+            'id',
+            'schedule',
+            'schedule_name',
+            'host_task',
+            'host_task_name',
+            'trigger_source',
+            'trigger_source_display',
+            'status',
+            'status_display',
+            'summary',
+            'target_count',
+            'success_count',
+            'failed_count',
+            'skipped_count',
+            'error_message',
+            'requested_by',
+            'requested_at',
+            'started_at',
+            'finished_at',
+            'created_at',
+        ]
+
+
+class HostTaskScheduleSerializer(serializers.ModelSerializer):
+    task_type_display = serializers.CharField(source='get_task_type_display', read_only=True)
+    execution_mode_display = serializers.CharField(source='get_execution_mode_display', read_only=True)
+    schedule_type_display = serializers.CharField(source='get_schedule_type_display', read_only=True)
+    overlap_policy_display = serializers.CharField(source='get_overlap_policy_display', read_only=True)
+    last_status_display = serializers.SerializerMethodField()
+    next_runs_preview = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HostTaskSchedule
+        fields = [
+            'id',
+            'name',
+            'description',
+            'enabled',
+            'task_type',
+            'task_type_display',
+            'payload',
+            'selection_filters',
+            'target_host_ids',
+            'target_snapshot',
+            'target_count',
+            'execution_mode',
+            'execution_mode_display',
+            'execution_strategy',
+            'timeout_seconds',
+            'schedule_type',
+            'schedule_type_display',
+            'cron_expression',
+            'interval_seconds',
+            'run_at',
+            'timezone',
+            'overlap_policy',
+            'overlap_policy_display',
+            'next_run_at',
+            'next_runs_preview',
+            'last_run_at',
+            'last_status',
+            'last_status_display',
+            'consecutive_failures',
+            'total_run_count',
+            'last_error',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'target_snapshot',
+            'target_count',
+            'next_run_at',
+            'last_run_at',
+            'last_status',
+            'consecutive_failures',
+            'total_run_count',
+            'last_error',
+            'created_by',
+            'updated_by',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_last_status_display(self, obj):
+        return obj.get_last_status_display() if obj.last_status else ''
+
+    def get_next_runs_preview(self, obj):
+        return preview_next_runs(obj, count=3)
+
+    def validate_payload(self, value):
+        return normalize_json_object(value)
+
+    def validate_selection_filters(self, value):
+        return normalize_json_object(value)
+
+    def validate_target_host_ids(self, value):
+        return normalize_schedule_hosts(value)
+
+    def validate(self, attrs):
+        task_type = attrs.get('task_type') or getattr(self.instance, 'task_type', '')
+        validate_host_task_payload(task_type, attrs.get('payload') if 'payload' in attrs else getattr(self.instance, 'payload', {}))
+        if task_type == HostTask.TASK_RUN_PLAYBOOK:
+            attrs['execution_mode'] = HostTask.EXECUTION_MODE_ANSIBLE
+        return validate_schedule_definition(attrs, instance=self.instance)
+
+
+class HostTaskSchedulePreviewSerializer(serializers.Serializer):
+    task_type = serializers.ChoiceField(choices=HostTask.TASK_TYPE_CHOICES)
+    payload = serializers.JSONField(required=False, default=dict)
+    selection_filters = serializers.JSONField(required=False, default=dict)
+    target_host_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False, default=list)
+    execution_mode = serializers.ChoiceField(choices=HostTask.EXECUTION_MODE_CHOICES, default=HostTask.EXECUTION_MODE_SSH)
+    execution_strategy = serializers.ChoiceField(choices=HostTask.STRATEGY_CHOICES, default=HostTask.STRATEGY_CONTINUE)
+    timeout_seconds = serializers.IntegerField(min_value=5, max_value=300, default=15)
+    enabled = serializers.BooleanField(required=False, default=True)
+    schedule_type = serializers.ChoiceField(choices=HostTaskSchedule.SCHEDULE_TYPE_CHOICES)
+    cron_expression = serializers.CharField(required=False, allow_blank=True, default='')
+    interval_seconds = serializers.IntegerField(required=False, allow_null=True, min_value=60, max_value=2592000)
+    run_at = serializers.DateTimeField(required=False, allow_null=True)
+    timezone = serializers.CharField(required=False, allow_blank=True, default='Asia/Shanghai')
+    overlap_policy = serializers.ChoiceField(choices=HostTaskSchedule.OVERLAP_POLICY_CHOICES, default=HostTaskSchedule.OVERLAP_SKIP)
+
+    def validate_payload(self, value):
+        return normalize_json_object(value)
+
+    def validate_selection_filters(self, value):
+        return normalize_json_object(value)
+
+    def validate_target_host_ids(self, value):
+        return normalize_schedule_hosts(value)
+
+    def validate(self, attrs):
+        validate_host_task_payload(attrs.get('task_type'), attrs.get('payload') or {})
+        if attrs.get('task_type') == HostTask.TASK_RUN_PLAYBOOK:
+            attrs['execution_mode'] = HostTask.EXECUTION_MODE_ANSIBLE
+        return validate_schedule_definition(attrs)
 
 class DeploymentApprovalNodeSerializer(serializers.ModelSerializer):
     approver_type_display = serializers.CharField(source='get_approver_type_display', read_only=True)

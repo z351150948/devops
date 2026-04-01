@@ -6,42 +6,265 @@ from django.utils.text import slugify
 
 class Host(models.Model):
     ENV_CHOICES = [
-        ('prod', '生产'),
-        ('test', '测试'),
-        ('dev', '开发'),
+        ('prod', '\u751f\u4ea7'),
+        ('test', '\u6d4b\u8bd5'),
+        ('dev', '\u5f00\u53d1'),
     ]
 
     STATUS_CHOICES = [
-        ('online', '在线'),
-        ('offline', '离线'),
-        ('warning', '告警'),
+        ('online', '\u5728\u7ebf'),
+        ('offline', '\u79bb\u7ebf'),
+        ('warning', '\u544a\u8b66'),
     ]
 
-    hostname = models.CharField('主机名', max_length=128, unique=True)
-    ip_address = models.GenericIPAddressField('IP 地址')
-    business_line = models.CharField('业务线', max_length=50, blank=True, default='')
-    environment = models.CharField('环境', max_length=20, choices=ENV_CHOICES, blank=True, default='')
-    admin_user = models.CharField('负责人', max_length=50, blank=True, default='')
-    os_type = models.CharField('操作系统', max_length=64, default='Linux')
-    description = models.CharField('描述', max_length=200, blank=True, default='')
-    status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default='online')
-    cpu_usage = models.FloatField('CPU 使用率(%)', default=0)
-    memory_usage = models.FloatField('内存使用率(%)', default=0)
-    disk_usage = models.FloatField('磁盘使用率(%)', default=0)
-    ssh_port = models.IntegerField('SSH 端口', default=22)
-    ssh_user = models.CharField('SSH 用户', max_length=64, default='root')
-    ssh_password = models.CharField('SSH 密码', max_length=256, blank=True, default='')
-    created_at = models.DateTimeField('创建时间', auto_now_add=True)
-    updated_at = models.DateTimeField('更新时间', auto_now=True)
+    hostname = models.CharField('\u4e3b\u673a\u540d', max_length=128, unique=True)
+    ip_address = models.GenericIPAddressField('IP \u5730\u5740')
+    business_line = models.CharField('\u4e1a\u52a1\u7ebf', max_length=50, blank=True, default='')
+    environment = models.CharField('\u73af\u5883', max_length=20, choices=ENV_CHOICES, blank=True, default='')
+    admin_user = models.CharField('\u8d1f\u8d23\u4eba', max_length=50, blank=True, default='')
+    os_type = models.CharField('\u64cd\u4f5c\u7cfb\u7edf', max_length=64, default='Linux')
+    description = models.CharField('\u63cf\u8ff0', max_length=200, blank=True, default='')
+    status = models.CharField('\u72b6\u6001', max_length=16, choices=STATUS_CHOICES, default='online')
+    cpu_usage = models.FloatField('CPU \u4f7f\u7528\u7387(%)', default=0)
+    memory_usage = models.FloatField('\u5185\u5b58\u4f7f\u7528\u7387(%)', default=0)
+    disk_usage = models.FloatField('\u78c1\u76d8\u4f7f\u7528\u7387(%)', default=0)
+    ssh_port = models.IntegerField('SSH \u7aef\u53e3', default=22)
+    ssh_user = models.CharField('SSH \u7528\u6237', max_length=64, default='root')
+    ssh_password = models.CharField('SSH \u5bc6\u7801', max_length=256, blank=True, default='')
+    created_at = models.DateTimeField('\u521b\u5efa\u65f6\u95f4', auto_now_add=True)
+    updated_at = models.DateTimeField('\u66f4\u65b0\u65f6\u95f4', auto_now=True)
 
     class Meta:
-        verbose_name = '主机'
-        verbose_name_plural = '主机'
+        verbose_name = '\u4e3b\u673a'
+        verbose_name_plural = '\u4e3b\u673a'
         ordering = ['-created_at']
 
     def __str__(self):
         return f'{self.hostname} ({self.ip_address})'
 
+
+class HostTask(models.Model):
+    TASK_CHECK_CONNECTION = 'check_connection'
+    TASK_REFRESH_METRICS = 'refresh_metrics'
+    TASK_RUN_COMMAND = 'run_command'
+    TASK_SERVICE_STATUS = 'service_status'
+    TASK_RUN_PLAYBOOK = 'run_playbook'
+    TASK_TYPE_CHOICES = [
+        (TASK_CHECK_CONNECTION, 'SSH 连通性检查'),
+        (TASK_REFRESH_METRICS, '主机指标刷新'),
+        (TASK_RUN_COMMAND, '批量命令执行'),
+        (TASK_RUN_PLAYBOOK, 'Ansible Playbook 执行'),
+        (TASK_SERVICE_STATUS, '服务状态巡检'),
+    ]
+
+    STATUS_PENDING = 'pending'
+    STATUS_RUNNING = 'running'
+    STATUS_SUCCESS = 'success'
+    STATUS_PARTIAL = 'partial'
+    STATUS_FAILED = 'failed'
+    STATUS_CANCELED = 'canceled'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, '待执行'),
+        (STATUS_RUNNING, '执行中'),
+        (STATUS_SUCCESS, '执行成功'),
+        (STATUS_PARTIAL, '部分成功'),
+        (STATUS_FAILED, '执行失败'),
+        (STATUS_CANCELED, '已取消'),
+    ]
+
+    STRATEGY_CONTINUE = 'continue'
+    STRATEGY_STOP_ON_ERROR = 'stop_on_error'
+    STRATEGY_CHOICES = [
+        (STRATEGY_CONTINUE, '失败继续'),
+        (STRATEGY_STOP_ON_ERROR, '遇错停止'),
+    ]
+
+    EXECUTION_MODE_SSH = 'ssh'
+    EXECUTION_MODE_ANSIBLE = 'ansible'
+    EXECUTION_MODE_CHOICES = [
+        (EXECUTION_MODE_SSH, 'SSH'),
+        (EXECUTION_MODE_ANSIBLE, 'Ansible'),
+    ]
+
+    TRIGGER_SOURCE_MANUAL = 'manual'
+    TRIGGER_SOURCE_SCHEDULE = 'schedule'
+    TRIGGER_SOURCE_CHOICES = [
+        (TRIGGER_SOURCE_MANUAL, '手动触发'),
+        (TRIGGER_SOURCE_SCHEDULE, '定时触发'),
+    ]
+
+    name = models.CharField('任务名称', max_length=128)
+    task_type = models.CharField('任务类型', max_length=32, choices=TASK_TYPE_CHOICES)
+    status = models.CharField('任务状态', max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    description = models.CharField('任务说明', max_length=255, blank=True, default='')
+    payload = models.JSONField('任务载荷', default=dict, blank=True)
+    selection_filters = models.JSONField('筛选条件', default=dict, blank=True)
+    target_snapshot = models.JSONField('目标快照', default=list, blank=True)
+    execution_mode = models.CharField('执行方式', max_length=16, choices=EXECUTION_MODE_CHOICES, default=EXECUTION_MODE_SSH)
+    execution_strategy = models.CharField('执行策略', max_length=20, choices=STRATEGY_CHOICES, default=STRATEGY_CONTINUE)
+    timeout_seconds = models.PositiveIntegerField('超时(秒)', default=15)
+    target_count = models.PositiveIntegerField('目标数量', default=0)
+    success_count = models.PositiveIntegerField('成功数量', default=0)
+    failed_count = models.PositiveIntegerField('失败数量', default=0)
+    skipped_count = models.PositiveIntegerField('跳过数量', default=0)
+    cancel_requested = models.BooleanField('已请求取消', default=False)
+    cancel_requested_by = models.CharField('取消发起人', max_length=64, blank=True, default='')
+    cancel_requested_at = models.DateTimeField('取消时间', null=True, blank=True)
+    schedule = models.ForeignKey('HostTaskSchedule', on_delete=models.SET_NULL, null=True, blank=True, related_name='generated_tasks', verbose_name='来源编排')
+    trigger_source = models.CharField('触发来源', max_length=16, choices=TRIGGER_SOURCE_CHOICES, default=TRIGGER_SOURCE_MANUAL)
+    created_by = models.CharField('创建人', max_length=64, default='system')
+    summary = models.CharField('执行摘要', max_length=255, blank=True, default='')
+    started_at = models.DateTimeField('开始时间', null=True, blank=True)
+    finished_at = models.DateTimeField('完成时间', null=True, blank=True)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '主机任务'
+        verbose_name_plural = '主机任务'
+        ordering = ['-created_at', '-id']
+
+    def __str__(self):
+        return self.name
+
+
+class HostTaskTemplate(models.Model):
+    name = models.CharField('模板名称', max_length=128)
+    task_type = models.CharField('任务类型', max_length=32, choices=HostTask.TASK_TYPE_CHOICES)
+    description = models.CharField('模板说明', max_length=255, blank=True, default='')
+    payload = models.JSONField('模板载荷', default=dict, blank=True)
+    execution_mode = models.CharField('执行方式', max_length=16, choices=HostTask.EXECUTION_MODE_CHOICES, default=HostTask.EXECUTION_MODE_SSH)
+    execution_strategy = models.CharField('执行策略', max_length=20, choices=HostTask.STRATEGY_CHOICES, default=HostTask.STRATEGY_CONTINUE)
+    timeout_seconds = models.PositiveIntegerField('超时(秒)', default=15)
+    is_builtin = models.BooleanField('系统内置', default=False)
+    created_by = models.CharField('创建人', max_length=64, blank=True, default='system')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '任务模板'
+        verbose_name_plural = '任务模板'
+        ordering = ['-is_builtin', 'name', '-id']
+
+    def __str__(self):
+        return self.name
+
+
+class HostTaskSchedule(models.Model):
+    SCHEDULE_TYPE_ONCE = 'once'
+    SCHEDULE_TYPE_INTERVAL = 'interval'
+    SCHEDULE_TYPE_CRON = 'cron'
+    SCHEDULE_TYPE_CHOICES = [
+        (SCHEDULE_TYPE_ONCE, '单次执行'),
+        (SCHEDULE_TYPE_INTERVAL, '间隔执行'),
+        (SCHEDULE_TYPE_CRON, 'Cron 表达式'),
+    ]
+
+    OVERLAP_SKIP = 'skip'
+    OVERLAP_ALLOW = 'allow'
+    OVERLAP_POLICY_CHOICES = [
+        (OVERLAP_SKIP, '跳过重叠执行'),
+        (OVERLAP_ALLOW, '允许重叠执行'),
+    ]
+
+    name = models.CharField('编排名称', max_length=128)
+    description = models.CharField('编排说明', max_length=255, blank=True, default='')
+    enabled = models.BooleanField('启用状态', default=True)
+    task_type = models.CharField('任务类型', max_length=32, choices=HostTask.TASK_TYPE_CHOICES)
+    payload = models.JSONField('任务载荷', default=dict, blank=True)
+    selection_filters = models.JSONField('筛选条件', default=dict, blank=True)
+    target_host_ids = models.JSONField('指定主机列表', default=list, blank=True)
+    target_snapshot = models.JSONField('目标快照', default=list, blank=True)
+    target_count = models.PositiveIntegerField('目标数量', default=0)
+    execution_mode = models.CharField('执行方式', max_length=16, choices=HostTask.EXECUTION_MODE_CHOICES, default=HostTask.EXECUTION_MODE_SSH)
+    execution_strategy = models.CharField('执行策略', max_length=20, choices=HostTask.STRATEGY_CHOICES, default=HostTask.STRATEGY_CONTINUE)
+    timeout_seconds = models.PositiveIntegerField('超时(秒)', default=15)
+    schedule_type = models.CharField('调度类型', max_length=16, choices=SCHEDULE_TYPE_CHOICES, default=SCHEDULE_TYPE_CRON)
+    cron_expression = models.CharField('Cron 表达式', max_length=64, blank=True, default='')
+    interval_seconds = models.PositiveIntegerField('间隔秒数', null=True, blank=True)
+    run_at = models.DateTimeField('执行时间', null=True, blank=True)
+    timezone = models.CharField('时区', max_length=64, default='Asia/Shanghai')
+    overlap_policy = models.CharField('重叠策略', max_length=16, choices=OVERLAP_POLICY_CHOICES, default=OVERLAP_SKIP)
+    next_run_at = models.DateTimeField('下次执行时间', null=True, blank=True)
+    last_run_at = models.DateTimeField('上次执行时间', null=True, blank=True)
+    last_status = models.CharField('上次状态', max_length=16, choices=HostTask.STATUS_CHOICES, blank=True, default='')
+    consecutive_failures = models.PositiveIntegerField('连续失败次数', default=0)
+    total_run_count = models.PositiveIntegerField('累计执行次数', default=0)
+    last_error = models.CharField('最近错误', max_length=255, blank=True, default='')
+    created_by = models.CharField('创建人', max_length=64, default='system')
+    updated_by = models.CharField('更新人', max_length=64, blank=True, default='')
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '定时编排'
+        verbose_name_plural = '定时编排'
+        ordering = ['-enabled', 'next_run_at', '-id']
+
+    def __str__(self):
+        return self.name
+
+
+class HostTaskScheduleExecution(models.Model):
+    TRIGGER_SCHEDULER = 'scheduler'
+    TRIGGER_MANUAL = 'manual'
+    TRIGGER_SOURCE_CHOICES = [
+        (TRIGGER_SCHEDULER, '自动调度'),
+        (TRIGGER_MANUAL, '手动执行'),
+    ]
+
+    schedule = models.ForeignKey(HostTaskSchedule, on_delete=models.CASCADE, related_name='executions', verbose_name='编排')
+    host_task = models.OneToOneField(HostTask, on_delete=models.SET_NULL, null=True, blank=True, related_name='schedule_execution', verbose_name='关联任务')
+    trigger_source = models.CharField('触发来源', max_length=16, choices=TRIGGER_SOURCE_CHOICES, default=TRIGGER_SCHEDULER)
+    status = models.CharField('执行状态', max_length=16, choices=HostTask.STATUS_CHOICES, default=HostTask.STATUS_PENDING)
+    summary = models.CharField('执行摘要', max_length=255, blank=True, default='')
+    target_count = models.PositiveIntegerField('目标数量', default=0)
+    success_count = models.PositiveIntegerField('成功数量', default=0)
+    failed_count = models.PositiveIntegerField('失败数量', default=0)
+    skipped_count = models.PositiveIntegerField('跳过数量', default=0)
+    error_message = models.CharField('错误信息', max_length=255, blank=True, default='')
+    requested_by = models.CharField('发起人', max_length=64, default='system')
+    requested_at = models.DateTimeField('发起时间', auto_now_add=True)
+    started_at = models.DateTimeField('开始时间', null=True, blank=True)
+    finished_at = models.DateTimeField('完成时间', null=True, blank=True)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+
+    class Meta:
+        verbose_name = '编排执行记录'
+        verbose_name_plural = '编排执行记录'
+        ordering = ['-requested_at', '-id']
+
+    def __str__(self):
+        return f'{self.schedule.name} / {self.requested_at:%Y-%m-%d %H:%M:%S}'
+
+
+class HostTaskExecution(models.Model):
+    STATUS_CHOICES = [
+        ('success', '成功'),
+        ('failed', '失败'),
+        ('skipped', '跳过'),
+    ]
+
+    task = models.ForeignKey(HostTask, on_delete=models.CASCADE, related_name='executions', verbose_name='任务')
+    host = models.ForeignKey(Host, on_delete=models.SET_NULL, null=True, blank=True, related_name='task_executions', verbose_name='主机')
+    host_name = models.CharField('主机名', max_length=128, default='')
+    host_ip = models.GenericIPAddressField('主机 IP')
+    status = models.CharField('执行状态', max_length=16, choices=STATUS_CHOICES, default='success')
+    command = models.TextField('执行命令', blank=True, default='')
+    output = models.TextField('执行输出', blank=True, default='')
+    error_message = models.TextField('错误信息', blank=True, default='')
+    duration_ms = models.PositiveIntegerField('耗时(毫秒)', default=0)
+    started_at = models.DateTimeField('开始时间', null=True, blank=True)
+    finished_at = models.DateTimeField('完成时间', null=True, blank=True)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+
+    class Meta:
+        verbose_name = '主机执行记录'
+        verbose_name_plural = '主机执行记录'
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.host_name} - {self.task.name}'
 
 class Deployment(models.Model):
     DEPLOY_MODE_CHOICES = [

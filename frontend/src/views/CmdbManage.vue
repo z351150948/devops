@@ -4,6 +4,11 @@
       <h2>🗄️ CMDB 资产管理</h2>
     </div>
 
+    <div v-if="canViewHosts" class="cmdb-host-entry-strip">
+      <span>主机资产与任务调度已升级为一级菜单，CMDB 继续负责资产关系、拓扑和成本视图。</span>
+      <el-button link type="primary" @click="router.push('/hosts/assets')">进入主机中心</el-button>
+    </div>
+
     <!-- 主 Tab 栏 (Pill Tab Theme: Purple) -->
     <div class="neo-tabs theme-purple">
       <button v-for="tab in mainTabs" :key="tab.key" class="neo-tab-btn" :class="{ active: activeTab === tab.key }" @click="switchTab(tab.key)">
@@ -136,21 +141,6 @@
         <el-pagination size="small" background layout="prev,pager,next" :total="itemsTotal" :page-size="20" v-model:current-page="itemsPage" @current-change="fetchItems" />
       </div>
       </div>
-    </div>
-
-    <!-- ============ Tab 2: 主机管理 ============ -->
-    <div v-if="activeTab === 'host-manage'" class="tab-content">
-      <el-tabs v-model="activeHostTab" class="host-manage-tabs">
-        <el-tab-pane
-          v-for="tab in hostManageTabs"
-          :key="tab.key"
-          :label="tab.label"
-          :name="tab.key"
-        >
-          <CmdbHostsPanel v-if="tab.key === 'assets'" :resource-tree="resourceTree" />
-          <CmdbRequestsPanel v-else-if="tab.key === 'requests'" :resource-tree="resourceTree" />
-        </el-tab-pane>
-      </el-tabs>
     </div>
 
     <div v-if="activeTab === 'topology'" class="tab-content">
@@ -706,8 +696,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, CircleCheck, Files, Monitor, Edit, Delete, Connection } from '@element-plus/icons-vue'
 import CmdbTopologyPanel from '@/components/cmdb/CmdbTopologyPanel.vue'
-import CmdbHostsPanel from '@/components/cmdb/CmdbHostsPanel.vue'
-import CmdbRequestsPanel from '@/components/cmdb/CmdbRequestsPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   getCITypes, createCIType, deleteCIType,
@@ -716,7 +704,6 @@ import {
   getCmdbCostReport, getCmdbOptimization,
   getResourceNodeTree, createResourceNode, updateResourceNode, deleteResourceNode
 } from '@/api/modules/cmdb'
-import { getHosts, createHost, updateHost, deleteHost, testHostConnection, refreshHostInfo } from '@/api/modules/ops'
 
 const route = useRoute()
 const router = useRouter()
@@ -727,39 +714,23 @@ const canViewTopology = computed(() => authStore.hasPermission('cmdb.topology.vi
 const canViewCost = computed(() => authStore.hasPermission('cmdb.cost.view'))
 const canSubmitRequests = computed(() => authStore.hasPermission('cmdb.request.submit'))
 const canApproveRequests = computed(() => authStore.hasPermission('cmdb.request.approve'))
-const canViewHosts = computed(() => authStore.hasAnyPermission(['ops.host.view', 'ops.host.manage', 'ops.host.terminal']))
-const hostManageTabs = computed(() => [
-  canViewHosts.value && { key: 'assets', label: '主机资产', icon: 'Monitor' },
-  (canSubmitRequests.value || canApproveRequests.value) && { key: 'requests', label: '主机申请', icon: 'Ticket' },
-].filter(Boolean))
+const canViewHosts = computed(() => authStore.hasAnyPermission(['ops.host.view', 'ops.host.manage', 'ops.host.terminal', 'ops.host.execute']))
 
 const mainTabs = computed(() => [
   canViewCi.value && { key: 'items', label: '配置项管理', icon: 'Grid' },
-  hostManageTabs.value.length && { key: 'host-manage', label: '主机管理', icon: 'Monitor' },
   canViewTopology.value && { key: 'topology', label: '资源地图', icon: 'Share' },
   canViewCost.value && { key: 'cost', label: '成本分析', icon: 'TrendCharts' },
   canViewCost.value && { key: 'optimize', label: '资源优化', icon: 'Lightning' },
 ].filter(Boolean))
 
 const activeTab = ref('items')
-const activeHostTab = ref('assets')
 
 function getDefaultTab() {
   return mainTabs.value[0]?.key || 'items'
 }
 
-function getDefaultHostTab() {
-  return hostManageTabs.value[0]?.key || 'assets'
-}
-
 function normalizeTab(tab) {
-  const normalizedTab = tab === 'hosts' || tab === 'requests' ? 'host-manage' : tab
-  return mainTabs.value.some(item => item.key === normalizedTab) ? normalizedTab : getDefaultTab()
-}
-
-function normalizeHostTab(tab) {
-  const normalizedTab = tab === 'hosts' ? 'assets' : tab
-  return hostManageTabs.value.some(item => item.key === normalizedTab) ? normalizedTab : getDefaultHostTab()
+  return mainTabs.value.some(item => item.key === tab) ? tab : getDefaultTab()
 }
 const loading = ref(false)
 const saving = ref(false)
@@ -1465,48 +1436,41 @@ function switchTab(tab) {
 function syncTabStateFromRoute() {
   if (!mainTabs.value.length) return
   const routeTab = typeof route.query.tab === 'string' ? route.query.tab : ''
-  const nextTab = normalizeTab(routeTab || activeTab.value)
   const routeHostTab = typeof route.query.hostTab === 'string' ? route.query.hostTab : ''
-  const nextHostTab = normalizeHostTab(
-    routeTab === 'hosts' || routeTab === 'requests'
-      ? routeTab
-      : (routeHostTab || activeHostTab.value)
-  )
+  if (routeTab === 'host-manage' || routeTab === 'hosts' || routeTab === 'requests') {
+    const legacyTarget = routeTab === 'requests'
+      ? '/hosts/requests'
+      : routeHostTab === 'task-center'
+        ? '/hosts/tasks'
+        : routeHostTab === 'requests'
+          ? '/hosts/requests'
+          : '/hosts/assets'
+    router.replace(legacyTarget)
+    return
+  }
+  const nextTab = normalizeTab(routeTab || activeTab.value)
 
   if (activeTab.value !== nextTab) {
     activeTab.value = nextTab
   }
-  if (activeHostTab.value !== nextHostTab) {
-    activeHostTab.value = nextHostTab
-  }
 
   const query = { ...route.query, tab: nextTab }
-  if (nextTab === 'host-manage') {
-    query.hostTab = nextHostTab
-  } else {
-    delete query.hostTab
-  }
+  delete query.hostTab
 
-  if (route.query.tab !== query.tab || route.query.hostTab !== query.hostTab) {
+  if (route.query.tab !== query.tab || route.query.hostTab) {
     router.replace({ query })
   }
 }
 
-watch([mainTabs, hostManageTabs], syncTabStateFromRoute, { immediate: true })
+watch(mainTabs, syncTabStateFromRoute, { immediate: true })
 watch(() => route.query.tab, syncTabStateFromRoute)
-watch(() => route.query.hostTab, syncTabStateFromRoute)
 
-watch([activeTab, activeHostTab], ([tab, hostTab]) => {
+watch(activeTab, (tab) => {
   if (!tab) return
   const nextTab = normalizeTab(tab)
-  const nextHostTab = normalizeHostTab(hostTab)
   const query = { ...route.query, tab: nextTab }
-  if (nextTab === 'host-manage') {
-    query.hostTab = nextHostTab
-  } else {
-    delete query.hostTab
-  }
-  if (route.query.tab !== query.tab || route.query.hostTab !== query.hostTab) {
+  delete query.hostTab
+  if (route.query.tab !== query.tab || route.query.hostTab) {
     router.replace({ query })
   }
   loadTabData(nextTab)
@@ -1527,8 +1491,19 @@ onMounted(() => {
 .tree-actions { opacity: 0; transition: opacity 0.2s; }
 .el-tree-node__content:hover .tree-actions { opacity: 1; }
 .cmdb-items-layout { display: flex; gap: 16px; }
-.host-manage-tabs { margin-top: -8px; }
-.host-manage-tabs :deep(.el-tabs__header) { margin-bottom: 8px; }
+.cmdb-host-entry-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
 .cmdb-resource-tree-panel {
   width: 188px;
   flex: 0 0 188px;

@@ -3,6 +3,10 @@
     ('ops.host.view', '查看主机', 'ops', '查看主机列表与详情'),
     ('ops.host.manage', '管理主机', 'ops', '新增、编辑、删除、测试、刷新主机'),
     ('ops.host.terminal', '使用 WebShell', 'ops', '通过浏览器进入主机终端'),
+    ('ops.host.execute', '执行主机任务', 'ops', '通过任务中心批量执行主机巡检与运维命令'),
+    ('ops.host.schedule.view', '查看定时任务', 'ops', '查看主机定时编排、执行记录与下次执行时间'),
+    ('ops.host.schedule.manage', '管理定时任务', 'ops', '创建、编辑、启停和删除主机定时编排'),
+    ('ops.host.schedule.execute', '执行定时任务', 'ops', '手动触发主机定时编排并复用 SSH/Ansible 执行链路'),
     ('ops.deployment.view', '查看应用发布', 'ops', '查看公司应用发布记录、状态与日志'),
     ('ops.deployment.manage', '管理应用发布', 'ops', '创建发布申请、重试、回滚、启停和下线应用'),
     ('ops.deployment.approve', '审批应用发布', 'ops', '审批通过或驳回应用发布申请'),
@@ -70,7 +74,8 @@ BUILTIN_ROLES = [
         'name': '运维管理员',
         'description': '负责主机、部署、容器、Nginx、日志与 CMDB 维护。',
         'permissions': [
-            'ops.dashboard.view', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal',
+            'ops.dashboard.view', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal', 'ops.host.execute',
+            'ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute',
             'ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve', 'ops.alert.view', 'ops.alert.manage',
             'ops.log.entry.view', 'ops.log.datasource.view', 'ops.log.datasource.manage', 'ops.log.query',
             'ops.trace.view', 'ops.grafana.view',
@@ -89,7 +94,7 @@ BUILTIN_ROLES = [
         'name': '研发工程师',
         'description': '可查看环境信息、日志并提交 SQL 与资源申请。',
         'permissions': [
-            'ops.dashboard.view', 'ops.host.view', 'ops.deployment.view', 'ops.alert.view',
+            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.alert.view',
             'ops.log.query', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.middleware.view',
             'ops.iac.view', 'ops.iac.manage', 'ops.iac.execute', 'ops.multicloud.view',
             'cmdb.dashboard.view', 'cmdb.ci.view',
@@ -113,7 +118,7 @@ BUILTIN_ROLES = [
         'name': '只读访客',
         'description': '只能浏览各模块的只读信息。',
         'permissions': [
-            'ops.dashboard.view', 'ops.host.view', 'ops.deployment.view', 'ops.alert.view',
+            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.alert.view',
             'ops.log.entry.view', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.k8s.view', 'ops.docker.view',
             'ops.middleware.view', 'ops.nginx.view', 'ops.iac.view', 'ops.multicloud.view',
             'cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view',

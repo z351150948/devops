@@ -1,0 +1,354 @@
+﻿<template>
+  <div class="schedule-center-page">
+    <div class="inner-tabs">
+      <button v-for="tab in innerTabs" :key="tab.key" class="inner-tab-btn" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">
+        <span class="inner-tab-title">{{ tab.label }}</span>
+        <span class="inner-tab-desc">{{ tab.desc }}</span>
+      </button>
+    </div>
+
+    <template v-if="activeTab === 'planner'">
+      <div class="planner-grid">
+        <div class="glass-card side-card">
+          <div class="card-head compact-head">
+            <span>常用编排</span>
+            <el-tag size="small" type="info">快速起步</el-tag>
+          </div>
+          <div class="preset-grid">
+            <button v-for="preset in presets" :key="preset.key" class="preset-card" :class="{ active: scheduleForm.preset_key === preset.key }" @click="applyPreset(preset)">
+              <div class="preset-title">{{ preset.title }}</div>
+              <div class="preset-desc">{{ preset.desc }}</div>
+            </button>
+          </div>
+          <div class="mini-panel">
+            <div class="mini-panel-title">运行提示</div>
+            <div class="mini-bullet">到点后会自动创建真实主机任务，沿用 SSH / Ansible 执行链路。</div>
+            <div class="mini-bullet">调度器命令：`python manage.py run_host_task_scheduler`。</div>
+            <div class="mini-bullet">高风险任务建议启用“跳过重叠执行”。</div>
+          </div>
+        </div>
+
+        <div class="glass-card main-card">
+          <div class="card-head">
+            <span>{{ editingId ? '编辑定时编排' : '新建定时编排' }}</span>
+            <div class="head-actions">
+              <el-tag size="small" type="info">命中 {{ previewState.target_count || 0 }} 台</el-tag>
+              <el-button v-if="editingId" size="small" @click="resetEditor">新建编排</el-button>
+            </div>
+          </div>
+          <div class="task-inline-tip">定时任务不会直接连主机，而是在触发时创建真实任务，任务历史和明细链路保持一致。</div>
+
+          <el-form :model="scheduleForm" label-width="92px" class="task-form">
+            <div class="form-row">
+              <el-form-item label="编排名称" class="form-col"><el-input v-model="scheduleForm.name" placeholder="例如：生产主机夜间健康巡检" /></el-form-item>
+              <el-form-item label="任务类型" class="form-col">
+                <el-select v-model="scheduleForm.task_type" style="width:100%" @change="handleTaskTypeChange">
+                  <el-option v-for="option in taskTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <el-form-item label="编排说明"><el-input v-model="scheduleForm.description" placeholder="写明执行窗口、用途和预期结果" /></el-form-item>
+            <div class="form-row">
+              <el-form-item label="执行方式" class="form-col">
+                <el-select v-model="scheduleForm.execution_mode" style="width:100%" :disabled="scheduleForm.task_type === 'run_playbook'">
+                  <el-option label="SSH 直连" value="ssh" />
+                  <el-option label="Ansible 分发" value="ansible" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="执行策略" class="form-col">
+                <el-radio-group v-model="scheduleForm.execution_strategy">
+                  <el-radio label="continue">失败继续</el-radio>
+                  <el-radio label="stop_on_error">失败即停</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </div>
+
+            <el-form-item v-if="scheduleForm.task_type === 'run_command'" label="执行命令">
+              <el-input v-model="scheduleForm.payload.command" type="textarea" :rows="5" placeholder="例如：uptime && df -h && free -m" />
+            </el-form-item>
+            <template v-else-if="scheduleForm.task_type === 'run_playbook'">
+              <div class="form-row">
+                <el-form-item label="Playbook 名称" class="form-col"><el-input v-model="scheduleForm.payload.playbook_name" placeholder="例如：nightly-check.yml" /></el-form-item>
+                <el-form-item label="超时(秒)" class="form-col"><el-input-number v-model="scheduleForm.timeout_seconds" :min="5" :max="300" style="width:100%" /></el-form-item>
+              </div>
+              <el-form-item label="Playbook 内容"><el-input v-model="scheduleForm.payload.playbook_content" type="textarea" :rows="9" placeholder="- hosts: targets&#10;  gather_facts: false&#10;  tasks: []" /></el-form-item>
+            </template>
+            <div v-else-if="scheduleForm.task_type === 'service_status'" class="form-row">
+              <el-form-item label="服务名称" class="form-col"><el-input v-model="scheduleForm.payload.service_name" placeholder="例如 nginx / docker / sshd" /></el-form-item>
+              <el-form-item label="超时(秒)" class="form-col"><el-input-number v-model="scheduleForm.timeout_seconds" :min="5" :max="120" style="width:100%" /></el-form-item>
+            </div>
+            <div v-else class="form-row">
+              <el-form-item label="超时(秒)" class="form-col"><el-input-number v-model="scheduleForm.timeout_seconds" :min="5" :max="120" style="width:100%" /></el-form-item>
+              <el-form-item label="方式说明" class="form-col"><div class="compact-kv">{{ executionModeHint }}</div></el-form-item>
+            </div>
+            <div v-if="scheduleForm.task_type === 'run_command'" class="form-row">
+              <el-form-item label="超时(秒)" class="form-col"><el-input-number v-model="scheduleForm.timeout_seconds" :min="5" :max="120" style="width:100%" /></el-form-item>
+              <el-form-item label="方式说明" class="form-col"><div class="compact-kv">{{ executionModeHint }}</div></el-form-item>
+            </div>
+
+            <el-divider content-position="left">调度规则</el-divider>
+            <div class="form-row">
+              <el-form-item label="调度类型" class="form-col">
+                <el-select v-model="scheduleForm.schedule_type" style="width:100%">
+                  <el-option label="Cron 表达式" value="cron" />
+                  <el-option label="固定间隔" value="interval" />
+                  <el-option label="单次执行" value="once" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="时区" class="form-col">
+                <el-select v-model="scheduleForm.timezone" style="width:100%">
+                  <el-option label="Asia/Shanghai" value="Asia/Shanghai" />
+                  <el-option label="UTC" value="UTC" />
+                </el-select>
+              </el-form-item>
+            </div>
+            <div v-if="scheduleForm.schedule_type === 'cron'" class="form-row">
+              <el-form-item label="Cron 表达式" class="form-col"><el-input v-model="scheduleForm.cron_expression" placeholder="例如：0 2 * * *" /></el-form-item>
+              <el-form-item label="重叠策略" class="form-col">
+                <el-radio-group v-model="scheduleForm.overlap_policy">
+                  <el-radio label="skip">跳过重叠执行</el-radio>
+                  <el-radio label="allow">允许并发执行</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </div>
+            <div v-else-if="scheduleForm.schedule_type === 'interval'" class="form-row">
+              <el-form-item label="间隔秒数" class="form-col"><el-input-number v-model="scheduleForm.interval_seconds" :min="60" :max="2592000" style="width:100%" /></el-form-item>
+              <el-form-item label="首次执行" class="form-col"><el-date-picker v-model="scheduleForm.run_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" style="width:100%" placeholder="留空则从当前时间开始计算" /></el-form-item>
+            </div>
+            <div v-else class="form-row">
+              <el-form-item label="执行时间" class="form-col"><el-date-picker v-model="scheduleForm.run_at" type="datetime" value-format="YYYY-MM-DDTHH:mm:ss" style="width:100%" placeholder="请选择单次执行时间" /></el-form-item>
+              <el-form-item label="启用状态" class="form-col"><el-switch v-model="scheduleForm.enabled" inline-prompt active-text="启用" inactive-text="停用" /></el-form-item>
+            </div>
+            <div v-if="scheduleForm.schedule_type !== 'once'" class="form-row">
+              <el-form-item label="启用状态" class="form-col"><el-switch v-model="scheduleForm.enabled" inline-prompt active-text="启用" inactive-text="停用" /></el-form-item>
+              <el-form-item label="重叠策略" class="form-col">
+                <el-radio-group v-model="scheduleForm.overlap_policy">
+                  <el-radio label="skip">跳过重叠执行</el-radio>
+                  <el-radio label="allow">允许并发执行</el-radio>
+                </el-radio-group>
+              </el-form-item>
+            </div>
+
+            <div class="preview-strip">
+              <div class="preview-card"><span class="preview-label">下次触发</span><strong>{{ formatDateTime(previewState.next_run_at) }}</strong></div>
+              <div class="preview-card"><span class="preview-label">命中主机</span><strong>{{ previewState.target_count || 0 }} 台</strong></div>
+              <div class="preview-card wide"><span class="preview-label">未来 5 次</span><strong>{{ previewListText }}</strong></div>
+            </div>
+
+            <el-divider content-position="left">目标主机</el-divider>
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <el-input v-model="targetFilters.search" clearable placeholder="搜索主机名 / IP" style="width:220px" @keyup.enter="fetchTargets"><template #prefix><el-icon><Search /></el-icon></template></el-input>
+                <el-select v-model="targetFilters.business_line" clearable filterable placeholder="业务线" style="width:140px" @change="handleBusinessChange"><el-option v-for="node in bizNodes" :key="node.id" :label="node.name" :value="node.name" /></el-select>
+                <el-select v-model="targetFilters.environment" clearable placeholder="环境" style="width:120px" :disabled="!targetFilters.business_line"><el-option v-for="env in currentEnvOptions" :key="env.id" :label="env.name" :value="env.name" /></el-select>
+                <el-select v-model="targetFilters.status" clearable placeholder="状态" style="width:110px"><el-option v-for="option in hostStatusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
+              </div>
+              <div class="toolbar-right">
+                <el-button size="small" @click="fetchTargets">查询主机</el-button>
+                <el-button size="small" @click="resetTargetFilters">重置筛选</el-button>
+                <el-button size="small" @click="selectAllCurrent">全选当前</el-button>
+                <el-button size="small" @click="clearSelection">清空选择</el-button>
+              </div>
+            </div>
+            <div v-if="selectedHostIds.length" class="selection-strip">
+              <span class="selection-pill">已选 {{ selectedHostIds.length }} 台</span>
+              <span class="selection-pill success">在线 {{ selectedStats.online }}</span>
+              <span class="selection-pill warning">告警 {{ selectedStats.warning }}</span>
+              <span class="selection-pill danger">离线 {{ selectedStats.offline }}</span>
+            </div>
+            <el-table ref="hostTableRef" :data="availableHosts" v-loading="targetLoading" row-key="id" max-height="300" @selection-change="handleSelectionChange">
+              <el-table-column type="selection" width="44" reserve-selection />
+              <el-table-column prop="hostname" label="主机名" min-width="140" />
+              <el-table-column prop="ip_address" label="IP 地址" width="140" />
+              <el-table-column prop="business_line" label="业务线" width="120" />
+              <el-table-column prop="environment_display" label="环境" width="90" />
+              <el-table-column prop="status_display" label="状态" width="90" />
+            </el-table>
+            <div class="submit-row">
+              <div class="submit-tip">建议保存前先预览一次规则，确认时间表达式和目标主机范围。</div>
+              <div class="submit-actions">
+                <el-button :loading="previewLoading" @click="runPreview">预览规则</el-button>
+                <el-button :loading="saving" type="primary" @click="submitSchedule">{{ editingId ? '保存变更' : '创建编排' }}</el-button>
+              </div>
+            </div>
+          </el-form>
+        </div>
+      </div>
+    </template>
+    <template v-else-if="activeTab === 'list'">
+      <div class="glass-card">
+        <div class="card-head">
+          <span>编排列表</span>
+          <div class="head-actions">
+            <el-tag size="small" type="info">总计 {{ scheduleTotal }}</el-tag>
+            <el-button size="small" @click="fetchSchedules">刷新</el-button>
+          </div>
+        </div>
+        <div class="toolbar history-toolbar">
+          <div class="toolbar-left">
+            <el-input v-model="scheduleFilters.search" clearable placeholder="搜索编排名称 / 说明" style="width:220px" @keyup.enter="fetchSchedules"><template #prefix><el-icon><Search /></el-icon></template></el-input>
+            <el-select v-model="scheduleFilters.schedule_type" clearable placeholder="调度类型" style="width:130px" @change="fetchSchedules"><el-option label="Cron 表达式" value="cron" /><el-option label="固定间隔" value="interval" /><el-option label="单次执行" value="once" /></el-select>
+            <el-select v-model="scheduleFilters.enabled" clearable placeholder="启用状态" style="width:130px" @change="fetchSchedules"><el-option label="已启用" value="true" /><el-option label="已停用" value="false" /></el-select>
+          </div>
+          <div class="toolbar-right"><el-button size="small" @click="resetScheduleFilters">重置筛选</el-button></div>
+        </div>
+        <el-table :data="schedules" v-loading="scheduleLoading" row-key="id">
+          <el-table-column prop="name" label="编排名称" min-width="180" />
+          <el-table-column prop="task_type_display" label="任务类型" width="150" />
+          <el-table-column prop="schedule_type_display" label="调度类型" width="110" />
+          <el-table-column label="执行方式" width="110"><template #default="{ row }">{{ executionModeLabel(row.execution_mode, row.execution_mode_display) }}</template></el-table-column>
+          <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '已启用' : '已停用' }}</el-tag></template></el-table-column>
+          <el-table-column prop="target_count" label="目标数" width="82" />
+          <el-table-column label="下次执行" width="170"><template #default="{ row }">{{ formatDateTime(row.next_run_at) }}</template></el-table-column>
+          <el-table-column label="最近结果" width="110"><template #default="{ row }"><el-tag v-if="row.last_status" size="small" :type="statusTagType(row.last_status)">{{ row.last_status_display }}</el-tag><span v-else>-</span></template></el-table-column>
+          <el-table-column prop="total_run_count" label="累计执行" width="92" />
+          <el-table-column prop="description" label="说明" min-width="220" show-overflow-tooltip />
+          <el-table-column label="操作" width="280" fixed="right"><template #default="{ row }"><el-button link type="primary" size="small" @click="editSchedule(row)">编辑</el-button><el-button link size="small" @click="toggleSchedule(row)">{{ row.enabled ? '停用' : '启用' }}</el-button><el-button link type="success" size="small" @click="runNow(row)">立即执行</el-button><el-button link type="danger" size="small" @click="removeSchedule(row)">删除</el-button></template></el-table-column>
+        </el-table>
+        <div class="pagination-row"><el-pagination v-model:current-page="schedulePage" :page-size="20" :total="scheduleTotal" layout="total, prev, pager, next" @current-change="fetchSchedules" /></div>
+      </div>
+    </template>
+
+    <template v-else>
+      <div class="glass-card history-card">
+        <div class="card-head">
+          <span>执行记录</span>
+          <div class="head-actions">
+            <el-tag size="small" type="info">近 7 天自动与手动触发记录</el-tag>
+            <el-button size="small" @click="fetchExecutions">刷新</el-button>
+          </div>
+        </div>
+        <div class="toolbar history-toolbar">
+          <div class="toolbar-left">
+            <el-input v-model="executionFilters.search" clearable placeholder="搜索编排 / 触发人 / 摘要" style="width:240px" @keyup.enter="fetchExecutions"><template #prefix><el-icon><Search /></el-icon></template></el-input>
+            <el-select v-model="executionFilters.status" clearable placeholder="执行结果" style="width:120px" @change="fetchExecutions"><el-option v-for="option in executionStatusOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select>
+            <el-select v-model="executionFilters.trigger_source" clearable placeholder="触发方式" style="width:120px" @change="fetchExecutions"><el-option label="调度器" value="scheduler" /><el-option label="手动" value="manual" /></el-select>
+          </div>
+          <div class="toolbar-right"><el-button size="small" @click="resetExecutionFilters">重置筛选</el-button></div>
+        </div>
+        <el-table :data="executions" v-loading="executionLoading" row-key="id">
+          <el-table-column prop="schedule_name" label="编排名称" min-width="180" />
+          <el-table-column prop="trigger_source_display" label="触发方式" width="110" />
+          <el-table-column label="执行结果" width="110"><template #default="{ row }"><el-tag size="small" :type="statusTagType(row.status)">{{ row.status_display }}</el-tag></template></el-table-column>
+          <el-table-column prop="requested_by" label="触发人" width="100" />
+          <el-table-column prop="target_count" label="目标数" width="84" />
+          <el-table-column label="成功/失败" width="120"><template #default="{ row }">{{ row.success_count }}/{{ row.failed_count }}</template></el-table-column>
+          <el-table-column prop="summary" label="执行摘要" min-width="260" show-overflow-tooltip />
+          <el-table-column label="触发时间" width="170"><template #default="{ row }">{{ formatDateTime(row.requested_at) }}</template></el-table-column>
+          <el-table-column label="关联任务" min-width="180" show-overflow-tooltip><template #default="{ row }">{{ row.host_task_name || row.host_task || '-' }}</template></el-table-column>
+        </el-table>
+        <div class="pagination-row"><el-pagination v-model:current-page="executionPage" :page-size="20" :total="executionTotal" layout="total, prev, pager, next" @current-change="fetchExecutions" /></div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<script setup>
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search } from '@element-plus/icons-vue'
+import {
+  createHostTaskSchedule,
+  deleteHostTaskSchedule,
+  getHostTaskScheduleExecutions,
+  getHostTaskSchedules,
+  getHostTaskTargets,
+  previewHostTaskSchedule,
+  runHostTaskScheduleNow,
+  toggleHostTaskSchedule,
+  updateHostTaskSchedule,
+} from '@/api/modules/ops'
+
+const props = defineProps({ resourceTree: { type: Array, default: () => [] } })
+const innerTabs = [
+  { key: 'planner', label: '任务编排', desc: '配置时间规则、执行方式与目标主机' },
+  { key: 'list', label: '编排列表', desc: '查看启停状态与即时操作' },
+  { key: 'history', label: '执行记录', desc: '查看触发结果与关联任务' },
+]
+const taskTypeOptions = [
+  { label: '批量命令执行', value: 'run_command' },
+  { label: 'Ansible Playbook 执行', value: 'run_playbook' },
+  { label: 'SSH 连通性校验', value: 'check_connection' },
+  { label: '主机信息刷新', value: 'refresh_metrics' },
+  { label: '服务状态巡检', value: 'service_status' },
+]
+const hostStatusOptions = [
+  { label: '在线', value: 'online' },
+  { label: '离线', value: 'offline' },
+  { label: '告警', value: 'warning' },
+]
+const executionStatusOptions = [
+  { label: '待执行', value: 'pending' },
+  { label: '执行中', value: 'running' },
+  { label: '执行成功', value: 'success' },
+  { label: '部分成功', value: 'partial' },
+  { label: '执行失败', value: 'failed' },
+  { label: '已取消', value: 'canceled' },
+]
+const presets = [
+  { key: 'nightly-audit', title: '夜间健康巡检', desc: '每天凌晨批量巡检主机负载。', task_type: 'run_command', execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, schedule_type: 'cron', cron_expression: '0 2 * * *', overlap_policy: 'skip', description: '适合夜间批量巡检并归档结果。', payload: { command: 'hostname && uptime && df -h && free -m' } },
+  { key: 'metrics-refresh', title: '资源指标刷新', desc: '每 30 分钟刷新一次主机资源指标。', task_type: 'refresh_metrics', execution_mode: 'ssh', execution_strategy: 'continue', timeout_seconds: 20, schedule_type: 'interval', interval_seconds: 1800, overlap_policy: 'skip', description: '适合持续校准主机中心中的运行指标。', payload: {} },
+  { key: 'playbook-once', title: '窗口期 Playbook', desc: '在维护窗口执行一次标准化 Playbook。', task_type: 'run_playbook', execution_mode: 'ansible', execution_strategy: 'stop_on_error', timeout_seconds: 120, schedule_type: 'once', overlap_policy: 'skip', description: '适合版本切换前检查。', payload: { playbook_name: 'window-check.yml', playbook_content: '- hosts: targets\n  gather_facts: false\n  tasks:\n    - name: ping hosts\n      ping:' } },
+]
+const activeTab = ref('planner')
+const hostTableRef = ref(null)
+const editingId = ref(null)
+const saving = ref(false)
+const previewLoading = ref(false)
+const targetLoading = ref(false)
+const scheduleLoading = ref(false)
+const executionLoading = ref(false)
+const availableHosts = ref([])
+const selectedRows = ref([])
+const schedules = ref([])
+const executions = ref([])
+const schedulePage = ref(1)
+const scheduleTotal = ref(0)
+const executionPage = ref(1)
+const executionTotal = ref(0)
+const targetFilters = ref({ search: '', business_line: '', environment: '', status: '' })
+const scheduleFilters = ref({ search: '', schedule_type: '', enabled: '' })
+const executionFilters = ref({ search: '', status: '', trigger_source: '' })
+const previewState = ref({ next_run_at: '', next_runs: [], target_count: 0 })
+function defaultPayload() { return { command: '', service_name: '', playbook_name: '', playbook_content: '' } }
+function defaultScheduleForm() { return { preset_key: 'nightly-audit', name: '夜间健康巡检', description: '适合夜间批量巡检并归档结果。', task_type: 'run_command', payload: { ...defaultPayload(), command: 'hostname && uptime && df -h && free -m' }, execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, schedule_type: 'cron', cron_expression: '0 2 * * *', interval_seconds: 1800, run_at: '', timezone: 'Asia/Shanghai', overlap_policy: 'skip', enabled: true } }
+const scheduleForm = ref(defaultScheduleForm())
+const bizNodes = computed(() => props.resourceTree.filter(item => item.node_type === 'biz'))
+const currentEnvOptions = computed(() => (bizNodes.value.find(item => item.name === targetFilters.value.business_line)?.children || []))
+const selectedHostIds = computed(() => selectedRows.value.map(item => item.id))
+const selectedStats = computed(() => selectedRows.value.reduce((summary, item) => { if (item.status === 'online') summary.online += 1; if (item.status === 'warning') summary.warning += 1; if (item.status === 'offline') summary.offline += 1; return summary }, { online: 0, offline: 0, warning: 0 }))
+const previewListText = computed(() => (previewState.value.next_runs || []).map(formatDateTime).join(' / ') || '-')
+const executionModeHint = computed(() => scheduleForm.value.task_type === 'run_playbook' ? 'Playbook 仅支持 Ansible 执行。' : (scheduleForm.value.execution_mode === 'ansible' ? 'Ansible 适合标准化批量分发。' : 'SSH 适合少量主机快速诊断。'))
+function executionModeLabel(mode, display) { return display || (mode === 'ansible' ? 'Ansible 分发' : 'SSH 直连') }
+function statusTagType(status) { if (status === 'success') return 'success'; if (status === 'partial' || status === 'running') return 'warning'; if (status === 'failed' || status === 'canceled') return 'danger'; return 'info' }
+function formatDateTime(value) { return value ? String(value).replace('T', ' ').slice(0, 19) : '-' }
+function normalizePayloadByType(taskType, source = {}) { if (taskType === 'run_command') return { command: (source.command || '').trim() }; if (taskType === 'run_playbook') return { playbook_name: (source.playbook_name || '').trim(), playbook_content: (source.playbook_content || '').trim() }; if (taskType === 'service_status') return { service_name: (source.service_name || '').trim() }; return {} }
+function validatePayload() { const payload = normalizePayloadByType(scheduleForm.value.task_type, scheduleForm.value.payload || {}); if (scheduleForm.value.task_type === 'run_command' && !payload.command) return ElMessage.warning('请填写执行命令'), null; if (scheduleForm.value.task_type === 'run_playbook' && !payload.playbook_content) return ElMessage.warning('请填写 Playbook 内容'), null; if (scheduleForm.value.task_type === 'service_status' && !payload.service_name) return ElMessage.warning('请填写服务名称'), null; return payload }
+function buildSubmitPayload() { const payload = validatePayload(); if (!payload) return null; if (!scheduleForm.value.name) return ElMessage.warning('请填写编排名称'), null; return { name: scheduleForm.value.name, description: scheduleForm.value.description, task_type: scheduleForm.value.task_type, payload, selection_filters: { ...targetFilters.value }, target_host_ids: selectedHostIds.value, execution_mode: scheduleForm.value.task_type === 'run_playbook' ? 'ansible' : scheduleForm.value.execution_mode, execution_strategy: scheduleForm.value.execution_strategy, timeout_seconds: scheduleForm.value.timeout_seconds, schedule_type: scheduleForm.value.schedule_type, cron_expression: scheduleForm.value.schedule_type === 'cron' ? scheduleForm.value.cron_expression : '', interval_seconds: scheduleForm.value.schedule_type === 'interval' ? scheduleForm.value.interval_seconds : null, run_at: ['once', 'interval'].includes(scheduleForm.value.schedule_type) ? (scheduleForm.value.run_at || null) : null, timezone: scheduleForm.value.timezone, overlap_policy: scheduleForm.value.overlap_policy, enabled: scheduleForm.value.enabled } }
+function handleSelectionChange(rows) { selectedRows.value = rows }
+function handleBusinessChange() { targetFilters.value.environment = '' }
+function handleTaskTypeChange() { if (scheduleForm.value.task_type === 'run_playbook') scheduleForm.value.execution_mode = 'ansible'; if (scheduleForm.value.task_type !== 'run_command') scheduleForm.value.payload.command = ''; if (scheduleForm.value.task_type !== 'run_playbook') { scheduleForm.value.payload.playbook_name = ''; scheduleForm.value.payload.playbook_content = '' }; if (scheduleForm.value.task_type !== 'service_status') scheduleForm.value.payload.service_name = '' }
+function applyPreset(preset) { scheduleForm.value = { ...defaultScheduleForm(), preset_key: preset.key, name: preset.title, description: preset.description, task_type: preset.task_type, payload: { ...defaultPayload(), ...(preset.payload || {}) }, execution_mode: preset.execution_mode, execution_strategy: preset.execution_strategy, timeout_seconds: preset.timeout_seconds, schedule_type: preset.schedule_type, cron_expression: preset.cron_expression || '', interval_seconds: preset.interval_seconds || 1800, run_at: '', timezone: 'Asia/Shanghai', overlap_policy: preset.overlap_policy, enabled: true }; editingId.value = null; previewState.value = { next_run_at: '', next_runs: [], target_count: 0 } }
+function resetEditor() { applyPreset(presets[0]); clearSelection(); activeTab.value = 'planner' }
+function fillSelectionBySnapshot(snapshot = []) { const ids = new Set(snapshot.map(item => item.id)); selectedRows.value = availableHosts.value.filter(item => ids.has(item.id)); hostTableRef.value?.clearSelection(); availableHosts.value.forEach((row) => { if (ids.has(row.id)) hostTableRef.value?.toggleRowSelection(row, true) }) }
+function editSchedule(row) { editingId.value = row.id; scheduleForm.value = { preset_key: row.id, name: row.name, description: row.description || '', task_type: row.task_type, payload: { ...defaultPayload(), ...(row.payload || {}) }, execution_mode: row.execution_mode || (row.task_type === 'run_playbook' ? 'ansible' : 'ssh'), execution_strategy: row.execution_strategy || 'continue', timeout_seconds: row.timeout_seconds || 15, schedule_type: row.schedule_type, cron_expression: row.cron_expression || '', interval_seconds: row.interval_seconds || 1800, run_at: row.run_at || '', timezone: row.timezone || 'Asia/Shanghai', overlap_policy: row.overlap_policy || 'skip', enabled: row.enabled }; previewState.value = { next_run_at: row.next_run_at, next_runs: row.next_runs_preview || [], target_count: row.target_count || 0 }; activeTab.value = 'planner'; fetchTargets().then(() => fillSelectionBySnapshot(row.target_snapshot || [])) }
+async function fetchTargets() { targetLoading.value = true; try { const res = await getHostTaskTargets({ ...targetFilters.value }); availableHosts.value = Array.isArray(res) ? res : (res.results || []) } catch (error) { ElMessage.error('加载目标主机失败') } finally { targetLoading.value = false } }
+async function fetchSchedules() { scheduleLoading.value = true; try { const res = await getHostTaskSchedules({ page: schedulePage.value, search: scheduleFilters.value.search || undefined, schedule_type: scheduleFilters.value.schedule_type || undefined, enabled: scheduleFilters.value.enabled || undefined }); schedules.value = res.results || res || []; scheduleTotal.value = res.count || schedules.value.length } catch (error) { ElMessage.error('加载编排列表失败') } finally { scheduleLoading.value = false } }
+async function fetchExecutions() { executionLoading.value = true; try { const res = await getHostTaskScheduleExecutions({ page: executionPage.value, search: executionFilters.value.search || undefined, status: executionFilters.value.status || undefined, trigger_source: executionFilters.value.trigger_source || undefined }); executions.value = res.results || res || []; executionTotal.value = res.count || executions.value.length } catch (error) { ElMessage.error('加载执行记录失败') } finally { executionLoading.value = false } }
+async function runPreview() { const payload = buildSubmitPayload(); if (!payload) return; previewLoading.value = true; try { previewState.value = await previewHostTaskSchedule(payload) } catch (error) { ElMessage.error(error?.response?.data?.detail || '预览编排失败') } finally { previewLoading.value = false } }
+async function submitSchedule() { const payload = buildSubmitPayload(); if (!payload) return; saving.value = true; try { await (editingId.value ? updateHostTaskSchedule(editingId.value, payload) : createHostTaskSchedule(payload)); ElMessage.success(editingId.value ? '编排已更新' : '编排已创建'); await Promise.all([fetchSchedules(), fetchExecutions()]); activeTab.value = 'list'; resetEditor() } catch (error) { ElMessage.error(error?.response?.data?.detail || '保存编排失败') } finally { saving.value = false } }
+async function toggleSchedule(row) { try { await toggleHostTaskSchedule(row.id); ElMessage.success(row.enabled ? '编排已停用' : '编排已启用'); await Promise.all([fetchSchedules(), fetchExecutions()]) } catch (error) { ElMessage.error(error?.response?.data?.detail || '切换编排状态失败') } }
+async function runNow(row) { try { await ElMessageBox.confirm(`确认立即执行编排「${row.name}」？`, '立即执行', { type: 'warning', confirmButtonText: '立即执行', cancelButtonText: '取消' }) } catch (error) { return }; try { await runHostTaskScheduleNow(row.id); ElMessage.success('编排已触发，正在后台创建任务'); await Promise.all([fetchSchedules(), fetchExecutions()]); activeTab.value = 'history' } catch (error) { ElMessage.error(error?.response?.data?.detail || '触发编排失败') } }
+async function removeSchedule(row) { try { await ElMessageBox.confirm(`确认删除编排「${row.name}」？`, '删除编排', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }) } catch (error) { return }; try { await deleteHostTaskSchedule(row.id); ElMessage.success('编排已删除'); await Promise.all([fetchSchedules(), fetchExecutions()]); if (editingId.value === row.id) resetEditor() } catch (error) { ElMessage.error(error?.response?.data?.detail || '删除编排失败') } }
+function selectAllCurrent() { hostTableRef.value?.clearSelection(); availableHosts.value.forEach(row => hostTableRef.value?.toggleRowSelection(row, true)) }
+function clearSelection() { hostTableRef.value?.clearSelection(); selectedRows.value = [] }
+function resetTargetFilters() { targetFilters.value = { search: '', business_line: '', environment: '', status: '' }; clearSelection(); fetchTargets() }
+function resetScheduleFilters() { scheduleFilters.value = { search: '', schedule_type: '', enabled: '' }; schedulePage.value = 1; fetchSchedules() }
+function resetExecutionFilters() { executionFilters.value = { search: '', status: '', trigger_source: '' }; executionPage.value = 1; fetchExecutions() }
+onMounted(async () => { applyPreset(presets[0]); await Promise.all([fetchTargets(), fetchSchedules(), fetchExecutions(), runPreview()]) })
+</script>
+
+<style scoped>
+.schedule-center-page{display:flex;flex-direction:column;gap:4px}.inner-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:-2px;padding:3px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.92) 0%,rgba(248,250,252,.82) 100%);border:1px solid rgba(148,163,184,.12);box-shadow:0 10px 22px rgba(15,23,42,.04)}.inner-tab-btn{position:relative;min-height:60px;padding:8px 11px 8px 13px;border:1px solid rgba(148,163,184,.1);border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;text-align:left;cursor:pointer;transition:.2s ease box-shadow,.2s ease transform,.2s ease border-color,.2s ease background;box-shadow:0 8px 18px rgba(15,23,42,.035);overflow:hidden}.inner-tab-btn::after{content:'';position:absolute;inset:0 auto 0 0;width:3px;border-radius:14px;background:linear-gradient(180deg,rgba(96,165,250,.14) 0%,rgba(56,189,248,.02) 100%)}.inner-tab-btn:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.28);box-shadow:0 12px 22px rgba(37,99,235,.08)}.inner-tab-btn.active{border-color:rgba(59,130,246,.28);background:linear-gradient(180deg,#fdfefe 0%,#eef6ff 100%);box-shadow:0 14px 24px rgba(59,130,246,.11)}.inner-tab-btn.active::after{background:linear-gradient(180deg,#3b82f6 0%,#22c55e 100%)}.inner-tab-title{font-size:13px;font-weight:700;color:#0f172a;line-height:1.1}.inner-tab-desc{font-size:11px;color:#64748b;line-height:1.35}.glass-card{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 16px 34px rgba(15,23,42,.07);padding:14px 16px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;font-weight:600;color:#0f172a}.compact-head{margin-bottom:12px}.planner-grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}.side-card{display:flex;flex-direction:column;gap:14px}.head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.preset-grid{display:grid;gap:10px}.preset-card{padding:14px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);box-shadow:0 10px 24px rgba(15,23,42,.04);text-align:left;cursor:pointer;transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease}.preset-card:hover{border-color:rgba(96,165,250,.35);box-shadow:0 16px 30px rgba(37,99,235,.1);transform:translateY(-2px)}.preset-card.active{border-color:#3b82f6;box-shadow:0 18px 32px rgba(59,130,246,.14)}.preset-title{color:#0f172a;font-weight:600}.preset-desc,.task-inline-tip{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}.task-inline-tip{margin-bottom:12px;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg, rgba(59,130,246,.08) 0%, rgba(14,165,233,.04) 100%);border:1px solid rgba(59,130,246,.14)}.mini-panel{padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.mini-panel-title{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:10px}.mini-bullet{position:relative;padding-left:14px;color:#64748b;font-size:12px;line-height:1.7}.mini-bullet::before{content:'';position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:#60a5fa}.task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}.submit-row{margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.preview-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}.preview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.preview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.compact-kv{padding:7px 0;min-height:32px;color:#475569;font-size:13px;line-height:1.6}.history-toolbar{margin:14px 0}.pagination-row{display:flex;justify-content:flex-end;margin-top:16px}@media (max-width:1100px){.planner-grid,.inner-tabs,.preview-strip{grid-template-columns:1fr}}@media (max-width:900px){.form-row,.submit-row{flex-direction:column;align-items:stretch}}
+</style>
+

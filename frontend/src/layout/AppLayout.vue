@@ -97,6 +97,36 @@ const authStore = useAuthStore()
 const menuItems = [
   { path: '/dashboard', title: '仪表盘', icon: 'Odometer', permission: 'ops.dashboard.view' },
   {
+    title: '主机中心',
+    icon: 'Monitor',
+    children: [
+      {
+        path: '/hosts/assets',
+        title: '主机资产',
+        icon: 'Monitor',
+        anyPermissions: ['ops.host.view', 'ops.host.manage', 'ops.host.terminal'],
+      },
+      {
+        path: '/hosts/tasks',
+        title: '任务中心',
+        icon: 'Operation',
+        permission: 'ops.host.execute',
+      },
+      {
+        path: '/hosts/schedules',
+        title: '定时任务',
+        icon: 'Timer',
+        anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+      },
+      {
+        path: '/hosts/requests',
+        title: '主机申请',
+        icon: 'Ticket',
+        anyPermissions: ['cmdb.request.submit', 'cmdb.request.approve'],
+      },
+    ],
+  },
+  {
     path: '/cmdb',
     title: 'CMDB',
     icon: 'Files',
@@ -107,9 +137,6 @@ const menuItems = [
       'cmdb.cost.view',
       'cmdb.request.submit',
       'cmdb.request.approve',
-      'ops.host.view',
-      'ops.host.manage',
-      'ops.host.terminal',
     ],
   },
   {
@@ -146,7 +173,7 @@ const menuItems = [
     children: [
       { path: '/middleware/redis', title: 'Redis 管理', icon: 'Coin', permission: 'ops.middleware.view' },
       { path: '/middleware/rocketmq', title: 'RocketMQ 管理', icon: 'Promotion', permission: 'ops.middleware.view' },
-      { path: '/middleware/elasticsearch', title: 'Elasticsearch 管理', icon: 'Search', permission: 'ops.middleware.view' },
+      { path: '/middleware/elasticsearch', title: 'ES 管理', icon: 'Search', permission: 'ops.middleware.view' },
       { path: '/middleware/nginx', title: 'Nginx 管理', icon: 'Location', permission: 'ops.nginx.view' },
     ],
   },

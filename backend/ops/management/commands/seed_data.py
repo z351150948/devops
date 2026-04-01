@@ -18,6 +18,11 @@ from ops.models import (
     DeploymentApprovalStep,
     DockerHost,
     Host,
+    HostTask,
+    HostTaskExecution,
+    HostTaskSchedule,
+    HostTaskScheduleExecution,
+    HostTaskTemplate,
     K8sCluster,
     LogEntry,
 )
@@ -448,22 +453,569 @@ def seed_app_release_demo(stdout, hosts, docker_hosts):
         _create_approval_steps(deployment, step_statuses)
 
 
+def seed_host_task_demo(stdout, hosts):
+    stdout.write('\u6b63\u5728\u751f\u6210\u4e3b\u673a\u4efb\u52a1\u6f14\u793a\u6570\u636e...')
+    host_map = {host.hostname: host for host in hosts}
+
+    HostTaskTemplate.objects.create(
+        name='\u751f\u4ea7 SSH \u5de1\u68c0',
+        task_type=HostTask.TASK_CHECK_CONNECTION,
+        description='\u6279\u91cf\u6821\u9a8c SSH \u767b\u5f55\u80fd\u529b\u4e0e\u57fa\u7840\u8fde\u901a\u6027',
+        payload={},
+        execution_mode=HostTask.EXECUTION_MODE_SSH,
+        execution_strategy=HostTask.STRATEGY_CONTINUE,
+        timeout_seconds=15,
+        is_builtin=True,
+        created_by='system',
+    )
+    HostTaskTemplate.objects.create(
+        name='\u5e38\u7528\u670d\u52a1\u5de1\u68c0',
+        task_type=HostTask.TASK_SERVICE_STATUS,
+        description='\u9002\u5408\u68c0\u67e5 nginx / docker / sshd \u7b49\u57fa\u7840\u670d\u52a1\u72b6\u6001',
+        payload={'service_name': 'nginx'},
+        execution_mode=HostTask.EXECUTION_MODE_SSH,
+        execution_strategy=HostTask.STRATEGY_CONTINUE,
+        timeout_seconds=15,
+        is_builtin=True,
+        created_by='system',
+    )
+    HostTaskTemplate.objects.create(
+        name='\u6279\u91cf\u5065\u5eb7\u5ea6\u68c0\u67e5',
+        task_type=HostTask.TASK_RUN_COMMAND,
+        description='\u53d1\u5e03\u524d\u7edf\u4e00\u68c0\u67e5\u8d1f\u8f7d\u3001\u78c1\u76d8\u4e0e\u5185\u5b58',
+        payload={'command': 'uptime && df -h && free -m'},
+        execution_mode=HostTask.EXECUTION_MODE_ANSIBLE,
+        execution_strategy=HostTask.STRATEGY_STOP_ON_ERROR,
+        timeout_seconds=30,
+        is_builtin=False,
+        created_by='admin',
+    )
+    HostTaskTemplate.objects.create(
+        name='Ansible \u6279\u91cf\u57fa\u7ebf\u91c7\u96c6',
+        task_type=HostTask.TASK_RUN_COMMAND,
+        description='\u901a\u8fc7 Ansible \u7edf\u4e00\u4e0b\u53d1\u57fa\u7ebf\u91c7\u96c6\u547d\u4ee4\uff0c\u9002\u5408\u53d8\u66f4\u524d\u5b58\u6863',
+        payload={'command': 'hostname && uptime && df -h && free -m'},
+        execution_mode=HostTask.EXECUTION_MODE_ANSIBLE,
+        execution_strategy=HostTask.STRATEGY_CONTINUE,
+        timeout_seconds=30,
+        is_builtin=True,
+        created_by='system',
+    )
+    HostTaskTemplate.objects.create(
+        name='Nginx \u914d\u7f6e\u4e00\u81f4\u6027 Playbook',
+        task_type=HostTask.TASK_RUN_PLAYBOOK,
+        description='\u901a\u8fc7 Playbook \u7edf\u4e00\u6821\u9a8c Nginx \u914d\u7f6e\u3001\u8bed\u6cd5\u4e0e\u7aef\u53e3\u76d1\u542c\u72b6\u6001',
+        payload={
+            'playbook_name': 'nginx-audit.yml',
+            'playbook_content': (
+                '- hosts: targets\n'
+                '  gather_facts: false\n'
+                '  tasks:\n'
+                '    - name: check nginx config\n'
+                '      shell: nginx -t\n'
+                '      register: nginx_test\n'
+                '      changed_when: false\n'
+                '    - name: show listeners\n'
+                '      shell: ss -lntp | grep nginx || true\n'
+                '      changed_when: false\n'
+            ),
+        },
+        execution_mode=HostTask.EXECUTION_MODE_ANSIBLE,
+        execution_strategy=HostTask.STRATEGY_STOP_ON_ERROR,
+        timeout_seconds=45,
+        is_builtin=True,
+        created_by='system',
+    )
+
+    demo_tasks = [
+        {
+            'name': '\u751f\u4ea7 SSH \u8fde\u901a\u6027\u6821\u9a8c',
+            'task_type': HostTask.TASK_CHECK_CONNECTION,
+            'status': HostTask.STATUS_SUCCESS,
+            'description': '\u6279\u91cf\u786e\u8ba4\u751f\u4ea7\u4e3b\u673a SSH \u53ef\u7528\u6027',
+            'payload': {},
+            'selection_filters': {'business_line': '\u7535\u5546', 'environment': 'prod'},
+            'execution_mode': HostTask.EXECUTION_MODE_SSH,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'timeout_seconds': 15,
+            'created_by': 'ops_demo',
+            'summary': '\u5171 2 \u53f0\uff0c\u6210\u529f 2\uff0c\u5931\u8d25 0',
+            'target_hosts': ['order-api-ecs-01', 'order-api-ecs-02'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'hostname && uname -sr', 'output': 'order-api-ecs-01\nLinux 5.10.134-16', 'duration_ms': 820},
+                {'host': 'order-api-ecs-02', 'status': 'success', 'command': 'hostname && uname -sr', 'output': 'order-api-ecs-02\nLinux 5.10.134-16', 'duration_ms': 840},
+            ],
+            'created_offset': timedelta(hours=9),
+            'started_offset': timedelta(hours=9, minutes=2),
+            'finished_offset': timedelta(hours=9, minutes=1, seconds=20),
+        },
+        {
+            'name': '\u6279\u91cf\u5237\u65b0\u4e3b\u673a\u4fe1\u606f',
+            'task_type': HostTask.TASK_REFRESH_METRICS,
+            'status': HostTask.STATUS_PARTIAL,
+            'description': '\u5237\u65b0 CPU / \u5185\u5b58 / \u78c1\u76d8 \u6307\u6807\u5e76\u66f4\u65b0\u5728\u7ebf\u72b6\u6001',
+            'payload': {},
+            'selection_filters': {'business_line': '\u7535\u5546'},
+            'execution_mode': HostTask.EXECUTION_MODE_SSH,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'timeout_seconds': 20,
+            'created_by': 'admin',
+            'summary': '\u5171 3 \u53f0\uff0c\u6210\u529f 2\uff0c\u5931\u8d25 1\uff0c\u5931\u8d25\u4e3b\u673a\uff1aorder-perf-test-ecs',
+            'target_hosts': ['order-api-ecs-01', 'order-api-ecs-02', 'order-perf-test-ecs'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'metrics: cpu/memory/disk refresh', 'output': 'CPU 43.0% | \u5185\u5b58 52.0% | \u78c1\u76d8 61.0%', 'duration_ms': 1120},
+                {'host': 'order-api-ecs-02', 'status': 'success', 'command': 'metrics: cpu/memory/disk refresh', 'output': 'CPU 41.0% | \u5185\u5b58 49.0% | \u78c1\u76d8 58.0%', 'duration_ms': 1080},
+                {'host': 'order-perf-test-ecs', 'status': 'failed', 'command': 'metrics: cpu/memory/disk refresh', 'error_message': 'SSH authentication failed', 'duration_ms': 5900},
+            ],
+            'created_offset': timedelta(hours=6),
+            'started_offset': timedelta(hours=6, minutes=3),
+            'finished_offset': timedelta(hours=6, minutes=2, seconds=10),
+        },
+        {
+            'name': '\u53d1\u5e03\u524d Nginx \u914d\u7f6e\u7a33\u5b9a\u6027\u6821\u9a8c',
+            'task_type': HostTask.TASK_RUN_PLAYBOOK,
+            'status': HostTask.STATUS_PARTIAL,
+            'description': '\u4f7f\u7528 Playbook \u7edf\u4e00\u6821\u9a8c prod \u8282\u70b9 Nginx \u8bed\u6cd5\u548c\u76d1\u542c\u72b6\u6001',
+            'payload': {
+                'playbook_name': 'nginx-preflight.yml',
+                'playbook_content': (
+                    '- hosts: targets\n'
+                    '  gather_facts: false\n'
+                    '  tasks:\n'
+                    '    - name: validate nginx config\n'
+                    '      shell: nginx -t\n'
+                    '      changed_when: false\n'
+                    '    - name: inspect listeners\n'
+                    '      shell: ss -lntp | grep nginx || true\n'
+                    '      changed_when: false\n'
+                ),
+            },
+            'selection_filters': {'business_line': '\u7535\u5546', 'environment': 'prod'},
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+            'timeout_seconds': 45,
+            'created_by': 'release_mgr',
+            'summary': '\u5171 2 \u53f0\uff0c\u6210\u529f 1\uff0c\u5931\u8d25 1\uff0c\u5931\u8d25\u4e3b\u673a\uff1aorder-api-ecs-02\uff0c\u6267\u884c\u65b9\u5f0f\uff1aAnsible',
+            'target_hosts': ['order-api-ecs-01', 'order-api-ecs-02'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'ansible-playbook nginx-preflight.yml', 'output': 'PLAY [targets]\nTASK [validate nginx config]\nok: [order-api-ecs-01]', 'duration_ms': 2320},
+                {'host': 'order-api-ecs-02', 'status': 'failed', 'command': 'ansible-playbook nginx-preflight.yml', 'error_message': 'fatal: [order-api-ecs-02]: FAILED! => nginx: [emerg] unexpected end of file', 'duration_ms': 2010},
+            ],
+            'created_offset': timedelta(hours=4, minutes=30),
+            'started_offset': timedelta(hours=4, minutes=29),
+            'finished_offset': timedelta(hours=4, minutes=28, seconds=20),
+        },
+        {
+            'name': '\u6279\u91cf\u65e5\u5fd7\u5de1\u68c0',
+            'task_type': HostTask.TASK_RUN_COMMAND,
+            'status': HostTask.STATUS_CANCELED,
+            'description': '\u6267\u884c\u65e5\u5fd7\u4e0e\u6587\u4ef6\u7cfb\u7edf\u5feb\u901f\u68c0\u67e5\uff0c\u4e2d\u9014\u53d1\u8d77\u4e86\u7ec8\u6b62',
+            'payload': {'command': 'uptime && df -h / /data && cat /etc/fstab'},
+            'selection_filters': {'business_line': '\u57fa\u7840\u8bbe\u65bd', 'environment': 'prod'},
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'timeout_seconds': 30,
+            'created_by': 'admin',
+            'summary': '\u5171 3 \u53f0\uff0c\u6210\u529f 1\uff0c\u5931\u8d25 0\uff0c\u8df3\u8fc7 2\uff0c\u4efb\u52a1\u5df2\u6309\u7533\u8bf7\u7ec8\u6b62\uff0cAnsible \u4e0d\u53ef\u7528\u5df2\u56de\u9000 SSH',
+            'target_hosts': ['k8s-node-01', 'order-api-ecs-01', 'order-api-ecs-02'],
+            'executions': [
+                {'host': 'k8s-node-01', 'status': 'success', 'command': 'uptime && df -h / /data && cat /etc/fstab', 'output': 'load average: 1.12, 1.09, 0.98', 'duration_ms': 1380},
+                {'host': 'order-api-ecs-01', 'status': 'skipped', 'command': '', 'error_message': '\u4efb\u52a1\u5df2\u6536\u5230\u7ec8\u6b62\u8bf7\u6c42\uff0c\u5269\u4f59\u4e3b\u673a\u5df2\u8df3\u8fc7\u6267\u884c', 'duration_ms': 0},
+                {'host': 'order-api-ecs-02', 'status': 'skipped', 'command': '', 'error_message': '\u4efb\u52a1\u5df2\u6536\u5230\u7ec8\u6b62\u8bf7\u6c42\uff0c\u5269\u4f59\u4e3b\u673a\u5df2\u8df3\u8fc7\u6267\u884c', 'duration_ms': 0},
+            ],
+            'target_count': 3,
+            'success_count': 1,
+            'failed_count': 0,
+            'skipped_count': 2,
+            'cancel_requested': True,
+            'cancel_requested_by': 'admin',
+            'cancel_requested_at_offset': timedelta(hours=2, minutes=9),
+            'created_offset': timedelta(hours=2, minutes=10),
+            'started_offset': timedelta(hours=2, minutes=10),
+            'finished_offset': timedelta(hours=2, minutes=8, seconds=40),
+        },
+        {
+            'name': '\u53d1\u5e03\u540e\u5e94\u7528\u5065\u5eb7\u5267\u672c',
+            'task_type': HostTask.TASK_RUN_PLAYBOOK,
+            'status': HostTask.STATUS_RUNNING,
+            'description': '\u6b63\u5728\u901a\u8fc7 Playbook \u91c7\u96c6 prod \u8282\u70b9\u5065\u5eb7\u5ea6\u4e0e\u5e94\u7528\u8fdb\u7a0b\u4fe1\u606f',
+            'payload': {
+                'playbook_name': 'post-release-health.yml',
+                'playbook_content': (
+                    '- hosts: targets\n'
+                    '  gather_facts: false\n'
+                    '  tasks:\n'
+                    '    - name: check uptime\n'
+                    '      shell: uptime\n'
+                    '      changed_when: false\n'
+                    '    - name: inspect app process\n'
+                    '      shell: ps -ef | grep order-api | grep -v grep\n'
+                    '      changed_when: false\n'
+                ),
+            },
+            'selection_filters': {'environment': 'prod'},
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'timeout_seconds': 60,
+            'created_by': 'ops_demo',
+            'summary': '\u4efb\u52a1\u6267\u884c\u4e2d\uff0c\u6b63\u5728\u901a\u8fc7 Ansible \u8fde\u63a5\u76ee\u6807\u4e3b\u673a',
+            'target_hosts': ['k8s-node-01', 'order-api-ecs-01', 'order-api-ecs-02', 'legacy-data-sync'],
+            'executions': [
+                {'host': 'k8s-node-01', 'status': 'success', 'command': 'ansible-playbook post-release-health.yml', 'output': 'PLAY [targets]\nTASK [check uptime]\nok: [k8s-node-01]', 'duration_ms': 2100},
+            ],
+            'target_count': 4,
+            'success_count': 1,
+            'failed_count': 0,
+            'skipped_count': 0,
+            'created_offset': timedelta(minutes=45),
+            'started_offset': timedelta(minutes=44),
+        },
+        {
+            'name': '\u9057\u7559\u670d\u52a1\u72b6\u6001\u68c0\u67e5',
+            'task_type': HostTask.TASK_SERVICE_STATUS,
+            'status': HostTask.STATUS_FAILED,
+            'description': '\u68c0\u67e5 legacy-data-sync \u670d\u52a1\u662f\u5426\u4ecd\u5728\u8fd0\u884c',
+            'payload': {'service_name': 'data-sync'},
+            'selection_filters': {'hostname': 'legacy-data-sync'},
+            'execution_mode': HostTask.EXECUTION_MODE_SSH,
+            'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+            'timeout_seconds': 20,
+            'created_by': 'ops_demo',
+            'summary': '\u5171 1 \u53f0\uff0c\u6210\u529f 0\uff0c\u5931\u8d25 1\uff0c\u5931\u8d25\u4e3b\u673a\uff1alegacy-data-sync',
+            'target_hosts': ['legacy-data-sync'],
+            'executions': [
+                {'host': 'legacy-data-sync', 'status': 'failed', 'command': 'systemctl status data-sync --no-pager --lines=12', 'error_message': 'Unit data-sync.service could not be found.', 'duration_ms': 1640},
+            ],
+            'created_offset': timedelta(minutes=110),
+            'started_offset': timedelta(minutes=109),
+            'finished_offset': timedelta(minutes=108, seconds=20),
+        },
+    ]
+
+    for item in demo_tasks:
+        target_hosts = [host_map[name] for name in item.pop('target_hosts') if name in host_map]
+        target_snapshot = [
+            {
+                'id': host.id,
+                'hostname': host.hostname,
+                'ip_address': host.ip_address,
+                'business_line': host.business_line,
+                'environment': host.environment,
+                'status': host.status,
+            }
+            for host in target_hosts
+        ]
+        executions = item.pop('executions')
+        created_offset = item.pop('created_offset')
+        started_offset = item.pop('started_offset', None)
+        finished_offset = item.pop('finished_offset', None)
+        cancel_requested_at_offset = item.pop('cancel_requested_at_offset', None)
+        task = HostTask.objects.create(
+            target_snapshot=target_snapshot,
+            target_count=item.pop('target_count', len(target_hosts)),
+            success_count=item.pop('success_count', sum(1 for execution in executions if execution['status'] == 'success')),
+            failed_count=item.pop('failed_count', sum(1 for execution in executions if execution['status'] == 'failed')),
+            skipped_count=item.pop('skipped_count', sum(1 for execution in executions if execution['status'] == 'skipped')),
+            cancel_requested=item.pop('cancel_requested', False),
+            cancel_requested_by=item.pop('cancel_requested_by', ''),
+            cancel_requested_at=timezone.now() - cancel_requested_at_offset if cancel_requested_at_offset else None,
+            started_at=timezone.now() - started_offset if started_offset else None,
+            finished_at=timezone.now() - finished_offset if finished_offset else None,
+            **item,
+        )
+        created_at = timezone.now() - created_offset
+        updated_at = task.finished_at or task.started_at or created_at
+        HostTask.objects.filter(pk=task.pk).update(created_at=created_at, updated_at=updated_at)
+        task.refresh_from_db()
+        for execution in executions:
+            host = host_map[execution['host']]
+            finished_at = (task.finished_at or timezone.now()) if task.status != HostTask.STATUS_RUNNING else None
+            started_at = task.started_at or created_at
+            HostTaskExecution.objects.create(
+                task=task,
+                host=host,
+                host_name=host.hostname,
+                host_ip=host.ip_address,
+                status=execution['status'],
+                command=execution.get('command', ''),
+                output=execution.get('output', ''),
+                error_message=execution.get('error_message', ''),
+                duration_ms=execution.get('duration_ms', 0),
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+
+
+def seed_host_schedule_demo(stdout, hosts):
+    stdout.write('正在生成主机定时任务演示数据...')
+    host_map = {host.hostname: host for host in hosts}
+    now = timezone.now()
+
+    def build_snapshot(host_names):
+        selected = [host_map[name] for name in host_names if name in host_map]
+        return selected, [
+            {
+                'id': host.id,
+                'hostname': host.hostname,
+                'ip_address': host.ip_address,
+                'business_line': host.business_line,
+                'environment': host.environment,
+                'status': host.status,
+            }
+            for host in selected
+        ]
+
+    schedule_specs = [
+        {
+            'name': '生产主机夜间健康巡检',
+            'description': '每天凌晨对生产主机执行负载、磁盘与内存巡检。',
+            'task_type': HostTask.TASK_RUN_COMMAND,
+            'payload': {'command': 'hostname && uptime && df -h && free -m'},
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'schedule_type': HostTaskSchedule.SCHEDULE_TYPE_CRON,
+            'cron_expression': '0 2 * * *',
+            'timeout_seconds': 30,
+            'enabled': True,
+            'overlap_policy': HostTaskSchedule.OVERLAP_SKIP,
+            'host_names': ['order-api-ecs-01', 'order-api-ecs-02'],
+            'last_status': HostTask.STATUS_SUCCESS,
+            'last_run_at': now - timedelta(hours=22),
+            'next_run_at': now + timedelta(hours=2),
+            'total_run_count': 14,
+            'created_by': 'ops_demo',
+        },
+        {
+            'name': '核心主机资源指标刷新',
+            'description': '每 30 分钟刷新一次核心主机的 CPU、内存和磁盘指标。',
+            'task_type': HostTask.TASK_REFRESH_METRICS,
+            'payload': {},
+            'execution_mode': HostTask.EXECUTION_MODE_SSH,
+            'execution_strategy': HostTask.STRATEGY_CONTINUE,
+            'schedule_type': HostTaskSchedule.SCHEDULE_TYPE_INTERVAL,
+            'interval_seconds': 1800,
+            'run_at': now - timedelta(hours=3),
+            'timeout_seconds': 20,
+            'enabled': True,
+            'overlap_policy': HostTaskSchedule.OVERLAP_SKIP,
+            'host_names': ['legacy-data-sync', 'feature-x-dev-ecs'],
+            'last_status': HostTask.STATUS_PARTIAL,
+            'last_run_at': now - timedelta(minutes=25),
+            'next_run_at': now + timedelta(minutes=5),
+            'total_run_count': 38,
+            'created_by': 'ops_demo',
+            'last_error': '1 台主机刷新失败，建议检查 SSH 凭据',
+            'consecutive_failures': 1,
+        },
+        {
+            'name': '窗口期 Nginx Playbook 检查',
+            'description': '维护窗口执行一次 Nginx 配置一致性检查 Playbook。',
+            'task_type': HostTask.TASK_RUN_PLAYBOOK,
+            'payload': {
+                'playbook_name': 'nginx-window-check.yml',
+                'playbook_content': (
+                    '- hosts: targets\n'
+                    '  gather_facts: false\n'
+                    '  tasks:\n'
+                    '    - name: check nginx config\n'
+                    '      shell: nginx -t\n'
+                    '      changed_when: false\n'
+                ),
+            },
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+            'schedule_type': HostTaskSchedule.SCHEDULE_TYPE_ONCE,
+            'run_at': now - timedelta(days=1),
+            'timeout_seconds': 90,
+            'enabled': False,
+            'overlap_policy': HostTaskSchedule.OVERLAP_SKIP,
+            'host_names': ['order-api-ecs-01'],
+            'last_status': HostTask.STATUS_SUCCESS,
+            'last_run_at': now - timedelta(days=1),
+            'next_run_at': None,
+            'total_run_count': 1,
+            'created_by': 'ops_demo',
+        },
+    ]
+
+    schedule_map = {}
+    for spec in schedule_specs:
+        selected_hosts, snapshot = build_snapshot(spec.pop('host_names'))
+        schedule = HostTaskSchedule.objects.create(
+            target_host_ids=[host.id for host in selected_hosts],
+            target_snapshot=snapshot,
+            target_count=len(snapshot),
+            timezone='Asia/Shanghai',
+            **spec,
+        )
+        schedule_map[schedule.name] = schedule
+
+    def create_generated_task(schedule, spec):
+        host_names = spec.pop('host_names')
+        execution_items = spec.pop('executions')
+        requested_at = spec['requested_at']
+        started_at = spec.get('started_at')
+        finished_at = spec.get('finished_at')
+        trigger_source = HostTask.TRIGGER_SOURCE_SCHEDULE if spec['trigger_source'] == HostTaskScheduleExecution.TRIGGER_SCHEDULER else HostTask.TRIGGER_SOURCE_MANUAL
+        selected_hosts, snapshot = build_snapshot(host_names)
+        task = HostTask.objects.create(
+            name=spec.pop('task_name'),
+            task_type=schedule.task_type,
+            status=spec['status'],
+            description=schedule.description,
+            payload=dict(schedule.payload or {}),
+            selection_filters=dict(schedule.selection_filters or {}),
+            target_snapshot=snapshot,
+            target_count=spec.get('target_count', len(snapshot)),
+            success_count=spec.get('success_count', sum(1 for item in execution_items if item['status'] == 'success')),
+            failed_count=spec.get('failed_count', sum(1 for item in execution_items if item['status'] == 'failed')),
+            skipped_count=spec.get('skipped_count', sum(1 for item in execution_items if item['status'] == 'skipped')),
+            execution_mode=schedule.execution_mode,
+            execution_strategy=schedule.execution_strategy,
+            timeout_seconds=schedule.timeout_seconds,
+            created_by=spec['requested_by'],
+            summary=spec['summary'],
+            started_at=started_at,
+            finished_at=finished_at,
+            schedule=schedule,
+            trigger_source=trigger_source,
+        )
+        HostTask.objects.filter(pk=task.pk).update(
+            created_at=requested_at,
+            updated_at=finished_at or started_at or requested_at,
+        )
+        task.refresh_from_db()
+        for item in execution_items:
+            host = host_map[item['host']]
+            HostTaskExecution.objects.create(
+                task=task,
+                host=host,
+                host_name=host.hostname,
+                host_ip=host.ip_address,
+                status=item['status'],
+                command=item.get('command', ''),
+                output=item.get('output', ''),
+                error_message=item.get('error_message', ''),
+                duration_ms=item.get('duration_ms', 0),
+                started_at=started_at or requested_at,
+                finished_at=finished_at if task.status != HostTask.STATUS_RUNNING else None,
+            )
+        return task
+
+    execution_specs = [
+        {
+            'schedule': '生产主机夜间健康巡检',
+            'task_name': '生产主机夜间健康巡检 / 2026-03-31 02:00',
+            'trigger_source': HostTaskScheduleExecution.TRIGGER_SCHEDULER,
+            'status': HostTask.STATUS_SUCCESS,
+            'summary': '共 2 台，成功 2，失败 0',
+            'target_count': 2,
+            'success_count': 2,
+            'failed_count': 0,
+            'requested_by': 'system-scheduler',
+            'requested_at': now - timedelta(hours=22),
+            'started_at': now - timedelta(hours=22),
+            'finished_at': now - timedelta(hours=21, minutes=58),
+            'host_names': ['order-api-ecs-01', 'order-api-ecs-02'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'ansible nightly-health-check', 'output': 'load average: 0.62, 0.48, 0.35', 'duration_ms': 1620},
+                {'host': 'order-api-ecs-02', 'status': 'success', 'command': 'ansible nightly-health-check', 'output': 'disk /data usage: 58%', 'duration_ms': 1740},
+            ],
+        },
+        {
+            'schedule': '核心主机资源指标刷新',
+            'task_name': '核心主机资源指标刷新 / 近 30 分钟轮询',
+            'trigger_source': HostTaskScheduleExecution.TRIGGER_SCHEDULER,
+            'status': HostTask.STATUS_PARTIAL,
+            'summary': '共 2 台，成功 1，失败 1',
+            'target_count': 2,
+            'success_count': 1,
+            'failed_count': 1,
+            'error_message': 'legacy-data-sync 刷新失败',
+            'requested_by': 'system-scheduler',
+            'requested_at': now - timedelta(minutes=25),
+            'started_at': now - timedelta(minutes=25),
+            'finished_at': now - timedelta(minutes=24, seconds=15),
+            'host_names': ['legacy-data-sync', 'feature-x-dev-ecs'],
+            'executions': [
+                {'host': 'feature-x-dev-ecs', 'status': 'success', 'command': 'refresh host metrics', 'output': 'CPU 4% | 内存 18% | 磁盘 25%', 'duration_ms': 980},
+                {'host': 'legacy-data-sync', 'status': 'failed', 'command': 'refresh host metrics', 'error_message': 'SSH authentication failed', 'duration_ms': 3020},
+            ],
+        },
+        {
+            'schedule': '窗口期 Nginx Playbook 检查',
+            'task_name': '窗口期 Nginx Playbook 检查 / 手动触发',
+            'trigger_source': HostTaskScheduleExecution.TRIGGER_MANUAL,
+            'status': HostTask.STATUS_SUCCESS,
+            'summary': '窗口执行完成，Nginx 配置检查通过',
+            'target_count': 1,
+            'success_count': 1,
+            'failed_count': 0,
+            'requested_by': 'ops_demo',
+            'requested_at': now - timedelta(days=1),
+            'started_at': now - timedelta(days=1),
+            'finished_at': now - timedelta(days=1, minutes=-3),
+            'host_names': ['order-api-ecs-01'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'ansible-playbook nginx-window-check.yml', 'output': 'PLAY RECAP: order-api-ecs-01 ok=1 changed=0 failed=0', 'duration_ms': 2410},
+            ],
+        },
+        {
+            'schedule': '生产主机夜间健康巡检',
+            'task_name': '生产主机夜间健康巡检 / 2026-03-30 02:00',
+            'trigger_source': HostTaskScheduleExecution.TRIGGER_SCHEDULER,
+            'status': HostTask.STATUS_SUCCESS,
+            'summary': 'Ansible 批量巡检完成，输出已归档到任务历史',
+            'target_count': 2,
+            'success_count': 2,
+            'failed_count': 0,
+            'requested_by': 'system-scheduler',
+            'requested_at': now - timedelta(days=2, hours=22),
+            'started_at': now - timedelta(days=2, hours=22),
+            'finished_at': now - timedelta(days=2, hours=21, minutes=58),
+            'host_names': ['order-api-ecs-01', 'order-api-ecs-02'],
+            'executions': [
+                {'host': 'order-api-ecs-01', 'status': 'success', 'command': 'ansible nightly-health-check', 'output': 'uptime ok | free -m ok', 'duration_ms': 1580},
+                {'host': 'order-api-ecs-02', 'status': 'success', 'command': 'ansible nightly-health-check', 'output': 'hostname ok | df -h ok', 'duration_ms': 1660},
+            ],
+        },
+    ]
+
+    for spec in execution_specs:
+        schedule = schedule_map[spec.pop('schedule')]
+        task = create_generated_task(schedule, spec)
+        requested_at = spec.pop('requested_at')
+        execution = HostTaskScheduleExecution.objects.create(
+            schedule=schedule,
+            host_task=task,
+            requested_at=requested_at,
+            created_at=requested_at,
+            **spec,
+        )
+        HostTaskScheduleExecution.objects.filter(pk=execution.pk).update(requested_at=requested_at, created_at=requested_at)
+
 class Command(BaseCommand):
     help = '生成 Mock 演示数据'
 
     def handle(self, *args, **options):
-        self.stdout.write('正在清除旧数据...')
+
+        self.stdout.write('\u6b63\u5728\u6e05\u7406\u65e7\u6570\u636e...')
         ServiceDeployment.objects.all().delete()
         DeploymentApprovalStep.objects.all().delete()
         DeploymentApprovalNode.objects.all().delete()
         DeploymentApprovalFlow.objects.all().delete()
         Deployment.objects.all().delete()
+        HostTaskExecution.objects.all().delete()
+        HostTaskScheduleExecution.objects.all().delete()
+        HostTaskSchedule.objects.all().delete()
+        HostTask.objects.all().delete()
+        HostTaskTemplate.objects.all().delete()
         Alert.objects.all().delete()
         LogEntry.objects.all().delete()
         Host.objects.all().delete()
         DockerHost.objects.all().delete()
 
-        self.stdout.write('正在生成主机数据...')
+        self.stdout.write('\u6b63\u5728\u751f\u6210\u4e3b\u673a\u6570\u636e...')
         hosts = []
         host_configs = [
             {
@@ -472,8 +1024,8 @@ class Command(BaseCommand):
                 'os_type': 'Alibaba Cloud Linux 3',
                 'business_line': BIZ_COMMERCE,
                 'environment': 'prod',
-                'admin_user': '应用运维-李俊',
-                'description': '订单服务生产节点 A，对应 CMDB 云主机配置项',
+                'admin_user': '\u5e94\u7528\u8fd0\u7ef4-\u674e\u4fca',
+                'description': '\u8ba2\u5355\u670d\u52a1\u751f\u4ea7\u8282\u70b9 A\uff0c\u5bf9\u5e94 CMDB \u4e91\u4e3b\u673a\u914d\u7f6e\u9879',
                 'status': 'online',
                 'cpu_usage': 43.0,
                 'memory_usage': 52.0,
@@ -485,8 +1037,8 @@ class Command(BaseCommand):
                 'os_type': 'Alibaba Cloud Linux 3',
                 'business_line': BIZ_COMMERCE,
                 'environment': 'prod',
-                'admin_user': '应用运维-李俊',
-                'description': '订单服务生产节点 B，对应 CMDB 云主机配置项',
+                'admin_user': '\u5e94\u7528\u8fd0\u7ef4-\u674e\u4fca',
+                'description': '\u8ba2\u5355\u670d\u52a1\u751f\u4ea7\u8282\u70b9 B\uff0c\u5bf9\u5e94 CMDB \u4e91\u4e3b\u673a\u914d\u7f6e\u9879',
                 'status': 'online',
                 'cpu_usage': 41.0,
                 'memory_usage': 49.0,
@@ -498,8 +1050,8 @@ class Command(BaseCommand):
                 'os_type': 'Ubuntu 22.04',
                 'business_line': BIZ_COMMERCE,
                 'environment': 'test',
-                'admin_user': '测试平台-陈芳',
-                'description': '压测环境主机，压测结束后应及时回收或降配',
+                'admin_user': '\u6d4b\u8bd5\u5e73\u53f0-\u9648\u82b3',
+                'description': '\u538b\u6d4b\u73af\u5883\u4e3b\u673a\uff0c\u538b\u6d4b\u7ed3\u675f\u540e\u5e94\u53ca\u65f6\u56de\u6536\u6216\u964d\u914d',
                 'status': 'warning',
                 'cpu_usage': 12.0,
                 'memory_usage': 28.0,
@@ -511,8 +1063,8 @@ class Command(BaseCommand):
                 'os_type': 'Ubuntu 22.04',
                 'business_line': BIZ_COMMERCE,
                 'environment': 'dev',
-                'admin_user': '研发-张晨',
-                'description': '功能联调开发主机，当前利用率偏低',
+                'admin_user': '\u7814\u53d1-\u5f20\u6668',
+                'description': '\u529f\u80fd\u8054\u8c03\u5f00\u53d1\u4e3b\u673a\uff0c\u5f53\u524d\u5229\u7528\u7387\u504f\u4f4e',
                 'status': 'warning',
                 'cpu_usage': 4.0,
                 'memory_usage': 18.0,
@@ -524,8 +1076,8 @@ class Command(BaseCommand):
                 'os_type': 'CentOS Stream 9',
                 'business_line': BIZ_DATA,
                 'environment': 'dev',
-                'admin_user': '数据平台-韩梅',
-                'description': '开发调度节点，对应 CMDB 开发环境主机',
+                'admin_user': '\u6570\u636e\u5e73\u53f0-\u97e9\u6885',
+                'description': '\u5f00\u53d1\u8c03\u5ea6\u8282\u70b9\uff0c\u5bf9\u5e94 CMDB \u5f00\u53d1\u73af\u5883\u4e3b\u673a',
                 'status': 'online',
                 'cpu_usage': 14.0,
                 'memory_usage': 32.0,
@@ -537,8 +1089,8 @@ class Command(BaseCommand):
                 'os_type': 'CentOS 7.9',
                 'business_line': BIZ_DATA,
                 'environment': 'prod',
-                'admin_user': '数据集成-孙博',
-                'description': '遗留同步主机，已停止使用但仍未完成下线回收',
+                'admin_user': '\u6570\u636e\u96c6\u6210-\u5b59\u535a',
+                'description': '\u9057\u7559\u540c\u6b65\u4e3b\u673a\uff0c\u5df2\u505c\u6b62\u4f7f\u7528\u4f46\u4ecd\u672a\u5b8c\u6210\u4e0b\u7ebf\u56de\u6536',
                 'status': 'offline',
                 'cpu_usage': 0.0,
                 'memory_usage': 0.0,
@@ -550,8 +1102,8 @@ class Command(BaseCommand):
                 'os_type': 'Ubuntu 22.04',
                 'business_line': BIZ_INFRA,
                 'environment': 'prod',
-                'admin_user': 'SRE-王涛',
-                'description': '基础设施生产 K8s 工作节点，与 CMDB 配置项一致',
+                'admin_user': 'SRE-\u738b\u6d9b',
+                'description': '\u57fa\u7840\u8bbe\u65bd\u751f\u4ea7 K8s \u5de5\u4f5c\u8282\u70b9\uff0c\u4e0e CMDB \u914d\u7f6e\u9879\u4e00\u81f4',
                 'status': 'online',
                 'cpu_usage': 28.0,
                 'memory_usage': 44.0,
@@ -647,6 +1199,8 @@ class Command(BaseCommand):
             )
 
         seed_app_release_demo(self.stdout, hosts, docker_hosts)
+        seed_host_task_demo(self.stdout, hosts)
+        seed_host_schedule_demo(self.stdout, hosts)
         self.stdout.write(
             self.style.SUCCESS(
                 f'数据生成完成: {Host.objects.count()} 主机, {Deployment.objects.count()} 发布记录, '

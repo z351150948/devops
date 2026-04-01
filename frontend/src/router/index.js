@@ -30,9 +30,59 @@ const routes = [
       },
       {
         path: 'hosts',
-        name: 'Hosts',
-        redirect: { path: '/cmdb', query: { tab: 'host-manage', hostTab: 'assets' } },
-        meta: { title: '主机管理', icon: 'Monitor', permission: 'ops.host.view', hidden: true },
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasAnyPermission(['ops.host.view', 'ops.host.manage', 'ops.host.terminal'])) {
+            return '/hosts/assets'
+          }
+          if (authStore.hasAnyPermission(['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'])) {
+            return '/hosts/schedules'
+          }
+          if (authStore.hasPermission('ops.host.execute')) {
+            return '/hosts/tasks'
+          }
+          if (authStore.hasAnyPermission(['cmdb.request.submit', 'cmdb.request.approve'])) {
+            return '/hosts/requests'
+          }
+          return '/403'
+        },
+        meta: { hidden: true },
+      },
+      {
+        path: 'hosts/assets',
+        name: 'HostsAssets',
+        component: () => import('@/views/Hosts.vue'),
+        meta: {
+          title: '主机资产',
+          icon: 'Monitor',
+          anyPermissions: ['ops.host.view', 'ops.host.manage', 'ops.host.terminal'],
+        },
+      },
+      {
+        path: 'hosts/schedules',
+        name: 'HostSchedules',
+        component: () => import('@/views/Hosts.vue'),
+        meta: {
+          title: '定时任务',
+          icon: 'Timer',
+          anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+        },
+      },
+      {
+        path: 'hosts/tasks',
+        name: 'HostTasks',
+        component: () => import('@/views/Hosts.vue'),
+        meta: { title: '任务中心', icon: 'Operation', permission: 'ops.host.execute' },
+      },
+      {
+        path: 'hosts/requests',
+        name: 'HostRequests',
+        component: () => import('@/views/Hosts.vue'),
+        meta: {
+          title: '主机申请',
+          icon: 'Ticket',
+          anyPermissions: ['cmdb.request.submit', 'cmdb.request.approve'],
+        },
       },
       {
         path: 'cmdb',
@@ -48,9 +98,6 @@ const routes = [
             'cmdb.cost.view',
             'cmdb.request.submit',
             'cmdb.request.approve',
-            'ops.host.view',
-            'ops.host.manage',
-            'ops.host.terminal',
           ],
         },
       },
@@ -279,4 +326,3 @@ router.beforeEach(async (to) => {
 })
 
 export default router
-

@@ -1,255 +1,221 @@
 <template>
-  <div class="fade-in">
-    <div class="page-header">
-      <h2>主机管理</h2>
-      <el-button v-if="canManageHosts" type="primary" @click="openDialog()">
-        <el-icon><Plus /></el-icon> 新增主机
-      </el-button>
-    </div>
-
-    <div class="table-card">
-      <div class="filter-bar">
-        <el-input v-model="search" placeholder="搜索主机名 / IP" clearable style="width: 260px"
-          :prefix-icon="Search" @input="fetchData" />
-        <el-select v-model="statusFilter" placeholder="状态" clearable style="width: 120px" @change="fetchData">
-          <el-option label="在线" value="online" />
-          <el-option label="离线" value="offline" />
-          <el-option label="告警" value="warning" />
-        </el-select>
+  <div class="fade-in host-center-page">
+    <section class="hero panel">
+      <div class="host-hero-copy">
+        <div class="host-hero-title-row host-hero-title-inline">
+          <span class="host-header-icon"><el-icon><Monitor /></el-icon></span>
+          <h2>{{ activeTabMeta?.label || '主机中心' }}</h2>
+          <p class="host-subtitle inline-subtitle">{{ heroSubtitle }}</p>
+        </div>
       </div>
+      <div class="hero-actions">
+        <el-button size="small" :loading="overviewLoading" @click="reloadOverview">刷新总览</el-button>
+      </div>
+    </section>
 
-      <el-table :data="hosts" stripe v-loading="loading" style="width: 100%">
-        <el-table-column prop="hostname" label="主机名" min-width="140" />
-        <el-table-column prop="ip_address" label="IP 地址" width="140" />
-        <el-table-column prop="os_type" label="操作系统" width="120" />
-        <el-table-column label="SSH" width="120">
-          <template #default="{ row }">
-            <span style="font-size:12px; color:var(--text-secondary);">{{ row.ssh_user }}@:{{ row.ssh_port }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="90">
-          <template #default="{ row }">
-            <span><span class="status-dot" :class="row.status"></span>{{ row.status_display }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="CPU" width="95">
-          <template #default="{ row }">
-            <el-progress :percentage="row.cpu_usage" :stroke-width="6" :color="progressColor(row.cpu_usage)" :show-text="false" />
-            <span style="font-size:12px; color:var(--text-secondary);">{{ row.cpu_usage }}%</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="内存" width="95">
-          <template #default="{ row }">
-            <el-progress :percentage="row.memory_usage" :stroke-width="6" :color="progressColor(row.memory_usage)" :show-text="false" />
-            <span style="font-size:12px; color:var(--text-secondary);">{{ row.memory_usage }}%</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="磁盘" width="95">
-          <template #default="{ row }">
-            <el-progress :percentage="row.disk_usage" :stroke-width="6" :color="progressColor(row.disk_usage)" :show-text="false" />
-            <span style="font-size:12px; color:var(--text-secondary);">{{ row.disk_usage }}%</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canManageHosts || canUseTerminal" label="操作" width="260" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="canManageHosts" link type="success" size="small" @click="handleTestConnection(row)" :loading="row._testing">
-              测试
-            </el-button>
-            <el-button v-if="canManageHosts" link type="warning" size="small" @click="handleRefreshInfo(row)" :loading="row._refreshing">
-              刷新
-            </el-button>
-            <el-button v-if="canUseTerminal" link type="primary" size="small" @click="openTerminal(row)">
-              <el-icon><Monitor /></el-icon> 终端
-            </el-button>
-            <el-button v-if="canManageHosts" link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm v-if="canManageHosts" title="确定删除？" @confirm="handleDelete(row.id)">
-              <template #reference>
-                <el-button link type="danger" size="small">删除</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div style="display:flex; justify-content:flex-end; margin-top:16px;">
-        <el-pagination
-          v-model:current-page="page"
-          :page-size="20"
-          :total="total"
-          layout="total, prev, pager, next"
-          @current-change="fetchData"
-        />
+    <div class="stats-grid host-stats">
+      <div v-for="card in summaryCards" :key="card.label" class="stat-card release-stat-card" :class="card.tone">
+        <div class="stat-value">{{ card.value }}</div>
+        <div class="stat-label">{{ card.label }}</div>
+        <div class="release-stat-desc">{{ card.desc }}</div>
       </div>
     </div>
 
-    <!-- 新增/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑主机' : '新增主机'" width="90%" style="max-width:560px;" top="5vh" append-to-body destroy-on-close>
-      <el-form :model="form" label-width="90px">
-        <el-form-item label="主机名">
-          <el-input v-model="form.hostname" placeholder="例如 web-server-01" />
-        </el-form-item>
-        <el-form-item label="IP 地址">
-          <el-input v-model="form.ip_address" placeholder="例如 192.168.1.10" />
-        </el-form-item>
-        <el-form-item label="操作系统">
-          <el-input v-model="form.os_type" placeholder="例如 CentOS 7.9" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="form.status" style="width: 100%">
-            <el-option label="在线" value="online" />
-            <el-option label="离线" value="offline" />
-            <el-option label="告警" value="warning" />
-          </el-select>
-        </el-form-item>
+    <div class="neo-tabs theme-purple host-center-tabs">
+      <button
+        v-for="tab in tabs"
+        :key="tab.key"
+        class="neo-tab-btn"
+        :class="{ active: activeTab === tab.key }"
+        @click="switchTab(tab.key)"
+      >
+        <el-icon style="margin-right:4px;"><component :is="tab.icon" /></el-icon>
+        {{ tab.label }}
+      </button>
+    </div>
 
-        <el-divider content-position="left">SSH 连接信息</el-divider>
-
-        <el-form-item label="SSH 端口">
-          <el-input-number v-model="form.ssh_port" :min="1" :max="65535" controls-position="right" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="SSH 用户">
-          <el-input v-model="form.ssh_user" placeholder="root" />
-        </el-form-item>
-        <el-form-item label="SSH 密码">
-          <el-input v-model="form.ssh_password" type="password" placeholder="输入 SSH 密码" show-password />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
-      </template>
-    </el-dialog>
+    <div class="host-center-content">
+      <CmdbHostsPanel v-if="activeTab === 'assets'" :resource-tree="resourceTree" />
+      <CmdbHostTaskCenter v-else-if="activeTab === 'task-center'" :resource-tree="resourceTree" />
+      <CmdbHostScheduleCenter v-else-if="activeTab === 'schedule-center'" :resource-tree="resourceTree" />
+      <CmdbRequestsPanel v-else-if="activeTab === 'requests'" :resource-tree="resourceTree" />
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { getHosts, createHost, updateHost, deleteHost, testHostConnection, refreshHostInfo } from '@/api/modules/ops'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Monitor, Operation, Ticket, Timer } from '@element-plus/icons-vue'
+import CmdbHostsPanel from '@/components/cmdb/CmdbHostsPanel.vue'
+import CmdbHostScheduleCenter from '@/components/cmdb/CmdbHostScheduleCenter.vue'
+import CmdbHostTaskCenter from '@/components/cmdb/CmdbHostTaskCenter.vue'
+import CmdbRequestsPanel from '@/components/cmdb/CmdbRequestsPanel.vue'
 import { useAuthStore } from '@/stores/auth'
+import { getResourceNodeTree, getResourceRequests } from '@/api/modules/cmdb'
+import { getHosts, getHostTaskScheduleStats, getHostTaskStats } from '@/api/modules/ops'
 
+const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const hosts = ref([])
-const loading = ref(false)
-const search = ref('')
-const statusFilter = ref('')
-const page = ref(1)
-const total = ref(0)
 
-const dialogVisible = ref(false)
-const editingId = ref(null)
-const saving = ref(false)
-const defaultForm = {
-  hostname: '', ip_address: '', os_type: 'Linux', status: 'online',
-  ssh_port: 22, ssh_user: 'root', ssh_password: '',
+const resourceTree = ref([])
+const hostSummary = ref({ total: 0, online: 0, offline: 0, warning: 0 })
+const scheduleSummary = ref({ total: 0, enabled: 0, due_soon: 0, success_rate: 0 })
+const taskSummary = ref({ total: 0, running: 0, success_rate: 0 })
+const requestSummary = ref({ total: 0, pending: 0, approved: 0 })
+const overviewLoading = ref(false)
+
+const canViewAssets = computed(() => authStore.hasAnyPermission(['ops.host.view', 'ops.host.manage', 'ops.host.terminal']))
+const canViewSchedules = computed(() => authStore.hasAnyPermission(['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute']))
+const canViewTasks = computed(() => authStore.hasPermission('ops.host.execute'))
+const canViewRequests = computed(() => authStore.hasAnyPermission(['cmdb.request.submit', 'cmdb.request.approve']))
+
+const tabs = computed(() => [
+  canViewAssets.value && { key: 'assets', label: '主机资产', icon: Monitor, path: '/hosts/assets' },
+  canViewTasks.value && { key: 'task-center', label: '任务中心', icon: Operation, path: '/hosts/tasks' },
+  canViewSchedules.value && { key: 'schedule-center', label: '定时任务', icon: Timer, path: '/hosts/schedules' },
+  canViewRequests.value && { key: 'requests', label: '主机申请', icon: Ticket, path: '/hosts/requests' },
+].filter(Boolean))
+
+const routeTabMap = {
+  HostsAssets: 'assets',
+  HostSchedules: 'schedule-center',
+  HostTasks: 'task-center',
+  HostRequests: 'requests',
 }
-const form = ref({ ...defaultForm })
-const canManageHosts = computed(() => authStore.hasPermission('ops.host.manage'))
-const canUseTerminal = computed(() => authStore.hasPermission('ops.host.terminal'))
 
-const progressColor = (val) => {
-  if (val >= 90) return '#ef4444'
-  if (val >= 70) return '#f59e0b'
-  return '#10b981'
-}
+const activeTab = computed(() => routeTabMap[route.name] || tabs.value[0]?.key || 'assets')
+const activeTabMeta = computed(() => tabs.value.find(item => item.key === activeTab.value))
+const heroSubtitle = computed(() => {
+  if (activeTab.value === 'schedule-center') return '支持 SSH 直连与 Ansible 分发两种执行模型，可基于 Cron、间隔与单次规则到点自动生成任务。'
+  if (activeTab.value === 'task-center') return '支持 SSH 直连与 Ansible 分发两种执行模型，适合批量巡检、命令分发与 Playbook 编排。'
+  if (activeTab.value === 'requests') return '承接主机申请、审批与资产落库流程，保持申请视角与资产视角解耦。'
+  return '统一展示主机资产状态、业务归属、任务调度与申请流转，形成主机运维单一入口。'
+})
 
-const fetchData = async () => {
-  loading.value = true
-  try {
-    const params = { page: page.value }
-    if (search.value) params.search = search.value
-    if (statusFilter.value) params.status = statusFilter.value
-    const res = await getHosts(params)
-    hosts.value = (res.results || res).map(h => ({ ...h, _testing: false, _refreshing: false }))
-    total.value = res.count || hosts.value.length
-  } catch (e) {
-    console.error(e)
-  } finally {
-    loading.value = false
+const summaryCards = computed(() => {
+  if (activeTab.value === 'schedule-center' && canViewSchedules.value) {
+    return [
+      { label: '编排总数', value: scheduleSummary.value.total, desc: '定时任务中心当前纳管的自动化编排数量', tone: '' },
+      { label: '已启用', value: scheduleSummary.value.enabled, desc: '正在等待调度器触发的编排任务数', tone: 'success-card' },
+      { label: '小时内到点', value: scheduleSummary.value.due_soon, desc: '未来 1 小时内即将触发的编排数量', tone: 'warning-card' },
+    ]
   }
+  if (activeTab.value === 'task-center' && canViewTasks.value) {
+    return [
+      { label: '任务总数', value: taskSummary.value.total, desc: '任务中心累计执行次数', tone: '' },
+      { label: '执行中', value: taskSummary.value.running, desc: '当前仍在运行的批量任务', tone: 'warning-card' },
+      { label: '任务成功率', value: `${taskSummary.value.success_rate || 0}%`, desc: '成功与部分成功任务占比', tone: 'success-card' },
+    ]
+  }
+  if (activeTab.value === 'requests' && canViewRequests.value) {
+    return [
+      { label: '申请总数', value: requestSummary.value.total, desc: '主机申请累计单量', tone: '' },
+      { label: '待审批', value: requestSummary.value.pending, desc: '建议优先处理待审批申请', tone: 'warning-card' },
+      { label: '待转资产', value: requestSummary.value.approved, desc: '已批准但尚未完成落库的申请', tone: 'success-card' },
+    ]
+  }
+  if (canViewAssets.value) {
+    return [
+      { label: '主机总数', value: hostSummary.value.total, desc: '纳入主机中心的资产总量', tone: '' },
+      { label: '在线主机', value: hostSummary.value.online, desc: '当前状态为在线的主机数', tone: 'success-card' },
+      { label: '待关注', value: hostSummary.value.offline + hostSummary.value.warning, desc: '离线与告警主机需要优先排查', tone: 'warning-card' },
+    ]
+  }
+  return []
+})
+
+async function fetchResourceTree() {
+  try { resourceTree.value = await getResourceNodeTree() } catch (error) {}
 }
 
-const openDialog = (row) => {
-  if (row) {
-    editingId.value = row.id
-    form.value = {
-      hostname: row.hostname, ip_address: row.ip_address,
-      os_type: row.os_type, status: row.status,
-      ssh_port: row.ssh_port || 22, ssh_user: row.ssh_user || 'root',
-      ssh_password: row.ssh_password || '',
+async function fetchHostSummary() {
+  if (!canViewAssets.value) return
+  try {
+    const [totalRes, onlineRes, offlineRes, warningRes] = await Promise.all([
+      getHosts({ page: 1 }),
+      getHosts({ page: 1, status: 'online' }),
+      getHosts({ page: 1, status: 'offline' }),
+      getHosts({ page: 1, status: 'warning' }),
+    ])
+    hostSummary.value = {
+      total: totalRes.count || (totalRes.results || totalRes).length,
+      online: onlineRes.count || (onlineRes.results || onlineRes).length,
+      offline: offlineRes.count || (offlineRes.results || offlineRes).length,
+      warning: warningRes.count || (warningRes.results || warningRes).length,
     }
-  } else {
-    editingId.value = null
-    form.value = { ...defaultForm }
-  }
-  dialogVisible.value = true
+  } catch (error) {}
 }
 
-const handleSave = async () => {
-  saving.value = true
+async function fetchScheduleSummary() {
+  if (!canViewSchedules.value) return
+  try { scheduleSummary.value = await getHostTaskScheduleStats() } catch (error) {}
+}
+
+async function fetchTaskSummary() {
+  if (!canViewTasks.value) return
+  try { taskSummary.value = await getHostTaskStats() } catch (error) {}
+}
+
+async function fetchRequestSummary() {
+  if (!canViewRequests.value) return
   try {
-    if (editingId.value) {
-      await updateHost(editingId.value, form.value)
-      ElMessage.success('更新成功')
-    } else {
-      await createHost(form.value)
-      ElMessage.success('创建成功')
+    const [totalRes, pendingRes, approvedRes] = await Promise.all([
+      getResourceRequests(),
+      getResourceRequests({ status: 'pending' }),
+      getResourceRequests({ status: 'approved' }),
+    ])
+    requestSummary.value = {
+      total: totalRes.count || (totalRes.results || totalRes).length,
+      pending: pendingRes.count || (pendingRes.results || pendingRes).length,
+      approved: approvedRes.count || (approvedRes.results || approvedRes).length,
     }
-    dialogVisible.value = false
-    fetchData()
-  } catch (e) {
-    console.error(e)
-  } finally {
-    saving.value = false
-  }
+  } catch (error) {}
 }
 
-const handleDelete = async (id) => {
+function switchTab(tabKey) {
+  const matched = tabs.value.find(item => item.key === tabKey)
+  if (matched && matched.path !== route.path) router.push(matched.path)
+}
+
+function ensureAccessibleRoute() {
+  const currentTab = routeTabMap[route.name]
+  if (!tabs.value.length) return router.replace('/403')
+  if (!tabs.value.some(item => item.key === currentTab)) router.replace(tabs.value[0].path)
+}
+
+watch(tabs, ensureAccessibleRoute, { immediate: true })
+watch(() => route.name, () => { reloadOverview() })
+
+async function reloadOverview() {
+  overviewLoading.value = true
   try {
-    await deleteHost(id)
-    ElMessage.success('删除成功')
-    fetchData()
-  } catch (e) {
-    console.error(e)
-  }
-}
-
-const handleTestConnection = async (row) => {
-  row._testing = true
-  try {
-    const res = await testHostConnection(row.id)
-    if (res.success) {
-      ElMessage.success(res.message)
-    } else {
-      ElMessage.error(res.message)
-    }
-  } catch (e) {
-    ElMessage.error('测试连接失败')
+    await Promise.all([
+      fetchResourceTree(),
+      fetchHostSummary(),
+      fetchScheduleSummary(),
+      fetchTaskSummary(),
+      fetchRequestSummary(),
+    ])
   } finally {
-    row._testing = false
+    overviewLoading.value = false
   }
 }
 
-const handleRefreshInfo = async (row) => {
-  row._refreshing = true
-  try {
-    const res = await refreshHostInfo(row.id)
-    // 更新表格中的数据
-    Object.assign(row, res, { _testing: false, _refreshing: false })
-    ElMessage.success('主机信息已刷新')
-  } catch (e) {
-    ElMessage.error('刷新主机信息失败')
-  } finally {
-    row._refreshing = false
-  }
-}
-
-const openTerminal = (row) => {
-  router.push({ name: 'WebShell', params: { hostId: row.id } })
-}
-
-onMounted(fetchData)
+onMounted(async () => { await reloadOverview() })
 </script>
+
+<style scoped>
+.host-center-page{display:flex;flex-direction:column;gap:6px}
+.panel{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid #dbe4f0;border-radius:24px;box-shadow:0 14px 34px rgba(15,23,42,.06);padding:14px 22px}
+.hero{background:linear-gradient(135deg,#fff7ed 0%,#f8fbff 100%);display:flex;gap:12px;justify-content:space-between;align-items:center}
+.host-hero-copy{display:flex;flex-direction:column}.host-hero-title-row{display:flex;align-items:center;gap:12px}.host-hero-title-inline{flex-wrap:wrap}.host-header-icon{width:42px;height:42px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:20px;color:#fff;background:linear-gradient(135deg,#409eff,#36cfc9);box-shadow:0 10px 20px rgba(64,158,255,.2)}
+.hero-actions{display:flex;align-items:center;gap:8px}.hero h2{color:#0f172a;margin:0}.host-subtitle,.inline-subtitle{margin:0;max-width:none;font-size:13px;line-height:1.45;color:#475569}
+.stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.host-stats{gap:12px}
+.release-stat-card{position:relative;min-height:76px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);border:1px solid rgba(148,163,184,.18);box-shadow:0 16px 34px rgba(15,23,42,.07);text-align:left;padding:12px 16px;overflow:hidden}
+.release-stat-card::after{content:'';position:absolute;inset:auto -24px -30px auto;width:108px;height:108px;border-radius:50%;background:radial-gradient(circle,rgba(64,158,255,.16) 0%,rgba(64,158,255,0) 70%)}.warning-card::after{background:radial-gradient(circle,rgba(245,158,11,.18) 0%,rgba(245,158,11,0) 70%)}.success-card::after{background:radial-gradient(circle,rgba(16,185,129,.18) 0%,rgba(16,185,129,0) 70%)}
+.stat-value{font-size:24px;line-height:1.05;color:#0f172a;font-weight:700}.stat-label{margin-top:4px;color:#64748b;font-size:13px}.release-stat-desc{margin-top:6px;color:#64748b;font-size:12px}
+.host-center-tabs{width:100%;margin-top:-10px;padding:8px 12px;border-radius:18px;background:rgba(255,255,255,.86);box-shadow:0 14px 28px rgba(15,23,42,.06)}.host-center-content{min-width:0;margin-top:-8px}
+@media (max-width: 900px) { .hero{flex-direction:column;align-items:flex-start} .stats-grid{grid-template-columns:1fr} }
+</style>
