@@ -1263,14 +1263,14 @@ onUnmounted(() => {
 .logs-query-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
 }
 
 .hero-panel {
@@ -1278,12 +1278,12 @@ onUnmounted(() => {
   border: 1px solid rgba(96,165,250,.18);
   border-radius: 24px;
   box-shadow: 0 16px 36px rgba(14,165,233,.08);
-  padding: 14px 22px;
+  padding: 12px 14px;
 }
 
 .release-hero-title-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 12px;
 }
 
@@ -1294,7 +1294,7 @@ onUnmounted(() => {
 .log-header-icon {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1303,6 +1303,14 @@ onUnmounted(() => {
   background: linear-gradient(135deg, #0ea5e9, #2563eb);
   box-shadow: 0 10px 20px rgba(37,99,235,.2);
 }
+
+.hero h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 23px;
+  line-height: 1.1;
+}
+
 
 .log-center-tabs {
   margin-bottom: 0;
@@ -1322,7 +1330,7 @@ onUnmounted(() => {
   margin: 0;
   color: #475569;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .inline-subtitle {
@@ -1334,16 +1342,16 @@ onUnmounted(() => {
   border: 1px solid rgba(148,163,184,.16);
   border-radius: 20px;
   box-shadow: 0 18px 36px rgba(15,23,42,.06);
-  padding: 16px 18px;
+  padding: 12px 14px;
 }
 
 .tabs-panel {
-  padding: 12px 16px 4px;
+  padding: 10px 12px 4px;
 }
 
 .query-layout {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.85fr);
 }
 
@@ -1351,7 +1359,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 
 .field-label-with-help {
@@ -1361,7 +1369,7 @@ onUnmounted(() => {
 }
 
 .slim-head {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .toolbar-actions,

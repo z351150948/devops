@@ -621,20 +621,20 @@ function viewDeployLog(deployment) {
 .market-tabs {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 14px;
-  padding: 12px;
-  border-radius: 20px;
+  padding: 6px;
+  border-radius: 12px;
   background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.9));
   border: 1px solid rgba(148,163,184,.16);
-  box-shadow: 0 18px 36px rgba(15,23,42,.06);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
 }
 
 .market-tabs .tab-btn {
-  min-height: 38px;
-  padding: 0 16px;
-  border-radius: 14px;
+  min-height: auto;
+  padding: 10px 24px;
+  border-radius: 8px;
 }
 
 .table-card {

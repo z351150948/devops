@@ -220,16 +220,16 @@ const routes = [
         },
       },
       {
+        path: 'observability/grafana',
+        name: 'GrafanaDashboard',
+        component: () => import('@/views/GrafanaDashboard.vue'),
+        meta: { title: '监控看板', icon: 'Histogram', permission: 'ops.grafana.view' },
+      },
+      {
         path: 'observability/tracing',
         name: 'TraceObservability',
         component: () => import('@/views/TraceObservability.vue'),
         meta: { title: '链路追踪', icon: 'Connection', permission: 'ops.trace.view' },
-      },
-      {
-        path: 'observability/grafana',
-        name: 'GrafanaDashboard',
-        component: () => import('@/views/GrafanaDashboard.vue'),
-        meta: { title: 'Grafana 大屏', icon: 'Histogram', permission: 'ops.grafana.view' },
       },
       {
         path: 'events',

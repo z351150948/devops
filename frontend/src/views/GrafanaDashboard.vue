@@ -6,18 +6,19 @@
           <span class="hero-icon">
             <el-icon><Histogram /></el-icon>
           </span>
-          <h2>Grafana 大屏</h2>
+          <h2>监控看板</h2>
+          <p class="page-inline-desc">集成 Grafana 看板，支持筛选与嵌入查看</p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button @click="loadOverview" :loading="loading">
+        <el-button size="small" @click="loadOverview" :loading="loading">
           <el-icon><RefreshRight /></el-icon>
           刷新
         </el-button>
-        <el-button v-if="canViewTracing" @click="router.push('/observability/tracing')">链路追踪</el-button>
-        <el-button v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
-        <el-button v-if="canViewAlerts" @click="router.push('/alerts')">告警中心</el-button>
-        <el-button v-if="grafana.url" type="primary" @click="openGrafana">打开 Grafana</el-button>
+        <el-button size="small" v-if="canViewTracing" @click="router.push('/observability/tracing')">链路追踪</el-button>
+        <el-button size="small" v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
+        <el-button size="small" v-if="canViewAlerts" @click="router.push('/alerts')">告警中心</el-button>
+        <el-button size="small" v-if="grafana.url" type="primary" @click="openGrafana">打开 Grafana</el-button>
       </div>
     </section>
 
@@ -30,7 +31,7 @@
 
     <div class="runtime-strip">
       <el-icon><InfoFilled /></el-icon>
-      <span>{{ overview.tips?.[1] || 'Grafana 未配置外部地址时，页面会保留推荐看板和嵌入占位。' }}</span>
+      <span>{{ overview.tips?.[1] || '已集成 Grafana 时可直接嵌入查看，未配置时保留推荐看板占位。' }}</span>
     </div>
 
     <section class="panel">
@@ -39,8 +40,8 @@
         <el-tag size="small" :type="grafana.configured ? 'success' : 'warning'">{{ grafana.status_text || '待加载' }}</el-tag>
       </div>
       <div class="toolbar-grid">
-        <el-input v-model.trim="filters.keyword" placeholder="按看板名或说明搜索" clearable />
-        <el-select v-model="filters.tag" clearable placeholder="按标签筛选">
+        <el-input size="small" v-model.trim="filters.keyword" placeholder="按看板名或说明搜索" clearable />
+        <el-select size="small" v-model="filters.tag" clearable placeholder="按标签筛选">
           <el-option v-for="item in tagOptions" :key="item" :label="item" :value="item" />
         </el-select>
       </div>
@@ -78,8 +79,8 @@
                   <span v-for="tag in item.tags" :key="`${item.key}-${tag}`" class="dashboard-chip">{{ tag }}</span>
                 </div>
                 <div class="dashboard-actions">
-                  <el-button v-if="item.url" link type="primary" @click.stop="openExternal(item.url)">打开看板</el-button>
-                  <el-button v-else link disabled>等待配置 URL</el-button>
+                  <el-button size="small" v-if="item.url" link type="primary" @click.stop="openExternal(item.url)">打开看板</el-button>
+                  <el-button size="small" v-else link disabled>等待配置 URL</el-button>
                 </div>
               </article>
             </div>
@@ -269,15 +270,15 @@ onMounted(loadOverview)
 .observability-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .panel {
   background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
   border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-  padding: 18px 20px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+  padding: 12px 14px;
 }
 
 .hero,
@@ -290,8 +291,12 @@ onMounted(loadOverview)
 .dashboard-tags,
 .dashboard-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.hero-copy {
+  gap: 4px;
 }
 
 .hero {
@@ -300,13 +305,27 @@ onMounted(loadOverview)
 }
 
 .hero-title-row {
-  align-items: center;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hero-title-row h2 {
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .hero-icon {
   align-items: center;
   background: linear-gradient(135deg, #f59e0b, #ea580c);
-  border-radius: 14px;
+  border-radius: 16px;
   color: #fff;
   display: inline-flex;
   height: 42px;
@@ -316,14 +335,14 @@ onMounted(loadOverview)
 
 .release-stats {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .release-stat-card {
-  border-radius: 18px;
-  min-height: 94px;
-  padding: 16px 18px;
+  border-radius: 12px;
+  min-height: 72px;
+  padding: 10px 12px;
 }
 
 .warning-card {
@@ -339,55 +358,61 @@ onMounted(loadOverview)
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
 }
 
 .stat-label {
   color: #475569;
   font-size: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .runtime-strip {
   align-items: center;
   background: linear-gradient(90deg, rgba(245, 158, 11, 0.12), rgba(249, 115, 22, 0.1));
   border: 1px solid rgba(245, 158, 11, 0.16);
-  border-radius: 14px;
+  border-radius: 12px;
   color: #0f172a;
   display: flex;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 8px 11px;
 }
 
 .section-head {
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
+}
+
+.section-head h3 {
+  font-size: 14px;
+  line-height: 1.3;
+  margin: 0;
 }
 
 .toolbar-grid {
   display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1.3fr) 220px;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.35fr) 180px;
 }
 
 .content-grid {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
 }
 
 .dashboard-groups {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .dashboard-group {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .group-head {
@@ -404,18 +429,18 @@ onMounted(loadOverview)
 .dashboard-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .dashboard-card,
 .selected-card {
   background: linear-gradient(135deg, rgba(15, 23, 42, 0.02), rgba(249, 115, 22, 0.08));
   border: 1px solid #e2e8f0;
-  border-radius: 18px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px;
+  gap: 8px;
+  padding: 10px;
 }
 
 .dashboard-card {
@@ -436,14 +461,14 @@ onMounted(loadOverview)
 .dashboard-top strong,
 .selected-card strong {
   display: block;
-  font-size: 16px;
-  margin-bottom: 6px;
+  font-size: 14px;
+  margin-bottom: 4px;
 }
 
 .dashboard-top p,
 .selected-card p {
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.5;
   margin: 0;
 }
 
@@ -453,14 +478,14 @@ onMounted(loadOverview)
   border-radius: 999px;
   color: #c2410c;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 3px 8px;
 }
 
 .embed-frame {
   border: 0;
-  border-radius: 14px;
-  height: 720px;
-  margin-top: 14px;
+  border-radius: 10px;
+  height: 560px;
+  margin-top: 8px;
   width: 100%;
 }
 

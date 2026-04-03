@@ -7,17 +7,18 @@
             <el-icon><Connection /></el-icon>
           </span>
           <h2>链路追踪</h2>
+          <p class="page-inline-desc">按服务、Trace 与时窗快速钻取调用链</p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button @click="refreshAll" :loading="loading.catalog || loading.search">
+        <el-button size="small" @click="refreshAll" :loading="loading.catalog || loading.search">
           <el-icon><RefreshRight /></el-icon>
           刷新
         </el-button>
-        <el-button v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
-        <el-button v-if="canViewAlerts" @click="router.push('/alerts')">告警中心</el-button>
-        <el-button v-if="canViewGrafana" @click="router.push('/observability/grafana')">Grafana 大屏</el-button>
-        <el-button v-if="tracing.ui_url || tracing.oap_url" type="primary" @click="openTracingUi">
+        <el-button size="small" v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
+        <el-button size="small" v-if="canViewAlerts" @click="router.push('/alerts')">告警中心</el-button>
+        <el-button size="small" v-if="canViewGrafana" @click="router.push('/observability/grafana')">监控看板</el-button>
+        <el-button size="small" v-if="tracing.ui_url || tracing.oap_url" type="primary" @click="openTracingUi">
           打开 SkyWalking
         </el-button>
       </div>
@@ -47,30 +48,30 @@
       </div>
 
       <div class="toolbar-grid">
-        <el-select v-model="filters.serviceId" clearable filterable placeholder="选择服务">
+        <el-select v-model="filters.serviceId" size="small" clearable filterable placeholder="选择服务">
           <el-option v-for="item in services" :key="item.id" :label="item.name" :value="item.id" />
         </el-select>
-        <el-select v-model="filters.traceState" placeholder="Trace 状态">
+        <el-select v-model="filters.traceState" size="small" placeholder="Trace 状态">
           <el-option label="全部状态" value="ALL" />
           <el-option label="正常链路" value="SUCCESS" />
           <el-option label="错误链路" value="ERROR" />
         </el-select>
-        <el-select v-model="filters.durationMinutes" placeholder="查询窗口">
+        <el-select v-model="filters.durationMinutes" size="small" placeholder="查询窗口">
           <el-option v-for="item in durationOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="filters.sortBy" placeholder="排序方式">
+        <el-select v-model="filters.sortBy" size="small" placeholder="排序方式">
           <el-option label="最近开始" value="latest" />
           <el-option label="最慢优先" value="slowest" />
           <el-option label="错误优先" value="errors" />
         </el-select>
-        <el-input v-model.trim="filters.keyword" placeholder="关键字 / 接口 / 服务名" clearable />
-        <el-input v-model.trim="filters.traceId" placeholder="指定 Trace ID" clearable />
-        <el-input-number v-model="filters.limit" :min="5" :max="50" :step="5" />
+        <el-input size="small" v-model.trim="filters.keyword" placeholder="关键字 / 接口 / 服务名" clearable />
+        <el-input size="small" v-model.trim="filters.traceId" placeholder="指定 Trace ID" clearable />
+        <el-input-number size="small" v-model="filters.limit" :min="5" :max="50" :step="5" />
       </div>
 
       <div class="toolbar-actions">
-        <el-button type="primary" @click="runSearch()" :loading="loading.search">查询 Trace</el-button>
-        <el-button @click="resetFilters">重置条件</el-button>
+        <el-button size="small" type="primary" @click="runSearch()" :loading="loading.search">查询 Trace</el-button>
+        <el-button size="small" @click="resetFilters">重置条件</el-button>
       </div>
     </section>
 
@@ -104,7 +105,7 @@
 
         <el-empty v-if="!displayTraces.length && !loading.search" description="当前条件下没有找到 Trace。" />
 
-        <el-table v-else :data="displayTraces" stripe v-loading="loading.search" style="width: 100%">
+        <el-table v-else :data="displayTraces" stripe size="small" v-loading="loading.search" style="width: 100%">
           <el-table-column prop="trace_id" label="Trace ID" min-width="180" show-overflow-tooltip />
           <el-table-column label="服务" min-width="150">
             <template #default="{ row }">{{ row.service_name || serviceNameById(row.service_id) || '--' }}</template>
@@ -139,7 +140,7 @@
           <h3>Trace 明细</h3>
           <div class="section-head-tags">
             <el-tag v-if="selectedTraceId" size="small" type="warning">{{ selectedTraceId }}</el-tag>
-            <el-button v-if="canQueryLogs && selectedTraceId" link type="primary" @click="openLogsForTrace({ trace_id: selectedTraceId, service_name: traceDetail?.service_name })">
+            <el-button size="small" v-if="canQueryLogs && selectedTraceId" link type="primary" @click="openLogsForTrace({ trace_id: selectedTraceId, service_name: traceDetail?.service_name })">
               关联日志
             </el-button>
           </div>
@@ -263,7 +264,7 @@
     <section class="panel embed-panel">
       <div class="section-head">
         <h3>SkyWalking 入口</h3>
-        <el-button v-if="tracing.ui_url || tracing.oap_url" link type="primary" @click="openTracingUi">在新窗口打开</el-button>
+        <el-button size="small" v-if="tracing.ui_url || tracing.oap_url" link type="primary" @click="openTracingUi">在新窗口打开</el-button>
       </div>
 
       <iframe v-if="tracing.embed_url" class="embed-frame" :src="tracing.embed_url" title="SkyWalking" />
@@ -644,15 +645,15 @@ onUnmounted(() => {
 .observability-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .panel {
   background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
   border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-  padding: 18px 20px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+  padding: 12px 14px;
 }
 
 .hero,
@@ -669,8 +670,12 @@ onUnmounted(() => {
 .chips-wrap,
 .detail-summary {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.hero-copy {
+  gap: 4px;
 }
 
 .hero {
@@ -679,13 +684,27 @@ onUnmounted(() => {
 }
 
 .hero-title-row {
-  align-items: center;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hero-title-row h2 {
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .hero-icon {
   align-items: center;
   background: linear-gradient(135deg, #0f766e, #0ea5e9);
-  border-radius: 14px;
+  border-radius: 16px;
   color: #fff;
   display: inline-flex;
   height: 42px;
@@ -695,14 +714,14 @@ onUnmounted(() => {
 
 .release-stats {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .release-stat-card {
-  border-radius: 18px;
-  min-height: 94px;
-  padding: 16px 18px;
+  border-radius: 12px;
+  min-height: 72px;
+  padding: 10px 12px;
 }
 
 .warning-card {
@@ -718,51 +737,57 @@ onUnmounted(() => {
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
 }
 
 .stat-label {
   color: #475569;
   font-size: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .runtime-strip {
   align-items: center;
   background: linear-gradient(90deg, rgba(14, 165, 233, 0.12), rgba(16, 185, 129, 0.1));
   border: 1px solid rgba(14, 165, 233, 0.16);
-  border-radius: 14px;
+  border-radius: 12px;
   color: #0f172a;
   display: flex;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 8px 11px;
 }
 
 .section-head {
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
+}
+
+.section-head h3 {
+  font-size: 14px;
+  line-height: 1.3;
+  margin: 0;
 }
 
 .toolbar-grid {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 
 .toolbar-actions {
-  margin-top: 14px;
+  margin-top: 8px;
 }
 
 .topology-layout {
   display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(0, 1.4fr) 280px;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.45fr) 240px;
 }
 
 .topology-chart {
-  height: 320px;
+  height: 240px;
 }
 
 .topology-side {
@@ -773,17 +798,17 @@ onUnmounted(() => {
 .topology-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .topology-item {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-radius: 14px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px;
+  gap: 4px;
+  padding: 8px 10px;
 }
 
 .topology-item span,
@@ -798,8 +823,8 @@ onUnmounted(() => {
 
 .content-grid {
   display: grid;
-  gap: 14px;
-  grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.85fr);
 }
 
 .slow-text {
@@ -809,36 +834,36 @@ onUnmounted(() => {
 
 .detail-summary {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .spotlight-grid {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .detail-kpi {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
-  border-radius: 14px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 12px 14px;
+  gap: 4px;
+  padding: 8px 10px;
 }
 
 .spotlight-card {
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
   border: 1px solid #e2e8f0;
-  border-radius: 14px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 8px 10px;
 }
 
 .danger-spotlight {
@@ -865,7 +890,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   text-align: left;
 }
 
@@ -881,7 +906,7 @@ onUnmounted(() => {
 .service-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 4px;
 }
 
 .service-pill {
@@ -890,29 +915,29 @@ onUnmounted(() => {
   border-radius: 999px;
   color: #1d4ed8;
   font-size: 12px;
-  padding: 5px 10px;
+  padding: 4px 8px;
 }
 
 .chips-section {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .chips-title {
   display: block;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .span-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .span-card {
   background: #fcfcfd;
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 14px;
+  border-radius: 10px;
+  padding: 10px;
 }
 
 .span-card.is-error {
@@ -930,7 +955,7 @@ onUnmounted(() => {
 
 .span-title {
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .span-chip {
@@ -939,30 +964,39 @@ onUnmounted(() => {
   border-radius: 999px;
   color: #0f766e;
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 3px 8px;
 }
 
 .span-log-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .span-log-item {
   background: #fff7ed;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .embed-frame {
   border: 0;
-  border-radius: 14px;
-  height: 620px;
+  border-radius: 10px;
+  height: 500px;
   width: 100%;
+}
+
+:deep(.el-table td.el-table__cell),
+:deep(.el-table th.el-table__cell) {
+  padding: 7px 0;
+}
+
+:deep(.el-table .cell) {
+  line-height: 1.35;
 }
 
 @media (max-width: 1280px) {

@@ -7,13 +7,14 @@
             <el-icon><Bell /></el-icon>
           </span>
           <h2>告警中心</h2>
+          <p class="page-inline-desc">集中确认、筛选并联动定位异常告警</p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button @click="fetchData" :loading="loading">刷新告警</el-button>
-        <el-button v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
-        <el-button v-if="canViewTracing" @click="router.push('/observability/tracing')">链路追踪</el-button>
-        <el-button v-if="canViewGrafana" @click="router.push('/observability/grafana')">Grafana 大屏</el-button>
+        <el-button size="small" @click="fetchData" :loading="loading">刷新告警</el-button>
+        <el-button size="small" v-if="canQueryLogs" @click="router.push('/logs/query')">日志查询</el-button>
+        <el-button size="small" v-if="canViewTracing" @click="router.push('/observability/tracing')">链路追踪</el-button>
+        <el-button size="small" v-if="canViewGrafana" @click="router.push('/observability/grafana')">监控看板</el-button>
       </div>
     </section>
 
@@ -45,24 +46,25 @@
       <div class="filter-bar">
         <el-input
           v-model="search"
+          size="small"
           placeholder="搜索告警标题 / 来源"
           clearable
-          style="width: 320px"
+          style="width: 280px"
           :prefix-icon="Search"
           @input="handleFilterChange"
         />
-        <el-select v-model="levelFilter" placeholder="级别" clearable style="width: 120px" @change="handleFilterChange">
+        <el-select v-model="levelFilter" size="small" placeholder="级别" clearable style="width: 112px" @change="handleFilterChange">
           <el-option label="严重" value="critical" />
           <el-option label="警告" value="warning" />
           <el-option label="信息" value="info" />
         </el-select>
-        <el-select v-model="ackFilter" placeholder="状态" clearable style="width: 120px" @change="handleFilterChange">
+        <el-select v-model="ackFilter" size="small" placeholder="状态" clearable style="width: 112px" @change="handleFilterChange">
           <el-option label="未确认" :value="false" />
           <el-option label="已确认" :value="true" />
         </el-select>
       </div>
 
-      <el-table :data="alerts" stripe v-loading="loading" style="width: 100%">
+      <el-table :data="alerts" stripe size="small" v-loading="loading" style="width: 100%">
         <el-table-column prop="title" label="告警标题" min-width="220" />
         <el-table-column prop="level" label="级别" width="100">
           <template #default="{ row }">
@@ -100,6 +102,7 @@
 
       <div class="pager">
         <el-pagination
+          small
           v-model:current-page="page"
           :page-size="20"
           :total="total"
@@ -267,15 +270,15 @@ onMounted(async () => {
 .alerts-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .panel {
   background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
   border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-  padding: 18px 20px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+  padding: 12px 14px;
 }
 
 .hero,
@@ -285,7 +288,7 @@ onMounted(async () => {
 .filter-bar,
 .row-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -296,16 +299,31 @@ onMounted(async () => {
 
 .hero-copy {
   flex-direction: column;
+  gap: 4px;
 }
 
 .hero-title-row {
-  align-items: center;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hero-title-row h2 {
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .hero-icon {
   align-items: center;
   background: linear-gradient(135deg, #dc2626, #f97316);
-  border-radius: 14px;
+  border-radius: 16px;
   color: #fff;
   display: inline-flex;
   height: 42px;
@@ -315,14 +333,14 @@ onMounted(async () => {
 
 .release-stats {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .release-stat-card {
-  border-radius: 18px;
-  min-height: 94px;
-  padding: 16px 18px;
+  border-radius: 12px;
+  min-height: 72px;
+  padding: 10px 12px;
 }
 
 .danger-card {
@@ -338,35 +356,44 @@ onMounted(async () => {
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
 }
 
 .stat-label {
   color: #475569;
   font-size: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .runtime-strip {
   align-items: center;
   background: linear-gradient(90deg, rgba(248, 113, 113, 0.12), rgba(251, 191, 36, 0.1));
   border: 1px solid rgba(248, 113, 113, 0.16);
-  border-radius: 14px;
+  border-radius: 12px;
   color: #0f172a;
   display: flex;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 8px 11px;
 }
 
 .filter-bar {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 8px;
+}
+
+:deep(.el-table td.el-table__cell),
+:deep(.el-table th.el-table__cell) {
+  padding: 7px 0;
+}
+
+:deep(.el-table .cell) {
+  line-height: 1.35;
 }
 
 @media (max-width: 900px) {

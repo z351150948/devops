@@ -211,10 +211,10 @@ const menuItems = [
         icon: 'DataLine',
         anyPermissions: ['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.grafana.view'],
       },
+      { path: '/observability/grafana', title: '监控看板', icon: 'Histogram', permission: 'ops.grafana.view' },
       { path: '/logs', title: '日志中心', icon: 'Search', anyPermissions: ['ops.log.query', 'ops.log.datasource.view'] },
-      { path: '/alerts', title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
       { path: '/observability/tracing', title: '链路追踪', icon: 'Connection', permission: 'ops.trace.view' },
-      { path: '/observability/grafana', title: 'Grafana 大屏', icon: 'Histogram', permission: 'ops.grafana.view' },
+      { path: '/alerts', title: '告警中心', icon: 'Bell', permission: 'ops.alert.view' },
     ],
   },
   {

@@ -7,10 +7,11 @@
             <el-icon><DataLine /></el-icon>
           </span>
           <h2>可观测性平台</h2>
+          <p class="page-inline-desc">统一查看日志、告警、链路与看板入口</p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button @click="loadOverview" :loading="loading">
+        <el-button size="small" @click="loadOverview" :loading="loading">
           <el-icon><RefreshRight /></el-icon>
           刷新总览
         </el-button>
@@ -38,7 +39,7 @@
         <article v-for="item in overview.navigation || []" :key="item.path" class="nav-card" :class="`tone-${item.tone || 'info'}`">
           <strong>{{ item.title }}</strong>
           <p>{{ item.description }}</p>
-          <el-button type="primary" plain @click="go(item.path)">进入模块</el-button>
+          <el-button size="small" type="primary" plain @click="go(item.path)">进入模块</el-button>
         </article>
       </div>
     </section>
@@ -64,8 +65,8 @@
               <span>默认 {{ overview.modules.logs.default_count }}</span>
             </div>
             <div class="module-actions">
-              <el-button link type="primary" @click="go('/logs')">进入日志中心</el-button>
-              <el-button v-if="canViewLogDatasources" link @click="go('/logs/datasources')">管理数据源</el-button>
+              <el-button size="small" link type="primary" @click="go('/logs')">进入日志中心</el-button>
+              <el-button size="small" v-if="canViewLogDatasources" link @click="go('/logs/datasources')">管理数据源</el-button>
             </div>
           </article>
 
@@ -85,7 +86,7 @@
               <span>警告 {{ overview.modules.alerts.warning }}</span>
             </div>
             <div class="module-actions">
-              <el-button link type="primary" @click="go('/alerts')">处理告警</el-button>
+              <el-button size="small" link type="primary" @click="go('/alerts')">处理告警</el-button>
             </div>
           </article>
 
@@ -105,8 +106,8 @@
               <span>错误 {{ overview.summary?.error_count || 0 }}</span>
             </div>
             <div class="module-actions">
-              <el-button link type="primary" @click="go('/observability/tracing')">查看链路</el-button>
-              <el-button v-if="overview.modules.tracing.ui_url" link @click="openExternal(overview.modules.tracing.ui_url)">打开 SkyWalking</el-button>
+              <el-button size="small" link type="primary" @click="go('/observability/tracing')">查看链路</el-button>
+              <el-button size="small" v-if="overview.modules.tracing.ui_url" link @click="openExternal(overview.modules.tracing.ui_url)">打开 SkyWalking</el-button>
             </div>
           </article>
 
@@ -114,7 +115,7 @@
             <div class="module-head">
               <div class="module-title">
                 <el-icon><Histogram /></el-icon>
-                <strong>Grafana 大屏</strong>
+                <strong>监控看板</strong>
               </div>
               <el-tag size="small" :type="overview.modules.grafana.configured ? 'success' : 'warning'">
                 {{ overview.modules.grafana.configured ? '已配置' : '待接入' }}
@@ -126,8 +127,8 @@
               <span>数据源 {{ overview.modules.grafana.datasource_count }}</span>
             </div>
             <div class="module-actions">
-              <el-button link type="primary" @click="go('/observability/grafana')">查看大屏</el-button>
-              <el-button v-if="overview.modules.grafana.url" link @click="openExternal(overview.modules.grafana.url)">外部打开</el-button>
+              <el-button size="small" link type="primary" @click="go('/observability/grafana')">查看看板</el-button>
+              <el-button size="small" v-if="overview.modules.grafana.url" link @click="openExternal(overview.modules.grafana.url)">外部打开</el-button>
             </div>
           </article>
         </div>
@@ -149,9 +150,9 @@
       <section v-if="overview.recent_alerts?.length" class="panel">
         <div class="section-head">
           <h3>最近告警</h3>
-          <el-button link type="primary" @click="go('/alerts')">全部告警</el-button>
+          <el-button size="small" link type="primary" @click="go('/alerts')">全部告警</el-button>
         </div>
-        <el-table :data="overview.recent_alerts" stripe style="width: 100%">
+        <el-table :data="overview.recent_alerts" stripe size="small" style="width: 100%">
           <el-table-column prop="title" label="标题" min-width="180" />
           <el-table-column prop="level_display" label="级别" width="90">
             <template #default="{ row }">
@@ -171,9 +172,9 @@
       <section v-if="overview.recent_traces?.length" class="panel">
         <div class="section-head">
           <h3>最近 Trace</h3>
-          <el-button link type="primary" @click="go('/observability/tracing')">全部链路</el-button>
+          <el-button size="small" link type="primary" @click="go('/observability/tracing')">全部链路</el-button>
         </div>
-        <el-table :data="overview.recent_traces" stripe style="width: 100%">
+        <el-table :data="overview.recent_traces" stripe size="small" style="width: 100%">
           <el-table-column prop="trace_id" label="Trace ID" min-width="170" show-overflow-tooltip />
           <el-table-column prop="service_name" label="服务" min-width="140" />
           <el-table-column label="耗时" width="100">
@@ -280,15 +281,15 @@ onMounted(loadOverview)
 .observability-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .panel {
   background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
   border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
-  padding: 18px 20px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+  padding: 12px 14px;
 }
 
 .hero,
@@ -301,8 +302,12 @@ onMounted(loadOverview)
 .module-actions,
 .module-meta {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+.hero-copy {
+  gap: 4px;
 }
 
 .hero {
@@ -311,13 +316,27 @@ onMounted(loadOverview)
 }
 
 .hero-title-row {
-  align-items: center;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.hero-title-row h2 {
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .hero-icon {
   align-items: center;
   background: linear-gradient(135deg, #0f766e, #2563eb);
-  border-radius: 14px;
+  border-radius: 16px;
   color: #fff;
   display: inline-flex;
   height: 42px;
@@ -327,14 +346,14 @@ onMounted(loadOverview)
 
 .release-stats {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .release-stat-card {
-  border-radius: 18px;
-  min-height: 94px;
-  padding: 16px 18px;
+  border-radius: 12px;
+  min-height: 72px;
+  padding: 10px 12px;
 }
 
 .warning-card {
@@ -350,43 +369,49 @@ onMounted(loadOverview)
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 700;
 }
 
 .stat-label {
   color: #475569;
   font-size: 12px;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .runtime-strip {
   align-items: center;
   background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(14, 165, 233, 0.1));
   border: 1px solid rgba(37, 99, 235, 0.16);
-  border-radius: 14px;
+  border-radius: 12px;
   color: #0f172a;
   display: flex;
-  gap: 10px;
-  padding: 12px 14px;
+  gap: 6px;
+  padding: 8px 11px;
 }
 
 .section-head {
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
+}
+
+.section-head h3 {
+  font-size: 14px;
+  line-height: 1.3;
+  margin: 0;
 }
 
 .nav-grid,
 .module-grid {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .content-grid {
   display: grid;
-  gap: 14px;
+  gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -394,20 +419,20 @@ onMounted(loadOverview)
 .module-card,
 .tip-card {
   border: 1px solid #e2e8f0;
-  border-radius: 16px;
-  padding: 16px;
+  border-radius: 10px;
+  padding: 10px;
 }
 
 .nav-card strong,
 .module-title strong {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .nav-card p,
 .tip-card span,
 .module-meta span {
   color: var(--text-secondary);
-  line-height: 1.6;
+  line-height: 1.45;
   margin: 0;
 }
 
@@ -438,7 +463,7 @@ onMounted(loadOverview)
 .module-head {
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 
 .module-title {
@@ -446,17 +471,26 @@ onMounted(loadOverview)
 }
 
 .module-meta {
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 
 .tips-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
 .tip-card {
   background: #f8fafc;
+}
+
+:deep(.el-table td.el-table__cell),
+:deep(.el-table th.el-table__cell) {
+  padding: 7px 0;
+}
+
+:deep(.el-table .cell) {
+  line-height: 1.35;
 }
 
 @media (max-width: 1200px) {

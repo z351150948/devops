@@ -431,7 +431,7 @@ onMounted(async () => {
 .log-datasource-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 
 .panel {
@@ -439,14 +439,14 @@ onMounted(async () => {
   border: 1px solid rgba(96,165,250,.18);
   border-radius: 24px;
   box-shadow: 0 16px 36px rgba(14,165,233,.08);
-  padding: 14px 22px;
+  padding: 12px 14px;
 }
 
 .hero {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
 }
 
 .log-center-tabs {
@@ -460,7 +460,7 @@ onMounted(async () => {
 
 .release-hero-title-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 12px;
 }
 
@@ -471,12 +471,15 @@ onMounted(async () => {
 .hero h2 {
   margin: 0;
   color: #0f172a;
+  font-size: 23px;
+  line-height: 1.1;
 }
+
 
 .log-header-icon {
   width: 42px;
   height: 42px;
-  border-radius: 14px;
+  border-radius: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -490,7 +493,7 @@ onMounted(async () => {
   margin: 0;
   color: #475569;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 
 .inline-subtitle {
@@ -520,7 +523,7 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .table-card {
@@ -531,7 +534,7 @@ onMounted(async () => {
 
 .overview-grid {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
