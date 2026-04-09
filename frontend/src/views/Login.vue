@@ -12,7 +12,7 @@
         <div class="overview-content">
           <h1>统一运维智能体平台，让团队协同更高效</h1>
           <p class="overview-summary">
-            覆盖 CMDB、多云、可观测、发布、容器与中间件、AIOps，帮助团队在一个平台内完成日常运维协同。
+            覆盖 CMDB、多云、可观测、工单、容器与中间件、AIOps，帮助团队在一个平台内完成日常运维协同。
           </p>
 
           <div class="feature-grid">
@@ -46,7 +46,7 @@
             </el-button>
           </el-form>
 
-          <div class="auth-tip">默认账号：admin / Admin@123456</div>
+          <div class="auth-tip">默认账号：demo / Admin@123456</div>
         </div>
       </section>
     </div>
@@ -65,7 +65,7 @@ const route = useRoute()
 const authStore = useAuthStore()
 const loading = ref(false)
 const form = reactive({
-  username: 'admin',
+  username: 'demo',
   password: 'Admin@123456',
 })
 

@@ -45,6 +45,15 @@ DEMO_USERS = [
         'groups': ['visitors'],
         'is_staff': False,
     },
+    {
+        'username': 'demo',
+        'email': 'demo@example.com',
+        'first_name': 'Demo',
+        'last_name': 'User',
+        'roles': ['read-only'],
+        'groups': ['visitors'],
+        'is_staff': False,
+    },
 ]
 
 DEMO_GROUPS = [
