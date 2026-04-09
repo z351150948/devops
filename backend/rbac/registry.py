@@ -10,6 +10,9 @@
     ('ops.deployment.view', '查看应用发布', 'ops', '查看公司应用发布记录、状态与日志'),
     ('ops.deployment.manage', '管理应用发布', 'ops', '创建发布申请、重试、回滚、启停和下线应用'),
     ('ops.deployment.approve', '审批应用发布', 'ops', '审批通过或驳回应用发布申请'),
+    ('ops.ticket.view', '查看事务工单', 'ops', '查看事务工单列表、详情与处理状态'),
+    ('ops.ticket.manage', '管理事务工单', 'ops', '创建、编辑、删除并推进事务工单执行'),
+    ('ops.ticket.approve', '审批事务工单', 'ops', '审批通过或驳回事务工单'),
     ('ops.alert.view', '查看告警', 'ops', '查看告警列表'),
     ('ops.alert.manage', '管理告警', 'ops', '确认、编辑、删除告警'),
     ('ops.log.entry.view', '查看内置日志', 'ops', '查看平台内置日志表'),
@@ -84,7 +87,9 @@ BUILTIN_ROLES = [
         'permissions': [
             'ops.dashboard.view', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal', 'ops.host.execute',
             'ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute',
-            'ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve', 'ops.alert.view', 'ops.alert.manage',
+            'ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve',
+            'ops.ticket.view', 'ops.ticket.manage', 'ops.ticket.approve',
+            'ops.alert.view', 'ops.alert.manage',
             'ops.log.entry.view', 'ops.log.datasource.view', 'ops.log.datasource.manage', 'ops.log.query',
             'ops.trace.view', 'ops.grafana.view',
             'ops.k8s.view', 'ops.k8s.manage', 'ops.k8s.exec', 'ops.docker.view', 'ops.docker.manage',
@@ -104,7 +109,7 @@ BUILTIN_ROLES = [
         'name': '研发工程师',
         'description': '可查看环境信息、日志并提交 SQL 与资源申请。',
         'permissions': [
-            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.alert.view',
+            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.ticket.view', 'ops.alert.view',
             'ops.log.query', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.middleware.view',
             'ops.iac.view', 'ops.iac.manage', 'ops.iac.execute', 'ops.multicloud.view', 'eventwall.view',
             'aiops.chat.view', 'aiops.chat.analyze', 'aiops.task.generate',
@@ -130,7 +135,7 @@ BUILTIN_ROLES = [
         'name': '只读访客',
         'description': '只能浏览各模块的只读信息。',
         'permissions': [
-            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.alert.view',
+            'ops.dashboard.view', 'ops.host.view', 'ops.host.schedule.view', 'ops.deployment.view', 'ops.ticket.view', 'ops.alert.view',
             'ops.log.entry.view', 'ops.log.datasource.view', 'ops.trace.view', 'ops.grafana.view', 'ops.k8s.view', 'ops.docker.view',
             'ops.middleware.view', 'ops.nginx.view', 'ops.iac.view', 'ops.multicloud.view',
             'cmdb.dashboard.view', 'cmdb.ci.view', 'cmdb.topology.view',

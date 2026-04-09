@@ -16,6 +16,7 @@ router.register(r'host-task-schedules', views.HostTaskScheduleViewSet, basename=
 router.register(r'host-task-schedule-executions', views.HostTaskScheduleExecutionViewSet, basename='host-task-schedule-execution')
 router.register(r'deployment-approval-flows', views.DeploymentApprovalFlowViewSet, basename='deployment-approval-flow')
 router.register(r'deployments', views.DeploymentViewSet)
+router.register(r'transaction-tickets', views.TransactionTicketViewSet, basename='transaction-ticket')
 router.register(r'alerts', views.AlertViewSet)
 router.register(r'logs', views.LogEntryViewSet)
 router.register(r'log/datasources', log_views.LogDataSourceViewSet, basename='log-datasource')

@@ -10,6 +10,19 @@
       </div>
     </section>
 
+    <div v-if="sqlAuditPlatformTips.length" class="runtime-strip">
+      <span class="runtime-strip__label">平台提醒</span>
+      <el-tag
+        v-for="item in sqlAuditPlatformTips"
+        :key="item"
+        size="small"
+        effect="light"
+        type="info"
+      >
+        {{ item }}
+      </el-tag>
+    </div>
+
     <div class="neo-tabs theme-blue log-center-tabs">
       <button
         v-for="tab in availableTabs"
@@ -43,6 +56,23 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const activeTab = ref('datasources')
+const sqlAuditPlatformTips = computed(() => {
+  const tipsMap = {
+    datasources: [
+      '新增或调整数据源后，建议先验证连接与权限范围',
+      '生产数据源默认建议绑定审批工单再开放执行入口',
+    ],
+    orders: [
+      '高风险变更建议先走工单审批，再安排低峰执行窗口',
+      '执行结果会同步沉淀到事件中心，便于追溯复盘',
+    ],
+    query: [
+      '查询优先使用只读账号，避免直接落到生产写权限',
+      '慢 SQL 与大结果集建议先缩小时间范围再执行',
+    ],
+  }
+  return tipsMap[activeTab.value] || tipsMap.datasources
+})
 
 const availableTabs = computed(() => {
   const tabs = []
@@ -62,6 +92,10 @@ const normalizeTab = (tab) => {
   if (availableTabs.value.some(item => item.name === tab)) {
     return tab
   }
+  const defaultTab = route.meta?.defaultTab
+  if (availableTabs.value.some(item => item.name === defaultTab)) {
+    return defaultTab
+  }
   return availableTabs.value[0]?.name || 'datasources'
 }
 
@@ -73,7 +107,7 @@ watch(
       activeTab.value = nextTab
     }
     if (route.query.tab !== nextTab) {
-      router.replace({ path: '/sql', query: { ...route.query, tab: nextTab } })
+      router.replace({ path: route.path, query: { ...route.query, tab: nextTab } })
     }
   },
   { immediate: true },
@@ -85,7 +119,7 @@ const handleTabChange = (tab) => {
     activeTab.value = nextTab
   }
   if (route.query.tab !== nextTab) {
-    router.replace({ path: '/sql', query: { ...route.query, tab: nextTab } })
+    router.replace({ path: route.path, query: { ...route.query, tab: nextTab } })
   }
 }
 </script>
@@ -137,6 +171,24 @@ const handleTabChange = (tab) => {
 
 .log-center-tabs {
   margin-bottom: 20px;
+}
+
+.runtime-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(248,250,252,.9);
+  border: 1px solid rgba(148,163,184,.18);
+}
+
+.runtime-strip__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
 }
 
 .page-desc {

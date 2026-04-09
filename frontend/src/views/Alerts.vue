@@ -92,7 +92,7 @@
               <el-button v-if="canManageAlerts && !row.is_acknowledged" link type="primary" size="small" @click="handleAck(row)">确认</el-button>
               <el-popconfirm v-if="canManageAlerts" title="确认删除该告警吗？" @confirm="handleDelete(row.id)">
                 <template #reference>
-                  <el-button link type="danger" size="small">犻犻櫎</el-button>
+                  <el-button link type="danger" size="small">删除</el-button>
                 </template>
               </el-popconfirm>
             </div>

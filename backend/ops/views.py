@@ -31,6 +31,7 @@ from .models import (
     HostTaskScheduleExecution,
     HostTaskTemplate,
     LogEntry,
+    TransactionTicket,
 )
 from .serializers import (
     AlertSerializer,
@@ -49,6 +50,7 @@ from .serializers import (
     HostTaskTargetSerializer,
     HostTaskTemplateSerializer,
     LogEntrySerializer,
+    TransactionTicketSerializer,
 )
 
 
@@ -1009,6 +1011,119 @@ class DeploymentViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewset
     def status_detail(self, request, pk=None):
         deployment = self.get_object()
         return Response(deployer.get_service_status(deployment))
+
+
+class TransactionTicketViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = TransactionTicket.objects.select_related('approval_flow').all()
+    serializer_class = TransactionTicketSerializer
+    search_fields = ['title', 'description', 'owner', 'applicant']
+    filterset_fields = ['ticket_type', 'priority', 'status', 'business_line', 'environment']
+    event_module = 'ops'
+    event_resource_type = 'transaction_ticket'
+    event_resource_label = '事务工单'
+    event_resource_name_fields = ('title',)
+    rbac_permissions = {
+        'list': ['ops.ticket.view'],
+        'retrieve': ['ops.ticket.view'],
+        'create': ['ops.ticket.manage'],
+        'update': ['ops.ticket.manage'],
+        'partial_update': ['ops.ticket.manage'],
+        'destroy': ['ops.ticket.manage'],
+        'approve': ['ops.ticket.approve'],
+        'reject': ['ops.ticket.approve'],
+        'start_process': ['ops.ticket.manage'],
+        'complete': ['ops.ticket.manage'],
+    }
+
+    def perform_create(self, serializer):
+        serializer.save(applicant=self.request.user.username)
+
+    def _transition_ticket(self, request, ticket, *, target_status, action, title, summary, severity=EventRecord.SEVERITY_INFO):
+        ticket.status = target_status
+        if action == 'start_process' and not ticket.owner:
+            ticket.owner = request.user.username
+            ticket.save(update_fields=['status', 'owner', 'updated_at'])
+        else:
+            ticket.save(update_fields=['status', 'updated_at'])
+        record_event(
+            request=request,
+            module='ops',
+            category='workflow',
+            action=action,
+            title=title,
+            summary=summary,
+            result=EventRecord.RESULT_SUCCESS if target_status != TransactionTicket.STATUS_REJECTED else EventRecord.RESULT_FAILED,
+            severity=severity,
+            resource_type='transaction_ticket',
+            resource_id=ticket.id,
+            resource_name=ticket.title,
+            business_line=ticket.business_line,
+            environment=ticket.environment,
+            correlation_id=f'transaction-ticket:{ticket.id}',
+            metadata={'status': ticket.status, 'owner': ticket.owner},
+            related_resources=(
+                [build_resource('ops', 'deployment_approval_flow', ticket.approval_flow_id, ticket.approval_flow.name)]
+                if ticket.approval_flow_id else []
+            ),
+        )
+        return Response(self.get_serializer(ticket).data)
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != TransactionTicket.STATUS_PENDING:
+            return Response({'detail': '仅待审批工单支持通过操作'}, status=status.HTTP_400_BAD_REQUEST)
+        return self._transition_ticket(
+            request,
+            ticket,
+            target_status=TransactionTicket.STATUS_APPROVED,
+            action='approve',
+            title='通过事务工单',
+            summary=f'事务工单 {ticket.title} 已审批通过',
+        )
+
+    @action(detail=True, methods=['post'])
+    def reject(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != TransactionTicket.STATUS_PENDING:
+            return Response({'detail': '仅待审批工单支持驳回操作'}, status=status.HTTP_400_BAD_REQUEST)
+        return self._transition_ticket(
+            request,
+            ticket,
+            target_status=TransactionTicket.STATUS_REJECTED,
+            action='reject',
+            title='驳回事务工单',
+            summary=f'事务工单 {ticket.title} 已被驳回',
+            severity=EventRecord.SEVERITY_WARNING,
+        )
+
+    @action(detail=True, methods=['post'])
+    def start_process(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != TransactionTicket.STATUS_APPROVED:
+            return Response({'detail': '仅已通过工单支持开始处理'}, status=status.HTTP_400_BAD_REQUEST)
+        return self._transition_ticket(
+            request,
+            ticket,
+            target_status=TransactionTicket.STATUS_PROCESSING,
+            action='start_process',
+            title='开始处理事务工单',
+            summary=f'事务工单 {ticket.title} 已进入处理中',
+        )
+
+    @action(detail=True, methods=['post'])
+    def complete(self, request, pk=None):
+        ticket = self.get_object()
+        if ticket.status != TransactionTicket.STATUS_PROCESSING:
+            return Response({'detail': '仅处理中工单支持完成操作'}, status=status.HTTP_400_BAD_REQUEST)
+        return self._transition_ticket(
+            request,
+            ticket,
+            target_status=TransactionTicket.STATUS_DONE,
+            action='complete',
+            title='完成事务工单',
+            summary=f'事务工单 {ticket.title} 已处理完成',
+        )
 
 
 class AlertViewSet(RBACPermissionMixin, viewsets.ModelViewSet):

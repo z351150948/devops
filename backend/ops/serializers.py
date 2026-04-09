@@ -23,6 +23,7 @@ from .models import (
     NginxDomain,
     NginxEnvironment,
     NginxRoute,
+    TransactionTicket,
 )
 
 LOG_SENSITIVE_KEYS = {
@@ -844,6 +845,71 @@ class ApprovalActionSerializer(serializers.Serializer):
 
 class DeploymentActionSerializer(serializers.Serializer):
     change_summary = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
+class TransactionTicketSerializer(serializers.ModelSerializer):
+    type_display = serializers.CharField(source='get_ticket_type_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    environment_display = serializers.CharField(source='get_environment_display', read_only=True)
+    approval_flow_name = serializers.CharField(source='approval_flow.name', read_only=True, default='')
+
+    class Meta:
+        model = TransactionTicket
+        fields = [
+            'id',
+            'title',
+            'ticket_type',
+            'type_display',
+            'priority',
+            'priority_display',
+            'business_line',
+            'environment',
+            'environment_display',
+            'approval_flow',
+            'approval_flow_name',
+            'owner',
+            'applicant',
+            'window',
+            'description',
+            'status',
+            'status_display',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'applicant',
+            'status',
+            'created_at',
+            'updated_at',
+            'type_display',
+            'priority_display',
+            'status_display',
+            'environment_display',
+            'approval_flow_name',
+        ]
+
+    def validate(self, attrs):
+        business_line = (attrs.get('business_line') if 'business_line' in attrs else getattr(self.instance, 'business_line', '')) or ''
+        environment = (attrs.get('environment') if 'environment' in attrs else getattr(self.instance, 'environment', '')) or ''
+
+        business_line = business_line.strip()
+        if not business_line:
+            raise serializers.ValidationError({'business_line': '请选择业务线'})
+        if not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
+            raise serializers.ValidationError({'business_line': '所选业务线未在资源树中配置'})
+
+        if not environment:
+            raise serializers.ValidationError({'environment': '请选择环境'})
+        if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
+            raise serializers.ValidationError({'environment': '所选环境未在当前业务线下配置'})
+
+        approval_flow = attrs.get('approval_flow') if 'approval_flow' in attrs else getattr(self.instance, 'approval_flow', None)
+        if approval_flow and approval_flow.environment and approval_flow.environment != environment:
+            raise serializers.ValidationError({'approval_flow': '所选审批流与当前环境不匹配'})
+
+        attrs['business_line'] = business_line
+        return attrs
 
 
 class AlertSerializer(serializers.ModelSerializer):

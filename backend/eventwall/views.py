@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from django.db.models import Count
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import filters, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -11,6 +12,62 @@ from rbac.permissions import RBACPermissionMixin
 
 from .models import EventRecord
 from .serializers import EventRecordSerializer
+
+
+DEMO_WINDOW_MINUTES = 7 * 24 * 60 - 1
+
+
+def _refresh_demo_event_timestamps():
+    now = timezone.localtime().replace(second=0, microsecond=0)
+    changed = []
+    for item in EventRecord.objects.filter(is_demo=True).only('id', 'occurred_at', 'metadata'):
+        metadata = item.metadata or {}
+        offset = metadata.get('demo_offset_minutes')
+        if offset is None:
+            continue
+        try:
+            offset_minutes = max(0, min(int(offset), DEMO_WINDOW_MINUTES))
+        except (TypeError, ValueError):
+            continue
+        target = now - timedelta(minutes=offset_minutes)
+        if item.occurred_at != target:
+            item.occurred_at = target
+            changed.append(item)
+    if changed:
+        EventRecord.objects.bulk_update(changed, ['occurred_at'])
+
+
+def _parse_time_range(params):
+    start_at = params.get('start_at', '').strip()
+    end_at = params.get('end_at', '').strip()
+    start = parse_datetime(start_at) if start_at else None
+    end = parse_datetime(end_at) if end_at else None
+    if start and timezone.is_naive(start):
+        start = timezone.make_aware(start, timezone.get_current_timezone())
+    if end and timezone.is_naive(end):
+        end = timezone.make_aware(end, timezone.get_current_timezone())
+    return start, end
+
+
+def _build_window(queryset, params, default_days=7):
+    start, end = _parse_time_range(params)
+    if start:
+        queryset = queryset.filter(occurred_at__gte=start)
+    if end:
+        queryset = queryset.filter(occurred_at__lte=end)
+    if start or end:
+        return queryset, start, end
+
+    days = params.get('days', '').strip()
+    if days.isdigit():
+        start = timezone.now() - timedelta(days=int(days))
+        return queryset.filter(occurred_at__gte=start), start, None
+
+    if default_days is not None:
+        start = timezone.now() - timedelta(days=default_days)
+        return queryset.filter(occurred_at__gte=start), start, None
+
+    return queryset, None, None
 
 
 class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
@@ -35,6 +92,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
     }
 
     def get_queryset(self):
+        _refresh_demo_event_timestamps()
         queryset = super().get_queryset().exclude(result=EventRecord.RESULT_REJECTED)
         params = self.request.query_params
         mapping = {
@@ -56,9 +114,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
                 queryset = queryset.filter(**{field: value})
         if params.get('is_demo') in {'true', 'false'}:
             queryset = queryset.filter(is_demo=params.get('is_demo') == 'true')
-        days = params.get('days', '').strip()
-        if days.isdigit():
-            queryset = queryset.filter(occurred_at__gte=timezone.now() - timedelta(days=int(days)))
+        queryset, _, _ = _build_window(queryset, params, default_days=None)
         return queryset
 
     @action(detail=False, methods=['get'])
@@ -72,8 +128,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'])
     def overview(self, request):
-        now = timezone.now()
-        recent = self.get_queryset().filter(occurred_at__gte=now - timedelta(days=7))
+        recent, start, end = _build_window(self.get_queryset(), request.query_params, default_days=7)
         module_counts = list(recent.values('module').annotate(count=Count('id')).order_by('-count'))
         action_counts = list(recent.values('action').annotate(count=Count('id')).order_by('-count')[:8])
         applications = list(
@@ -128,6 +183,10 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
                 'unique_actors_7d': recent.exclude(actor_username='').values('actor_username').distinct().count(),
                 'tracked_resources_7d': recent.exclude(resource_type='').values('resource_type', 'resource_id').distinct().count(),
             },
+            'window': {
+                'start_at': start,
+                'end_at': end,
+            },
             'modules': module_counts,
             'actions': action_counts,
             'top_actors': actors,
@@ -149,7 +208,8 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'])
     def associations(self, request):
-        recent = self.get_queryset().filter(occurred_at__gte=timezone.now() - timedelta(days=14))[:400]
+        recent, _, _ = _build_window(self.get_queryset(), request.query_params, default_days=14)
+        recent = recent[:400]
         chains = defaultdict(list)
         hot_resources = Counter()
         module_links = Counter()

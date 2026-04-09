@@ -26,6 +26,17 @@
     <section class="scope-shell">
       <div class="scope-tip">先按业务线、环境、应用缩小范围，再看失败事件和高风险执行。</div>
       <div class="scope-grid">
+        <el-date-picker
+          v-model="timeRange"
+          size="small"
+          type="datetimerange"
+          unlink-panels
+          :shortcuts="timeShortcuts"
+          range-separator="至"
+          start-placeholder="开始时间"
+          end-placeholder="结束时间"
+          class="scope-date-picker"
+        />
         <el-select v-model="scopeFilters.business_line" size="small" placeholder="业务线" clearable>
           <el-option v-for="item in filterOptions.business_lines || []" :key="item" :label="item" :value="item" />
         </el-select>
@@ -106,16 +117,16 @@
     <section class="focus-card focus-card--danger">
       <div class="focus-head">
         <div>
-          <strong>最近失败事件</strong>
+          <strong>{{ focusTitle }}</strong>
         </div>
         <div class="focus-head-actions">
-          <span class="focus-total">{{ overview.priority_events?.length || 0 }} 条</span>
-          <el-button size="small" text @click="openFocus({ result: 'failed' })">查看失败事件</el-button>
+          <span class="focus-total">{{ focusEvents.length || 0 }} 条</span>
+          <el-button size="small" text @click="openFocus(focusQuery)">{{ focusButtonText }}</el-button>
         </div>
       </div>
       <div class="focus-list">
         <button
-          v-for="item in overview.priority_events || []"
+          v-for="item in focusEvents"
           :key="item.id"
           type="button"
           class="focus-item"
@@ -133,7 +144,7 @@
             <span>{{ item.actor_username || 'system' }}</span>
           </div>
         </button>
-        <div v-if="!(overview.priority_events || []).length" class="focus-empty">当前范围内没有重点事件</div>
+        <div v-if="!focusEvents.length" class="focus-empty">当前范围内没有事件</div>
       </div>
     </section>
 
@@ -185,6 +196,34 @@ const overview = ref({
   tips: [],
 })
 const filterOptions = ref({ business_lines: [], environments: [], applications: [] })
+const timeRange = ref(createDefaultTimeRange())
+const timeShortcuts = [
+  {
+    text: '近 24 小时',
+    value: () => {
+      const end = new Date()
+      return [new Date(end.getTime() - 24 * 60 * 60 * 1000), end]
+    },
+  },
+  {
+    text: '近 3 天',
+    value: () => {
+      const end = new Date()
+      return [new Date(end.getTime() - 3 * 24 * 60 * 60 * 1000), end]
+    },
+  },
+  {
+    text: '近 7 天',
+    value: () => createDefaultTimeRange(),
+  },
+  {
+    text: '近 30 天',
+    value: () => {
+      const end = new Date()
+      return [new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000), end]
+    },
+  },
+]
 const scopeFilters = reactive({
   business_line: '',
   environment: '',
@@ -192,11 +231,21 @@ const scopeFilters = reactive({
 })
 
 const statCards = computed(() => [
-  { label: '近 7 天事件', kicker: 'Volume', value: overview.value.summary?.total_7d || 0, tone: 'tone-neutral' },
+  { label: '范围事件', kicker: 'Volume', value: overview.value.summary?.total_7d || 0, tone: 'tone-neutral' },
   { label: '失败事件', kicker: 'Risk', value: overview.value.summary?.failed_7d || 0, tone: 'tone-danger' },
   { label: '待处理链路', kicker: 'Pending', value: overview.value.summary?.pending_7d || 0, tone: 'tone-warning' },
   { label: '活跃对象', kicker: 'Assets', value: overview.value.summary?.tracked_resources_7d || 0, tone: 'tone-success' },
 ])
+
+const focusEvents = computed(() => {
+  const priority = overview.value.priority_events || []
+  if (priority.length) return priority
+  return (overview.value.recent || []).slice(0, 8)
+})
+
+const focusTitle = computed(() => ((overview.value.priority_events || []).length ? '最近失败事件' : '最近事件'))
+const focusButtonText = computed(() => ((overview.value.priority_events || []).length ? '查看失败事件' : '查看全部事件'))
+const focusQuery = computed(() => ((overview.value.priority_events || []).length ? { result: 'failed' } : {}))
 
 function moduleLabel(value) {
   return {
@@ -213,17 +262,45 @@ function formatTime(value) {
   return value ? new Date(value).toLocaleString('zh-CN') : '-'
 }
 
+function createDefaultTimeRange() {
+  const end = new Date()
+  const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000)
+  return [start, end]
+}
+
+function normalizeDate(value) {
+  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return null
+  return value
+}
+
+function parseRouteDate(value) {
+  if (typeof value !== 'string' || !value) return null
+  const parsed = new Date(value)
+  return normalizeDate(parsed)
+}
+
+function serializeDate(value) {
+  const parsed = normalizeDate(value)
+  return parsed ? parsed.toISOString() : undefined
+}
+
 function syncScopeFromRoute() {
   scopeFilters.business_line = typeof route.query.business_line === 'string' ? route.query.business_line : ''
   scopeFilters.environment = typeof route.query.environment === 'string' ? route.query.environment : ''
   scopeFilters.application = typeof route.query.application === 'string' ? route.query.application : ''
+  const startAt = parseRouteDate(route.query.start_at)
+  const endAt = parseRouteDate(route.query.end_at)
+  timeRange.value = startAt && endAt ? [startAt, endAt] : createDefaultTimeRange()
 }
 
 function buildScopeParams() {
+  const [startAt, endAt] = timeRange.value || []
   return {
     business_line: scopeFilters.business_line || undefined,
     environment: scopeFilters.environment || undefined,
     application: scopeFilters.application || undefined,
+    start_at: serializeDate(startAt),
+    end_at: serializeDate(endAt),
   }
 }
 
@@ -241,6 +318,7 @@ async function loadOverview() {
 }
 
 function applyScopeFilters() {
+  const [startAt, endAt] = timeRange.value || []
   router.replace({
     path: route.path,
     query: {
@@ -248,6 +326,8 @@ function applyScopeFilters() {
       business_line: scopeFilters.business_line || undefined,
       environment: scopeFilters.environment || undefined,
       application: scopeFilters.application || undefined,
+      start_at: serializeDate(startAt),
+      end_at: serializeDate(endAt),
     },
   })
 }
@@ -256,6 +336,7 @@ function resetScopeFilters() {
   scopeFilters.business_line = ''
   scopeFilters.environment = ''
   scopeFilters.application = ''
+  timeRange.value = createDefaultTimeRange()
   applyScopeFilters()
 }
 
@@ -334,7 +415,8 @@ onMounted(async () => {
 .hero-copy p { font-size: 13px; }
 .scope-shell { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 18px; border: 1px solid rgba(226, 232, 240, .9); background: linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(248, 250, 252, .92)); box-shadow: 0 12px 26px rgba(15, 23, 42, .04); }
 .scope-tip { color: #64748b; font-size: 12px; line-height: 1.4; }
-.scope-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.4fr auto auto; gap: 8px; }
+.scope-grid { display: grid; grid-template-columns: 1.8fr 1fr 1fr 1.3fr auto auto; gap: 8px; }
+.scope-date-picker { width: 100%; }
 .dual-panel-grid { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .stats-grid { display: grid; gap: 8px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .stat-card { border-radius: 14px; color: #0f172a; display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 64px; padding: 9px 12px; }

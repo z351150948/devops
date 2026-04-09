@@ -38,3 +38,6 @@ frontend/cmdb-cost-check*.json
 
 # Local dev runtime
 .runlogs/
+backend/run/
+frontend/run/
+tmp_deploy/

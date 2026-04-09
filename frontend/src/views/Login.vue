@@ -4,15 +4,15 @@
       <section class="auth-overview">
         <div class="brand-row">
           <div class="brand-mark">
-            <el-icon><Lock /></el-icon>
+            <img src="@/assets/brand-mark.svg" alt="SxDevOps" class="brand-mark-image" />
           </div>
           <div class="brand-text">SxDevOps</div>
         </div>
 
         <div class="overview-content">
-          <h1>统一运维平台，让团队协同更高效</h1>
+          <h1>统一运维智能体平台，让团队协同更高效</h1>
           <p class="overview-summary">
-            覆盖资产、云资源、观测、发布、容器与审计能力，帮助团队在一个平台完成日常运维协同。
+            覆盖 CMDB、多云、可观测、发布、容器与中间件、AIOps，帮助团队在一个平台内完成日常运维协同。
           </p>
 
           <div class="feature-grid">
@@ -46,7 +46,7 @@
             </el-button>
           </el-form>
 
-          <div class="auth-tip">默认账号：`admin` / `Admin@123456`</div>
+          <div class="auth-tip">默认账号：admin / Admin@123456</div>
         </div>
       </section>
     </div>
@@ -57,7 +57,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Lock, DataBoard, Cloudy, TrendCharts, Promotion, Box, Service } from '@element-plus/icons-vue'
+import { DataBoard, Cloudy, TrendCharts, Promotion, Box, Service } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -72,17 +72,17 @@ const form = reactive({
 const features = [
   {
     title: 'AIOps',
-    desc: '以智能体方式接入平台上下文，支持告警与资源关联分析、任务生成、确认执行与全链路审计。',
+    desc: '以运维智能体串联告警、资源与变更上下文，辅助定位、处置与闭环审计。',
     icon: Service,
   },
   {
     title: 'CMDB',
-    desc: '从资产台账到关系建模，统一沉淀基础设施与应用全景视图。',
+    desc: '统一沉淀资产、应用与关系模型，建立可信的基础设施全景视图。',
     icon: DataBoard,
   },
   {
     title: '可观测性',
-    desc: '打通指标、日志与链路数据，帮助团队更快发现并定位异常。',
+    desc: '贯通指标、日志与链路数据，帮助团队更快发现并定位异常。',
     icon: TrendCharts,
   },
   {
@@ -92,12 +92,12 @@ const features = [
   },
   {
     title: '发布流程',
-    desc: '围绕版本发布、流程推进与状态回溯，打造可追踪的变更闭环。',
+    desc: '围绕版本发布、流程推进与状态追踪，打造可回溯的变更闭环。',
     icon: Promotion,
   },
   {
     title: '容器与中间件',
-    desc: '统一运维 K8s、容器服务与中间件组件，降低平台复杂度。',
+    desc: '统一运维 K8s、容器服务与中间件组件，降低平台协同复杂度。',
     icon: Box,
   },
 ]
@@ -166,26 +166,31 @@ async function handleLogin() {
 .brand-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
 .brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 999px;
+  width: 52px;
+  height: 52px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #2f75ca, #3b82f6);
-  color: #fff;
-  font-size: 18px;
-  box-shadow: 0 10px 20px rgba(59, 130, 246, 0.2);
+}
+
+.brand-mark-image {
+  width: 52px;
+  height: 52px;
+  display: block;
 }
 
 .brand-text {
-  color: #2b3340;
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  display: inline-block;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: var(--brand-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .overview-content {

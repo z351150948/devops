@@ -96,12 +96,81 @@ const routes = [
       },
       {
         path: 'deployments',
-        name: 'Deployments',
+        redirect: '/workorders/releases',
+        meta: { hidden: true, anyPermissions: ['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'] },
+      },
+      {
+        path: 'workorders',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasAnyPermission(['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'])) {
+            return '/workorders/releases'
+          }
+          if (authStore.hasAnyPermission([
+            'sqlaudit.order.view',
+            'sqlaudit.order.submit',
+            'sqlaudit.order.review',
+            'sqlaudit.order.execute',
+            'sqlaudit.datasource.view',
+            'sqlaudit.query.view',
+            'sqlaudit.query.execute',
+          ])) {
+            return '/workorders/sql'
+          }
+          if (authStore.hasAnyPermission(['ops.ticket.view', 'ops.ticket.manage', 'ops.ticket.approve'])) {
+            return '/workorders/transactions'
+          }
+          return '/403'
+        },
+        meta: { hidden: true },
+      },
+      {
+        path: 'workorders/releases',
+        name: 'WorkOrderReleases',
         component: () => import('@/views/Deployments.vue'),
         meta: {
           title: '应用发布',
           icon: 'Promotion',
           anyPermissions: ['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'],
+        },
+      },
+      {
+        path: 'workorders/approval-flows',
+        name: 'WorkOrderApprovalFlows',
+        component: () => import('@/views/Deployments.vue'),
+        meta: {
+          title: '审批流',
+          icon: 'Checked',
+          anyPermissions: ['ops.deployment.view', 'ops.deployment.manage', 'ops.deployment.approve'],
+        },
+      },
+      {
+        path: 'workorders/sql',
+        name: 'WorkOrderSqlAudit',
+        component: () => import('@/views/SqlAudit.vue'),
+        meta: {
+          title: 'SQL 审计',
+          icon: 'DataAnalysis',
+          defaultTab: 'orders',
+          anyPermissions: [
+            'sqlaudit.datasource.view',
+            'sqlaudit.order.view',
+            'sqlaudit.order.submit',
+            'sqlaudit.order.review',
+            'sqlaudit.order.execute',
+            'sqlaudit.query.view',
+            'sqlaudit.query.execute',
+          ],
+        },
+      },
+      {
+        path: 'workorders/transactions',
+        name: 'TransactionTickets',
+        component: () => import('@/views/TransactionTickets.vue'),
+        meta: {
+          title: '事务工单',
+          icon: 'Tickets',
+          anyPermissions: ['ops.ticket.view', 'ops.ticket.manage', 'ops.ticket.approve'],
         },
       },
       {
@@ -290,35 +359,22 @@ const routes = [
       },
       {
         path: 'sql',
-        name: 'SqlAudit',
-        component: () => import('@/views/SqlAudit.vue'),
-        meta: {
-          title: 'SQL 审计',
-          icon: 'DataAnalysis',
-          anyPermissions: [
-            'sqlaudit.datasource.view',
-            'sqlaudit.order.view',
-            'sqlaudit.order.submit',
-            'sqlaudit.order.review',
-            'sqlaudit.order.execute',
-            'sqlaudit.query.view',
-            'sqlaudit.query.execute',
-          ],
-        },
+        redirect: (to) => ({ path: '/workorders/sql', query: to.query }),
+        meta: { hidden: true },
       },
       {
         path: 'sql/datasources',
-        redirect: { path: '/sql', query: { tab: 'datasources' } },
+        redirect: { path: '/workorders/sql', query: { tab: 'datasources' } },
         meta: { hidden: true },
       },
       {
         path: 'sql/orders',
-        redirect: { path: '/sql', query: { tab: 'orders' } },
+        redirect: { path: '/workorders/sql', query: { tab: 'orders' } },
         meta: { hidden: true },
       },
       {
         path: 'sql/query',
-        redirect: { path: '/sql', query: { tab: 'query' } },
+        redirect: { path: '/workorders/sql', query: { tab: 'query' } },
         meta: { hidden: true },
       },
     ],

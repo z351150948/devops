@@ -4,21 +4,25 @@
       <div class="release-hero-copy">
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="release-header-icon"><el-icon><Promotion /></el-icon></span>
-          <h2>应用发布</h2>
+          <h2>{{ pageTitle }}</h2>
           <p class="subtitle inline-subtitle">
-            面向公司自研应用发布，支持 Docker / K8s 环境，支持灰度与批次发布、审批流配置、回滚等。并实时同步 CMDB。
+            {{ pageSubtitle }}
           </p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button v-if="canManageDeployments" type="primary" @click="openReleaseDialog">
+        <el-button v-if="canManageDeployments && !isFlowMode" type="primary" @click="openReleaseDialog">
           <el-icon><Plus /></el-icon>
           新建发布单
+        </el-button>
+        <el-button v-if="canManageDeployments && isFlowMode" type="primary" @click="openFlowDialog()">
+          <el-icon><Plus /></el-icon>
+          新建审批流
         </el-button>
       </div>
     </section>
 
-    <div class="stats-grid release-stats">
+    <div v-if="!isFlowMode" class="stats-grid release-stats">
       <button type="button" class="stat-card release-stat-card" :class="{ 'active-card': activeSummaryKey === 'all' }" @click="applySummaryFilter('all')">
         <div class="stat-value">{{ summary.total }}</div>
         <div class="stat-label">发布单总数</div>
@@ -36,42 +40,71 @@
         <div class="stat-label">执行失败</div>
       </button>
     </div>
+    <div v-else class="stats-grid release-stats">
+      <div class="stat-card release-stat-card">
+        <div class="stat-value">{{ flowSummary.total }}</div>
+        <div class="stat-label">审批流总数</div>
+      </div>
+      <div class="stat-card release-stat-card success-card">
+        <div class="stat-value">{{ flowSummary.active }}</div>
+        <div class="stat-label">启用中</div>
+      </div>
+      <div class="stat-card release-stat-card warning-card">
+        <div class="stat-value">{{ flowSummary.ticketScopes }}</div>
+        <div class="stat-label">覆盖工单类型</div>
+      </div>
+      <div class="stat-card release-stat-card">
+        <div class="stat-value">{{ flowSummary.nodeCount }}</div>
+        <div class="stat-label">审批节点数</div>
+      </div>
+    </div>
 
-    <el-tabs v-model="activeTab" class="release-tabs">
-      <el-tab-pane label="发布单" name="orders">
-        <div class="table-card">
-          <div class="filter-bar release-filter-bar">
-            <el-select v-model="bizFilter" clearable filterable placeholder="业务线" style="width: 128px">
-              <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-select v-model="envFilter" clearable placeholder="环境" style="width: 104px">
-              <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-input v-model="search" clearable placeholder="搜索应用 / 版本 / 镜像 / 目标 / 申请人" style="width: 280px" />
-            <el-select v-model="modeFilter" clearable placeholder="模式" style="width: 104px">
-              <el-option label="Docker 环境" value="docker_compose" />
-              <el-option label="K8s 集群" value="k8s" />
-            </el-select>
-            <el-select v-model="strategyFilter" clearable placeholder="策略" style="width: 104px">
-              <el-option label="标准发布" value="standard" />
-              <el-option label="灰度发布" value="canary" />
-              <el-option label="批次发布" value="batch" />
-            </el-select>
-            <el-select v-model="approvalFilter" clearable placeholder="审批状态" style="width: 112px">
-              <el-option label="待审批" value="pending" />
-              <el-option label="已通过" value="approved" />
-              <el-option label="已拒绝" value="rejected" />
-            </el-select>
-            <el-select v-model="statusFilter" clearable placeholder="执行状态" style="width: 112px">
-              <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-button class="filter-refresh-btn" @click="fetchDeployments">
-              <el-icon><RefreshRight /></el-icon>
-              刷新
-            </el-button>
-          </div>
+    <div v-if="!isFlowMode && deploymentPlatformTips.length" class="runtime-strip">
+      <span class="runtime-strip__label">平台提醒</span>
+      <el-tag
+        v-for="item in deploymentPlatformTips"
+        :key="item"
+        size="small"
+        effect="light"
+        type="info"
+      >
+        {{ item }}
+      </el-tag>
+    </div>
 
-          <el-table v-loading="loading" :data="filteredDeployments" stripe style="width: 100%" class="release-orders-table">
+    <div v-if="!isFlowMode" class="release-content-card">
+      <div class="filter-bar release-filter-bar">
+        <el-select v-model="bizFilter" clearable filterable placeholder="业务线" style="width: 128px">
+          <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-select v-model="envFilter" clearable placeholder="环境" style="width: 104px">
+          <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-input v-model="search" clearable placeholder="搜索应用 / 版本 / 镜像 / 目标 / 申请人" style="width: 280px" />
+        <el-select v-model="modeFilter" clearable placeholder="模式" style="width: 104px">
+          <el-option label="Docker 环境" value="docker_compose" />
+          <el-option label="K8s 集群" value="k8s" />
+        </el-select>
+        <el-select v-model="strategyFilter" clearable placeholder="策略" style="width: 104px">
+          <el-option label="标准发布" value="standard" />
+          <el-option label="灰度发布" value="canary" />
+          <el-option label="批次发布" value="batch" />
+        </el-select>
+        <el-select v-model="approvalFilter" clearable placeholder="审批状态" style="width: 112px">
+          <el-option label="待审批" value="pending" />
+          <el-option label="已通过" value="approved" />
+          <el-option label="已拒绝" value="rejected" />
+        </el-select>
+        <el-select v-model="statusFilter" clearable placeholder="执行状态" style="width: 112px">
+          <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-button class="filter-refresh-btn" @click="fetchDeployments">
+          <el-icon><RefreshRight /></el-icon>
+          刷新
+        </el-button>
+      </div>
+
+      <el-table v-loading="loading" :data="filteredDeployments" stripe style="width: 100%" class="release-orders-table">
             <el-table-column label="应用" min-width="220">
               <template #default="{ row }">
                 <div class="app-cell">
@@ -148,34 +181,45 @@
                 <el-button link type="info" size="small" @click="viewDetail(row)">详情</el-button>
               </template>
             </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
-      <el-tab-pane label="审批流配置" name="flows">
-        <div class="table-card">
-          <div class="filter-bar release-filter-bar">
-            <el-input v-model="flowSearch" clearable placeholder="搜索流程名称 / 描述" style="width: 280px" />
-            <el-select v-model="flowEnvFilter" clearable placeholder="适用环境" style="width: 140px">
-              <el-option label="全部环境" value="" />
-              <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
-            </el-select>
-            <el-switch v-model="onlyActiveFlow" inline-prompt active-text="启用中" inactive-text="全部" />
-            <el-button @click="fetchFlows">
-              <el-icon><RefreshRight /></el-icon>
-              刷新
-            </el-button>
-            <div class="flow-toolbar-spacer" />
-            <el-button v-if="canManageDeployments" type="primary" @click="openFlowDialog()">
-              <el-icon><Plus /></el-icon>
-              新建审批流
-            </el-button>
-          </div>
+      </el-table>
+    </div>
+    <div v-else class="release-content-card">
+      <div class="filter-bar release-filter-bar">
+        <el-input v-model="flowSearch" clearable placeholder="搜索流程名称 / 描述" style="width: 280px" />
+        <el-select v-model="flowEnvFilter" clearable placeholder="适用环境" style="width: 140px">
+          <el-option label="全部环境" value="" />
+          <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-switch v-model="onlyActiveFlow" inline-prompt active-text="启用中" inactive-text="全部" />
+        <el-button @click="fetchFlows">
+          <el-icon><RefreshRight /></el-icon>
+          刷新
+        </el-button>
+        <div class="flow-toolbar-spacer" />
+        <el-button v-if="canManageDeployments" type="primary" @click="openFlowDialog()">
+          <el-icon><Plus /></el-icon>
+          新建审批流
+        </el-button>
+      </div>
 
-          <el-table v-loading="flowLoading" :data="filteredFlows" stripe style="width: 100%">
+      <el-table v-loading="flowLoading" :data="filteredFlows" stripe style="width: 100%">
             <el-table-column prop="name" label="流程名称" min-width="180" />
             <el-table-column label="适用范围" width="130">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.environment ? envTagType(row.environment) : 'info'">{{ row.environment_display }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="适用工单" min-width="180">
+              <template #default="{ row }">
+                <div class="node-preview">
+                  <span
+                    v-for="label in (row.ticket_type_labels?.length ? row.ticket_type_labels : ['应用发布'])"
+                    :key="`${row.id}-${label}`"
+                    class="node-chip node-chip--soft"
+                  >
+                    {{ label }}
+                  </span>
+                </div>
               </template>
             </el-table-column>
             <el-table-column label="审批节点" min-width="260">
@@ -202,10 +246,8 @@
                 <el-button v-if="canManageDeployments" link type="danger" size="small" @click="handleDeleteFlow(row)">删除</el-button>
               </template>
             </el-table-column>
-          </el-table>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+      </el-table>
+    </div>
 
     <el-dialog v-model="releaseDialogVisible" title="新建发布单" width="960px" append-to-body destroy-on-close>
       <el-form :model="releaseForm" label-width="110px" class="release-form-grid">
@@ -293,6 +335,13 @@
               <el-option label="全部环境" value="" />
               <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
+          </el-form-item>
+          <el-form-item label="适用工单" class="span-2">
+            <el-checkbox-group v-model="flowForm.ticket_types">
+              <el-checkbox v-for="option in WORK_ORDER_TYPE_OPTIONS" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </el-checkbox>
+            </el-checkbox-group>
           </el-form-item>
           <el-form-item label="描述" class="span-2"><el-input v-model="flowForm.description" type="textarea" :rows="2" /></el-form-item>
           <el-form-item label="启用流程"><el-switch v-model="flowForm.is_active" /></el-form-item>
@@ -432,6 +481,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Promotion, RefreshRight } from '@element-plus/icons-vue'
 import { getResourceNodeTree } from '@/api/modules/cmdb'
@@ -439,12 +489,13 @@ import { getDockerHosts, getK8sClusters } from '@/api/modules/container'
 import { advanceDeploymentBatch, approveDeployment, createDeployment, createDeploymentApprovalFlow, deleteDeploymentApprovalFlow, getDeploymentApprovalFlows, getDeployments, getDeploymentStatus, getUsers, rejectDeployment, removeDeployment, rerunDeployment, rollbackDeployment, startDeployment, updateDeploymentApprovalFlow } from '@/api/modules/ops'
 import { getGroups, getRoles } from '@/api/modules/rbac'
 import { useAuthStore } from '@/stores/auth'
+import { WORK_ORDER_TYPE_OPTIONS, enrichWorkOrderFlows, getFlowTicketTypes, saveFlowTicketTypes } from '@/utils/workorderFlows'
 
+const route = useRoute()
 const authStore = useAuthStore()
 const canManageDeployments = computed(() => authStore.hasPermission('ops.deployment.manage'))
 const canApproveDeployments = computed(() => authStore.hasPermission('ops.deployment.approve'))
 
-const activeTab = ref('orders')
 const loading = ref(false)
 const flowLoading = ref(false)
 const saving = ref(false)
@@ -511,6 +562,26 @@ const summary = computed(() => ({
   failed: deployments.value.filter(item => item.status === 'failed').length,
   flowCount: flows.value.length,
 }))
+const isFlowMode = computed(() => route.name === 'WorkOrderApprovalFlows')
+const pageTitle = computed(() => isFlowMode.value ? '审批流' : '应用发布')
+const pageSubtitle = computed(() => (
+  isFlowMode.value
+    ? '统一配置应用发布、SQL 审计与事务工单可复用的审批流程。'
+    : '面向公司自研应用发布，支持 Docker / K8s 环境，支持灰度与批次发布、审批流配置、回滚等。并实时同步 CMDB。'
+))
+const flowSummary = computed(() => ({
+  total: flows.value.length,
+  active: flows.value.filter(item => item.is_active).length,
+  ticketScopes: new Set(flows.value.flatMap(item => item.ticket_types || ['deployment'])).size,
+  nodeCount: flows.value.reduce((sum, item) => sum + (item.node_count || item.nodes?.length || 0), 0),
+}))
+const deploymentPlatformTips = computed(() => {
+  const tips = []
+  if (summary.value.pendingApproval) tips.push(`当前有 ${summary.value.pendingApproval} 张发布单待审批`)
+  if (summary.value.failed) tips.push(`当前有 ${summary.value.failed} 张发布单执行失败，建议优先复盘`)
+  if (summary.value.running) tips.push(`当前有 ${summary.value.running} 个版本处于稳定运行中`)
+  return tips.slice(0, 3)
+})
 
 const filteredDeployments = computed(() => deployments.value.filter((item) => {
   if (bizFilter.value && item.business_line !== bizFilter.value) return false
@@ -574,7 +645,6 @@ async function fetchDeployments() {
 
 function applySummaryFilter(key) {
   activeSummaryKey.value = key
-  activeTab.value = 'orders'
   approvalFilter.value = ''
   statusFilter.value = ''
   onlyCurrent.value = false
@@ -596,7 +666,7 @@ function applySummaryFilter(key) {
 async function fetchFlows() {
   flowLoading.value = true
   try {
-    flows.value = safeList(await getDeploymentApprovalFlows())
+    flows.value = enrichWorkOrderFlows(safeList(await getDeploymentApprovalFlows()))
   } finally {
     flowLoading.value = false
   }
@@ -737,7 +807,14 @@ const flowDialogVisible = ref(false)
 const flowEditingId = ref(null)
 const flowForm = ref({})
 function resetFlowForm() {
-  flowForm.value = { name: '', environment: '', description: '', is_active: true, nodes: [{ order: 1, name: '', approver_type: 'user', approver_value: '', description: '' }] }
+  flowForm.value = {
+    name: '',
+    environment: '',
+    ticket_types: ['deployment'],
+    description: '',
+    is_active: true,
+    nodes: [{ order: 1, name: '', approver_type: 'user', approver_value: '', description: '' }],
+  }
 }
 function openFlowDialog(row = null) {
   if (!row) {
@@ -745,7 +822,20 @@ function openFlowDialog(row = null) {
     resetFlowForm()
   } else {
     flowEditingId.value = row.id
-    flowForm.value = { name: row.name, environment: row.environment ?? '', description: row.description || '', is_active: row.is_active, nodes: (row.nodes || []).map(node => ({ order: node.order, name: node.name, approver_type: node.approver_type, approver_value: node.approver_value, description: node.description || '' })) }
+    flowForm.value = {
+      name: row.name,
+      environment: row.environment ?? '',
+      ticket_types: getFlowTicketTypes(row),
+      description: row.description || '',
+      is_active: row.is_active,
+      nodes: (row.nodes || []).map(node => ({
+        order: node.order,
+        name: node.name,
+        approver_type: node.approver_type,
+        approver_value: node.approver_value,
+        description: node.description || '',
+      })),
+    }
   }
   flowDialogVisible.value = true
 }
@@ -771,18 +861,34 @@ function approverLabel(type, value) {
 }
 async function handleSaveFlow() {
   if (!flowForm.value.name) return ElMessage.warning('请填写流程名称')
+  if (!flowForm.value.ticket_types?.length) return ElMessage.warning('请至少选择一个适用工单')
   if (!flowForm.value.nodes.length) return ElMessage.warning('请至少配置一个审批节点')
   normalizeNodeOrders()
   const invalidNode = flowForm.value.nodes.find(node => !node.name || !node.approver_value)
   if (invalidNode) return ElMessage.warning('请完善所有审批节点的名称和审批对象')
   flowSaving.value = true
   try {
-    const payload = { ...flowForm.value, nodes: flowForm.value.nodes.map(node => ({ order: node.order, name: node.name, approver_type: node.approver_type, approver_value: node.approver_value, description: node.description || '' })) }
+    const payload = {
+      name: flowForm.value.name,
+      environment: flowForm.value.environment,
+      description: flowForm.value.description,
+      is_active: flowForm.value.is_active,
+      nodes: flowForm.value.nodes.map(node => ({
+        order: node.order,
+        name: node.name,
+        approver_type: node.approver_type,
+        approver_value: node.approver_value,
+        description: node.description || '',
+      })),
+    }
+    let savedFlow = null
     if (flowEditingId.value) {
-      await updateDeploymentApprovalFlow(flowEditingId.value, payload)
+      savedFlow = await updateDeploymentApprovalFlow(flowEditingId.value, payload)
+      saveFlowTicketTypes(flowEditingId.value, flowForm.value.ticket_types)
       ElMessage.success('审批流已更新')
     } else {
-      await createDeploymentApprovalFlow(payload)
+      savedFlow = await createDeploymentApprovalFlow(payload)
+      saveFlowTicketTypes(savedFlow?.id, flowForm.value.ticket_types)
       ElMessage.success('审批流已创建')
     }
     flowDialogVisible.value = false
@@ -821,6 +927,8 @@ onMounted(async () => {
 .release-header-icon{width:42px;height:42px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:20px;color:#fff;background:linear-gradient(135deg,#409eff,#36cfc9);box-shadow:0 10px 20px rgba(64,158,255,.2)}
 .sub-text{font-size:13px;color:var(--text-secondary);font-weight:400}
 .release-stats{gap:8px}
+.runtime-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 2px;padding:10px 12px;border-radius:14px;background:rgba(248,250,252,.9);border:1px solid rgba(148,163,184,.18)}
+.runtime-strip__label{font-size:12px;font-weight:700;color:#475569}
 .release-stat-card{position:relative;min-height:76px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 12px 26px rgba(15,23,42,.05);text-align:left;padding:12px 16px;cursor:pointer;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;overflow:hidden;appearance:none;width:100%;font:inherit;color:inherit}
 .release-stat-card::after{content:'';position:absolute;inset:auto -24px -30px auto;width:108px;height:108px;border-radius:50%;background:radial-gradient(circle,rgba(64,158,255,.16) 0%,rgba(64,158,255,0) 70%)}
 .release-stat-card:hover{transform:translateY(-2px);box-shadow:0 18px 38px rgba(37,99,235,.12);border-color:rgba(96,165,250,.4)}
@@ -830,9 +938,8 @@ onMounted(async () => {
 .danger-card::after{background:radial-gradient(circle,rgba(239,68,68,.18) 0%,rgba(239,68,68,0) 70%)}
 .release-stat-card .stat-value{font-size:26px;line-height:1.05}
 .release-stat-card .stat-label{margin-top:4px;color:#64748b}
-.release-tabs{margin-top:-8px;padding:12px;border-radius:20px;background:rgba(255,255,255,.9);box-shadow:0 12px 26px rgba(15,23,42,.04);border:1px solid rgba(148,163,184,.16)}
-.release-tabs :deep(.el-tabs__item){height:38px;line-height:38px;padding:0 16px;font-size:13px}
-.release-tabs :deep(.el-tabs__header){margin-bottom:8px}.release-filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;margin-bottom:10px;overflow-x:auto;padding-bottom:2px}.flow-toolbar-spacer{flex:1}.app-cell,.stack-cell,.strategy-cell{display:flex;flex-direction:column;gap:6px}.app-cell-title{display:flex;align-items:center;gap:8px}.app-name{font-weight:600}
+.release-content-card{margin-top:-8px;padding:12px;border-radius:20px;background:rgba(255,255,255,.9);box-shadow:0 12px 26px rgba(15,23,42,.04);border:1px solid rgba(148,163,184,.16)}
+.release-filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;margin-bottom:10px;overflow-x:auto;padding-bottom:2px}.flow-toolbar-spacer{flex:1}.app-cell,.stack-cell,.strategy-cell{display:flex;flex-direction:column;gap:6px}.app-cell-title{display:flex;align-items:center;gap:8px}.app-name{font-weight:600}
 .filter-refresh-btn{margin-left:auto;flex-shrink:0}
 .tag-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .detail-target-cell{min-width:0}

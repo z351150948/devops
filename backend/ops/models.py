@@ -887,3 +887,73 @@ class NginxRoute(models.Model):
 
     def __str__(self):
         return f'{self.nginx_domain.domain}{self.location}'
+
+
+class TransactionTicket(models.Model):
+    TYPE_CHANGE = 'change'
+    TYPE_INSPECTION = 'inspection'
+    TYPE_ACCESS = 'access'
+    TYPE_INCIDENT = 'incident'
+    TYPE_CHOICES = [
+        (TYPE_CHANGE, '变更执行'),
+        (TYPE_INSPECTION, '巡检任务'),
+        (TYPE_ACCESS, '权限开通'),
+        (TYPE_INCIDENT, '故障处理'),
+    ]
+
+    PRIORITY_HIGH = 'high'
+    PRIORITY_MEDIUM = 'medium'
+    PRIORITY_LOW = 'low'
+    PRIORITY_CHOICES = [
+        (PRIORITY_HIGH, '高'),
+        (PRIORITY_MEDIUM, '中'),
+        (PRIORITY_LOW, '低'),
+    ]
+
+    STATUS_PENDING = 'pending'
+    STATUS_APPROVED = 'approved'
+    STATUS_PROCESSING = 'processing'
+    STATUS_DONE = 'done'
+    STATUS_REJECTED = 'rejected'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, '待审批'),
+        (STATUS_APPROVED, '已通过'),
+        (STATUS_PROCESSING, '处理中'),
+        (STATUS_DONE, '已完成'),
+        (STATUS_REJECTED, '已驳回'),
+    ]
+
+    ENV_CHOICES = Deployment.ENV_CHOICES
+
+    title = models.CharField('工单标题', max_length=200)
+    ticket_type = models.CharField('事务类型', max_length=32, choices=TYPE_CHOICES, default=TYPE_CHANGE)
+    priority = models.CharField('优先级', max_length=16, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM)
+    business_line = models.CharField('业务线', max_length=50, blank=True, default='')
+    environment = models.CharField('环境', max_length=32, choices=ENV_CHOICES, blank=True, default='')
+    approval_flow = models.ForeignKey(
+        'DeploymentApprovalFlow',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='transaction_tickets',
+        verbose_name='审批流',
+    )
+    owner = models.CharField('处理人', max_length=64, blank=True, default='')
+    applicant = models.CharField('申请人', max_length=64, default='system')
+    window = models.CharField('执行窗口', max_length=128, blank=True, default='')
+    description = models.TextField('说明', blank=True, default='')
+    status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '事务工单'
+        verbose_name_plural = '事务工单'
+        ordering = ['-updated_at', '-id']
+        indexes = [
+            models.Index(fields=['status', 'priority', '-updated_at']),
+            models.Index(fields=['business_line', 'environment']),
+        ]
+
+    def __str__(self):
+        return self.title
