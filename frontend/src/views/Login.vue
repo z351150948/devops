@@ -46,7 +46,7 @@
             </el-button>
           </el-form>
 
-          <div class="auth-tip">默认账号：demo / Admin@123456</div>
+          <div class="auth-tip">默认账号：demo / Demo#123</div>
         </div>
       </section>
     </div>
@@ -66,7 +66,7 @@ const authStore = useAuthStore()
 const loading = ref(false)
 const form = reactive({
   username: 'demo',
-  password: 'Admin@123456',
+  password: 'Demo#123',
 })
 
 const features = [

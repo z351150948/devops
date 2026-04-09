@@ -50,6 +50,7 @@ DEMO_USERS = [
         'email': 'demo@example.com',
         'first_name': 'Demo',
         'last_name': 'User',
+        'password': 'Demo#123',
         'roles': ['read-only'],
         'groups': ['visitors'],
         'is_staff': False,
@@ -101,12 +102,12 @@ class Command(BaseCommand):
             user.last_name = item['last_name']
             user.is_active = True
             user.is_staff = item['is_staff']
-            user.set_password(DEFAULT_PASSWORD)
+            user.set_password(item.get('password') or DEFAULT_PASSWORD)
             user.save()
 
             user.rbac_roles.set([role_map[code] for code in item['roles'] if code in role_map])
             user.rbac_groups.set([group_map[code] for code in item['groups'] if code in group_map])
             action = '创建' if created else '更新'
-            self.stdout.write(self.style.SUCCESS(f'{action}演示用户: {user.username} / {DEFAULT_PASSWORD}'))
+            self.stdout.write(self.style.SUCCESS(f"{action}演示用户: {user.username} / {item.get('password') or DEFAULT_PASSWORD}"))
 
         self.stdout.write(self.style.SUCCESS('RBAC 演示数据已同步完成。'))
