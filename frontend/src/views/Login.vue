@@ -77,7 +77,7 @@ const features = [
   },
   {
     title: 'CMDB',
-    desc: '统一沉淀资产、应用与关系模型，建立可信的基础设施全景视图。',
+    desc: '统一沉淀资产、应用与关系模型，建立基础设施全景视图，打造问题溯源与成本分析底座。',
     icon: DataBoard,
   },
   {
@@ -91,8 +91,8 @@ const features = [
     icon: Cloudy,
   },
   {
-    title: '发布流程',
-    desc: '围绕版本发布、流程推进与状态追踪，打造可回溯的变更闭环。',
+    title: '工单系统',
+    desc: '支持应用发布、SQL审计、事务工单、审批流配置，打造可回溯的变更闭环',
     icon: Promotion,
   },
   {
