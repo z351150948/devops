@@ -341,18 +341,18 @@ const menuItems = [
     anyPermissions: ['marketplace.template.view', 'marketplace.deployment.view', 'marketplace.deployment.manage'],
   },
   {
-    path: '/users',
-    title: '用户管理',
-    icon: 'User',
-    anyPermissions: ['rbac.user.view', 'rbac.role.view', 'rbac.group.view', 'rbac.permission.view'],
-  },
-  {
     title: 'AIOps',
     icon: 'ChatDotSquare',
     children: [
       { path: '/aiops/chat', title: '智能助手', icon: 'Service', permission: 'aiops.chat.view' },
-      { path: '/aiops/config', title: '机器人配置', icon: 'Tools', permission: 'aiops.config.view' },
+      { path: '/aiops/config', title: '智能体配置', icon: 'Tools', permission: 'aiops.config.view' },
     ],
+  },
+  {
+    path: '/users',
+    title: '用户管理',
+    icon: 'User',
+    anyPermissions: ['rbac.user.view', 'rbac.role.view', 'rbac.group.view', 'rbac.permission.view'],
   },
 ]
 

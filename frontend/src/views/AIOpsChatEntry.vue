@@ -6,10 +6,10 @@
           <span class="entry-icon"><el-icon><ChatDotSquare /></el-icon></span>
           <h2>AIOps 智能助手</h2>
         </div>
-        <p>这里是 AIOps 助手入口。打开页面后，右下角助手面板会自动展开，可继续咨询平台资源、告警、排障分析和任务草稿。</p>
+        <p>这里是 AIOps 智能助手入口。打开页面后，右下角智能助手面板会自动展开，可继续咨询平台资源、告警、排障分析和任务草稿。</p>
       </div>
       <div class="entry-actions">
-        <el-button type="primary" @click="openWidget">打开助手</el-button>
+        <el-button type="primary" @click="openWidget">打开智能助手</el-button>
         <el-button v-if="canViewConfig" @click="router.push('/aiops/config')">智能体配置</el-button>
       </div>
     </section>
@@ -17,7 +17,7 @@
     <div class="entry-grid">
       <article class="entry-card">
         <h3>资源咨询</h3>
-        <p>直接询问主机、部署、容量和最近变化，助手会优先基于平台内已有数据回答。</p>
+        <p>直接询问主机、部署、容量和最近变化，智能助手会优先基于平台内已有数据回答。</p>
       </article>
       <article class="entry-card">
         <h3>告警分析</h3>

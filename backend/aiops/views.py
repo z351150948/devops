@@ -1,4 +1,5 @@
 from django.db.models import Count
+from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -37,6 +38,10 @@ from .services import (
     confirm_action,
     dispatch_chat,
     get_agent_config,
+    list_mcp_server_tools,
+    start_async_chat_processing,
+    test_model_provider_connection,
+    test_mcp_server_connection,
 )
 
 
@@ -58,18 +63,26 @@ class AIOpsModelProviderViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
         provider = self.get_object()
-        provider.last_test_status = (
-            AIOpsModelProvider.STATUS_SUCCESS
-            if provider.base_url and provider.get_api_key() and provider.default_model
-            else AIOpsModelProvider.STATUS_FAILED
-        )
-        provider.last_test_message = '配置可用' if provider.last_test_status == AIOpsModelProvider.STATUS_SUCCESS else '请完善 Base URL、模型和 API Key'
+        try:
+            result = test_model_provider_connection(provider)
+            provider.last_test_status = (
+                AIOpsModelProvider.STATUS_SUCCESS
+                if result.get('status') == 'success'
+                else AIOpsModelProvider.STATUS_FAILED
+            )
+            provider.last_test_message = result.get('message') or '模型测试完成'
+            payload = result
+            status_code = status.HTTP_200_OK if result.get('status') == 'success' else status.HTTP_400_BAD_REQUEST
+        except Exception as exc:
+            provider.last_test_status = AIOpsModelProvider.STATUS_FAILED
+            provider.last_test_message = str(exc)[:255]
+            payload = {'status': 'failed', 'message': str(exc)}
+            status_code = status.HTTP_400_BAD_REQUEST
         provider.save(update_fields=['last_test_status', 'last_test_message', 'updated_at'])
-        return Response({'status': provider.last_test_status, 'message': provider.last_test_message})
+        return Response(payload, status=status_code)
 
 
 class AIOpsMCPServerViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
-    queryset = AIOpsMCPServer.objects.all()
     serializer_class = AIOpsMCPServerSerializer
     pagination_class = None
     search_fields = ['name', 'description', 'endpoint_or_command']
@@ -80,11 +93,40 @@ class AIOpsMCPServerViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         'update': ['aiops.config.manage'],
         'partial_update': ['aiops.config.manage'],
         'destroy': ['aiops.config.manage'],
+        'test_connection': ['aiops.config.manage'],
+        'list_tools': ['aiops.config.manage'],
     }
+
+    def get_queryset(self):
+        get_agent_config()
+        return AIOpsMCPServer.objects.all().order_by('is_builtin', 'name', 'id')
+
+    @action(detail=True, methods=['post'])
+    def test_connection(self, request, pk=None):
+        server = self.get_object()
+        try:
+            result = test_mcp_server_connection(server)
+            return Response(result)
+        except Exception as exc:
+            return Response({'status': 'failed', 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['get'])
+    def list_tools(self, request, pk=None):
+        server = self.get_object()
+        try:
+            result = list_mcp_server_tools(server)
+            return Response(result)
+        except Exception as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.is_builtin:
+            return Response({'detail': '内置 MCP 不允许删除'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
 
 
 class AIOpsSkillViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
-    queryset = AIOpsSkill.objects.all()
     serializer_class = AIOpsSkillSerializer
     pagination_class = None
     search_fields = ['name', 'slug', 'description']
@@ -97,17 +139,28 @@ class AIOpsSkillViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         'destroy': ['aiops.config.manage'],
     }
 
+    def get_queryset(self):
+        get_agent_config()
+        return AIOpsSkill.objects.all().order_by('is_builtin', 'name', 'id')
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.is_builtin:
+            return Response({'detail': '内置 Skill 不允许删除'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().destroy(request, *args, **kwargs)
+
 
 class AIOpsChatSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     serializer_class = AIOpsChatSessionSerializer
     http_method_names = ['get', 'post', 'head', 'options']
-    demo_account_allowed_actions = {'create', 'send_message'}
+    demo_account_allowed_actions = {'create', 'send_message', 'send_message_async'}
     rbac_permissions = {
         'list': ['aiops.chat.view'],
         'retrieve': ['aiops.chat.view'],
         'create': ['aiops.chat.view'],
         'messages': ['aiops.chat.view'],
         'send_message': ['aiops.chat.view'],
+        'send_message_async': ['aiops.chat.view'],
     }
 
     def get_queryset(self):
@@ -143,6 +196,45 @@ class AIOpsChatSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             'user_message': AIOpsChatMessageSerializer(user_message).data,
             'assistant_message': AIOpsChatMessageSerializer(assistant_message).data,
             'pending_action': AIOpsPendingActionSerializer(pending_action).data if pending_action else None,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'])
+    def send_message_async(self, request, pk=None):
+        session = self.get_object()
+        serializer = AIOpsChatInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        content = serializer.validated_data['content'].strip()
+        user_message = AIOpsChatMessage.objects.create(
+            session=session,
+            role=AIOpsChatMessage.ROLE_USER,
+            content=content,
+        )
+        assistant_message = AIOpsChatMessage.objects.create(
+            session=session,
+            role=AIOpsChatMessage.ROLE_ASSISTANT,
+            message_type=AIOpsChatMessage.TYPE_TEXT,
+            content='正在分析平台数据，请稍等...',
+            metadata={
+                'processing_status': 'pending',
+                'processing_text': '请求已提交，正在排队处理',
+                'processing_steps': [{
+                    'title': '排队中',
+                    'detail': '已收到问题，正在准备上下文',
+                    'status': 'pending',
+                    'timestamp': timezone.now().isoformat(),
+                }],
+                'tool_events': [],
+            },
+        )
+        session.last_message_at = timezone.now()
+        if session.title == '新会话':
+            session.title = content[:48] or '新会话'
+        session.save(update_fields=['last_message_at', 'title', 'updated_at'])
+        start_async_chat_processing(session, user_message, request.user, assistant_message)
+        return Response({
+            'user_message': AIOpsChatMessageSerializer(user_message).data,
+            'assistant_message': AIOpsChatMessageSerializer(assistant_message).data,
+            'pending_action': None,
         }, status=status.HTTP_201_CREATED)
 
 

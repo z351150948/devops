@@ -4,7 +4,7 @@
       <div class="hero-copy">
         <div class="hero-title-row">
           <span class="hero-icon"><el-icon><ChatDotSquare /></el-icon></span>
-          <h2>运维智能体配置</h2>
+          <h2>智能体配置</h2>
         </div>
       </div>
       <div class="hero-actions">
@@ -40,9 +40,10 @@
     <section class="panel">
       <el-tabs v-model="activeTab">
         <el-tab-pane label="智能体策略" name="strategy" />
-        <el-tab-pane label="模型提供商" name="providers" />
         <el-tab-pane label="MCP" name="mcp" />
         <el-tab-pane label="Skill" name="skills" />
+        <el-tab-pane label="IM 接入" name="im" />
+        <el-tab-pane label="模型提供商" name="providers" />
         <el-tab-pane label="审计" name="audit" />
       </el-tabs>
 
@@ -61,6 +62,16 @@
               </el-form-item>
               <el-form-item label="建议问题">
                 <el-select v-model="configForm.suggested_questions" multiple filterable allow-create default-first-option style="width:100%" />
+              </el-form-item>
+              <el-form-item label="启用 MCP">
+                <el-select v-model="configForm.enabled_mcp_server_ids" multiple collapse-tags collapse-tags-tooltip style="width:100%">
+                  <el-option v-for="item in mcpServers" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="启用 Skill">
+                <el-select v-model="configForm.enabled_skill_ids" multiple collapse-tags collapse-tags-tooltip style="width:100%">
+                  <el-option v-for="item in skills" :key="item.id" :label="item.name" :value="item.id" />
+                </el-select>
               </el-form-item>
               <el-form-item label="系统提示语">
                 <el-input v-model="configForm.system_prompt" type="textarea" :rows="8" />
@@ -130,6 +141,13 @@
         </div>
       </template>
 
+      <template v-else-if="activeTab === 'im'">
+        <div class="empty-panel">
+          <div class="section-title">IM 接入</div>
+          <div class="empty-copy">功能预留，暂未开发。</div>
+        </div>
+      </template>
+
       <template v-else-if="activeTab === 'providers'">
         <div class="section-toolbar">
           <el-button size="small" type="primary" @click="openProviderDialog()">新增提供商</el-button>
@@ -165,17 +183,28 @@
         </div>
         <el-table :data="mcpServers" stripe>
           <el-table-column prop="name" label="名称" min-width="150" />
-          <el-table-column prop="server_type" label="类型" width="120" />
+          <el-table-column label="类型" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :class="['type-tag', `type-tag--${row.server_type || 'http'}`]">
+                {{ formatMcpType(row.server_type) }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="endpoint_or_command" label="地址或命令" min-width="240" show-overflow-tooltip />
+          <el-table-column label="启用工具" min-width="220" show-overflow-tooltip>
+            <template #default="{ row }">{{ formatEnabledTools(row.tool_whitelist) }}</template>
+          </el-table-column>
           <el-table-column label="启用" width="100">
             <template #default="{ row }">
               <el-tag size="small" :type="row.is_enabled ? 'success' : 'info'">{{ row.is_enabled ? '是' : '否' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="180" fixed="right">
+          <el-table-column label="操作" width="260" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openMcpDialog(row)">编辑</el-button>
-              <el-button link type="danger" @click="handleDeleteMcp(row)">删除</el-button>
+              <el-button link type="success" @click="handleTestMcp(row)">测试</el-button>
+              <el-button link @click="handleListMcpTools(row)">工具</el-button>
+              <el-button link type="danger" :disabled="row.is_builtin" @click="handleDeleteMcp(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -188,7 +217,13 @@
         <el-table :data="skills" stripe>
           <el-table-column prop="name" label="名称" min-width="150" />
           <el-table-column prop="slug" label="标识" width="140" />
-          <el-table-column prop="source_type" label="来源" width="120" />
+          <el-table-column label="类型" width="110">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain" :class="['type-tag', `type-tag--${getSkillTypeClass(row)}`]">
+                {{ formatSkillType(row) }}
+              </el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="description" label="描述" min-width="240" />
           <el-table-column label="启用" width="100">
             <template #default="{ row }">
@@ -198,7 +233,7 @@
           <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openSkillDialog(row)">编辑</el-button>
-              <el-button link type="danger" @click="handleDeleteSkill(row)">删除</el-button>
+              <el-button link type="danger" :disabled="row.is_builtin" @click="handleDeleteSkill(row)">删除</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -250,10 +285,11 @@
     <el-dialog v-model="mcpDialogVisible" :title="mcpForm.id ? '编辑 MCP' : '新增 MCP'" width="680px" destroy-on-close>
       <el-form :model="mcpForm" label-width="102px">
         <el-form-item label="名称"><el-input v-model="mcpForm.name" /></el-form-item>
-        <el-form-item label="类型"><el-select v-model="mcpForm.server_type" style="width:100%"><el-option label="HTTP" value="http" /><el-option label="STDIO" value="stdio" /><el-option label="Demo" value="demo" /></el-select></el-form-item>
+        <el-form-item label="类型"><el-select v-model="mcpForm.server_type" style="width:100%"><el-option label="HTTP" value="http" /><el-option label="STDIO" value="stdio" /><el-option label="平台内置" value="platform_builtin" /></el-select></el-form-item>
         <el-form-item label="地址或命令"><el-input v-model="mcpForm.endpoint_or_command" /></el-form-item>
         <el-form-item label="描述"><el-input v-model="mcpForm.description" type="textarea" :rows="3" /></el-form-item>
-        <el-form-item label="工具白名单"><el-select v-model="mcpForm.tool_whitelist" multiple filterable allow-create default-first-option style="width:100%" /></el-form-item>
+        <el-form-item label="鉴权配置"><el-input v-model="mcpForm.auth_config_text" type="textarea" :rows="5" placeholder='例如：{"headers":{"Authorization":"Bearer xxx"},"env":{"TOKEN":"xxx"}}' /></el-form-item>
+        <el-form-item label="启用工具"><el-select v-model="mcpForm.tool_whitelist" multiple filterable allow-create default-first-option style="width:100%" /></el-form-item>
         <el-form-item label="启用"><el-switch v-model="mcpForm.is_enabled" /></el-form-item>
       </el-form>
       <template #footer>
@@ -263,12 +299,21 @@
     </el-dialog>
 
     <el-dialog v-model="skillDialogVisible" :title="skillForm.id ? '编辑 Skill' : '新增 Skill'" width="760px" destroy-on-close>
+      <div v-if="skillForm.id" class="skill-detail-card">
+        <div class="skill-detail-title">Skill 详情</div>
+        <div class="skill-detail-meta">
+          <span>名称：{{ skillForm.name || '--' }}</span>
+          <span>标识：{{ skillForm.slug || '--' }}</span>
+          <span>类型：{{ formatSkillType(skillForm) }}</span>
+        </div>
+        <div class="skill-detail-desc">{{ skillForm.description || '暂无描述' }}</div>
+      </div>
       <el-form :model="skillForm" label-width="102px">
         <div class="dialog-grid">
           <el-form-item label="名称"><el-input v-model="skillForm.name" /></el-form-item>
           <el-form-item label="标识"><el-input v-model="skillForm.slug" /></el-form-item>
         </div>
-        <el-form-item label="来源"><el-select v-model="skillForm.source_type" style="width:100%"><el-option label="内置内容" value="inline" /><el-option label="本地文件" value="local" /></el-select></el-form-item>
+        <el-form-item label="来源"><el-select v-model="skillForm.source_type" style="width:100%"><el-option label="平台内置" value="inline" /><el-option label="本地文件" value="local" /></el-select></el-form-item>
         <el-form-item label="描述"><el-input v-model="skillForm.description" /></el-form-item>
         <el-form-item label="允许角色"><el-select v-model="skillForm.allowed_role_codes" multiple filterable allow-create default-first-option style="width:100%" /></el-form-item>
         <el-form-item label="内容"><el-input v-model="skillForm.content" type="textarea" :rows="8" /></el-form-item>
@@ -277,6 +322,18 @@
       <template #footer>
         <el-button @click="skillDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving.skill" @click="saveSkill">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="mcpToolsDialogVisible" title="MCP 工具列表" width="760px" destroy-on-close>
+      <div class="section-title" style="margin-bottom:12px;">{{ currentMcpToolsTitle || '工具列表' }}</div>
+      <el-table :data="mcpToolsList" stripe max-height="420">
+        <el-table-column prop="name" label="工具名" min-width="180" />
+        <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip />
+      </el-table>
+      <div v-if="!mcpToolsList.length" class="session-empty">暂无工具</div>
+      <template #footer>
+        <el-button @click="mcpToolsDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -301,7 +358,9 @@ import {
   getAIOpsMcpServers,
   getAIOpsProviders,
   getAIOpsSkills,
+  listAIOpsMcpTools,
   testAIOpsProvider,
+  testAIOpsMcpServer,
   updateAIOpsConfig,
   updateAIOpsMcpServer,
   updateAIOpsProvider,
@@ -325,6 +384,8 @@ const configForm = reactive({
   system_prompt: '',
   welcome_message: '',
   suggested_questions: [],
+  enabled_mcp_server_ids: [],
+  enabled_skill_ids: [],
   is_enabled: true,
   allow_action_execution: true,
   require_confirmation: true,
@@ -336,13 +397,40 @@ const configForm = reactive({
 const providerDialogVisible = ref(false)
 const mcpDialogVisible = ref(false)
 const skillDialogVisible = ref(false)
+const mcpToolsDialogVisible = ref(false)
 
 const providerForm = reactive({})
 const mcpForm = reactive({})
 const skillForm = reactive({})
+const mcpToolsList = ref([])
+const currentMcpToolsTitle = ref('')
 
 const enabledMcpCount = computed(() => mcpServers.value.filter(item => item.is_enabled).length)
 const enabledSkillCount = computed(() => skills.value.filter(item => item.is_enabled).length)
+
+function formatMcpType(serverType) {
+  if (serverType === 'platform_builtin') return '平台内置'
+  if (serverType === 'stdio') return 'STDIO'
+  return 'HTTP'
+}
+
+function formatSkillSource(row = {}) {
+  if (row.is_builtin || row.source_type === 'inline') return '平台内置'
+  return '本地文件'
+}
+
+function formatSkillType(row = {}) {
+  return formatSkillSource(row)
+}
+
+function getSkillTypeClass(row = {}) {
+  return row.is_builtin || row.source_type === 'inline' ? 'platform_builtin' : 'local'
+}
+
+function formatEnabledTools(tools) {
+  if (!Array.isArray(tools) || !tools.length) return '--'
+  return tools.join('、')
+}
 
 function resetProviderForm() {
   Object.assign(providerForm, {
@@ -367,6 +455,8 @@ function resetMcpForm() {
     server_type: 'http',
     endpoint_or_command: '',
     description: '',
+    auth_config: {},
+    auth_config_text: '{}',
     tool_whitelist: [],
     is_enabled: true,
   })
@@ -391,6 +481,8 @@ function applyConfig(payload = {}) {
     system_prompt: payload.system_prompt || '',
     welcome_message: payload.welcome_message || '',
     suggested_questions: payload.suggested_questions || [],
+    enabled_mcp_server_ids: payload.enabled_mcp_server_ids || [],
+    enabled_skill_ids: payload.enabled_skill_ids || [],
     is_enabled: payload.is_enabled ?? true,
     allow_action_execution: payload.allow_action_execution ?? true,
     require_confirmation: payload.require_confirmation ?? true,
@@ -473,15 +565,35 @@ async function handleDeleteProvider(row) {
 
 function openMcpDialog(row) {
   resetMcpForm()
-  if (row) Object.assign(mcpForm, row)
+  if (row) Object.assign(mcpForm, row, { auth_config_text: JSON.stringify(row.auth_config || {}, null, 2) })
   mcpDialogVisible.value = true
+}
+
+async function handleTestMcp(row) {
+  const result = await testAIOpsMcpServer(row.id)
+  ElMessage.success(result.message || 'MCP 连接成功')
+}
+
+async function handleListMcpTools(row) {
+  const result = await listAIOpsMcpTools(row.id)
+  currentMcpToolsTitle.value = `${row.name} / ${result.count || 0} 个工具`
+  mcpToolsList.value = result.tools || []
+  mcpToolsDialogVisible.value = true
 }
 
 async function saveMcp() {
   saving.mcp = true
   try {
-    if (mcpForm.id) await updateAIOpsMcpServer(mcpForm.id, { ...mcpForm })
-    else await createAIOpsMcpServer({ ...mcpForm })
+    const payload = { ...mcpForm }
+    try {
+      payload.auth_config = payload.auth_config_text?.trim() ? JSON.parse(payload.auth_config_text) : {}
+    } catch (error) {
+      ElMessage.error('鉴权配置不是合法 JSON')
+      return
+    }
+    delete payload.auth_config_text
+    if (mcpForm.id) await updateAIOpsMcpServer(mcpForm.id, payload)
+    else await createAIOpsMcpServer(payload)
     mcpDialogVisible.value = false
     ElMessage.success('MCP 配置已保存')
     await loadAll()
@@ -544,6 +656,17 @@ onMounted(async () => {
 .config-grid{align-items:flex-start}.config-section{flex:1;padding:8px 0}.section-title{font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px}.switch-list{flex-direction:column}.switch-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
 .section-toolbar{justify-content:flex-end;margin-bottom:8px}.dialog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.audit-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.audit-card{padding:16px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;flex-direction:column;gap:8px}.audit-card strong{font-size:28px;color:#0f172a}
 .audit-section{margin-top:8px}
+.empty-panel{padding:18px 4px 8px}
+.empty-copy{min-height:120px;padding:16px 18px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);border:1px dashed rgba(148,163,184,.35);color:#64748b;font-size:13px;line-height:1.8}
+.skill-detail-card{margin-bottom:16px;padding:12px 14px;border-radius:14px;background:linear-gradient(145deg,#fff7ed 0%,#f8fafc 100%);border:1px solid rgba(148,163,184,.2)}
+.skill-detail-title{font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px}
+.skill-detail-meta{display:flex;flex-wrap:wrap;gap:8px 16px;color:#475569;font-size:13px}
+.skill-detail-desc{margin-top:8px;color:#64748b;font-size:13px;line-height:1.6}
+.type-tag{border-width:1px}
+.type-tag--platform_builtin{color:#166534;border-color:#86efac;background:#f0fdf4}
+.type-tag--stdio{color:#1d4ed8;border-color:#93c5fd;background:#eff6ff}
+.type-tag--http{color:#92400e;border-color:#fcd34d;background:#fffbeb}
+.type-tag--local{color:#7c3aed;border-color:#c4b5fd;background:#f5f3ff}
 @media (max-width: 960px){.stats-grid,.audit-grid,.dialog-grid{grid-template-columns:1fr}.config-grid{flex-direction:column}}
 .hero.panel { border-radius: 20px; }
 </style>

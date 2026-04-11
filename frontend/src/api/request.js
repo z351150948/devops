@@ -34,6 +34,10 @@ function flattenErrorPayload(payload, parentKey = '') {
 }
 
 async function extractErrorMessage(error) {
+    if (error.code === 'ECONNABORTED' || String(error.message || '').toLowerCase().includes('timeout')) {
+        return '请求超时，请稍后重试'
+    }
+
     const response = error.response
     const data = response?.data
 

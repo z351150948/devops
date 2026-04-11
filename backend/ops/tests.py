@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
-from ops.models import DockerHost, K8sCluster, K8sConfigRevision
+from ops.models import Alert, DockerHost, Host, K8sCluster, K8sConfigRevision
 
 
 TEST_LOG_PROVIDER_CONFIGS = {
@@ -1221,3 +1221,23 @@ class MiddlewareViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         brokers = response.json()['data']['rocketmq']['brokers']
         self.assertTrue(any(item['name'].startswith('broker-template-slave') for item in brokers))
+
+
+class AlertViewSetFilterTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_superuser('alert-admin', 'alert@example.com', 'Admin@123456')
+        self.client.force_authenticate(user=self.user)
+        self.host = Host.objects.create(hostname='alert-host-01', ip_address='10.0.1.10', environment='prod', status='warning')
+        Alert.objects.create(title='Critical alert', level='critical', source='monitor', message='critical issue', is_acknowledged=False, host=self.host)
+        Alert.objects.create(title='Warning alert', level='warning', source='monitor', message='warning issue', is_acknowledged=True, host=self.host)
+
+    def test_alert_list_supports_level_and_ack_filters(self):
+        response = self.client.get('/api/alerts/', {'level': 'critical', 'is_acknowledged': False})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        results = payload['results'] if isinstance(payload, dict) and 'results' in payload else payload
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['level'], 'critical')
+        self.assertFalse(results[0]['is_acknowledged'])
+

@@ -63,7 +63,8 @@ class AIOpsAgentConfigSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'default_provider', 'default_provider_id', 'system_prompt', 'welcome_message',
             'suggested_questions', 'is_enabled', 'allow_action_execution', 'require_confirmation', 'show_evidence',
-            'allow_analysis', 'max_history_messages', 'created_at', 'updated_at',
+            'allow_analysis', 'enabled_mcp_server_ids', 'enabled_skill_ids', 'max_history_messages',
+            'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
 
@@ -72,12 +73,26 @@ class AIOpsMCPServerSerializer(serializers.ModelSerializer):
     class Meta:
         model = AIOpsMCPServer
         fields = '__all__'
+        read_only_fields = ['is_builtin']
+
+    def update(self, instance, validated_data):
+        if instance.is_builtin:
+            validated_data.pop('name', None)
+            validated_data.pop('server_type', None)
+        return super().update(instance, validated_data)
 
 
 class AIOpsSkillSerializer(serializers.ModelSerializer):
     class Meta:
         model = AIOpsSkill
         fields = '__all__'
+        read_only_fields = ['is_builtin']
+
+    def update(self, instance, validated_data):
+        if instance.is_builtin:
+            validated_data.pop('slug', None)
+            validated_data.pop('source_type', None)
+        return super().update(instance, validated_data)
 
 
 class AIOpsPendingActionSerializer(serializers.ModelSerializer):

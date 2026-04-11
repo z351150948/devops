@@ -93,6 +93,8 @@ class AIOpsAgentConfig(models.Model):
     require_confirmation = models.BooleanField('执行前确认', default=True)
     show_evidence = models.BooleanField('展示证据来源', default=True)
     allow_analysis = models.BooleanField('允许关联分析', default=True)
+    enabled_mcp_server_ids = models.JSONField('启用的 MCP', default=list, blank=True)
+    enabled_skill_ids = models.JSONField('启用的 Skill', default=list, blank=True)
     max_history_messages = models.PositiveIntegerField('最大历史消息数', default=12)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
@@ -108,11 +110,11 @@ class AIOpsAgentConfig(models.Model):
 class AIOpsMCPServer(models.Model):
     SERVER_HTTP = 'http'
     SERVER_STDIO = 'stdio'
-    SERVER_DEMO = 'demo'
+    SERVER_PLATFORM_BUILTIN = 'platform_builtin'
     SERVER_TYPE_CHOICES = [
         (SERVER_HTTP, 'HTTP'),
         (SERVER_STDIO, 'STDIO'),
-        (SERVER_DEMO, 'Demo'),
+        (SERVER_PLATFORM_BUILTIN, '平台内置'),
     ]
 
     name = models.CharField('名称', max_length=128, unique=True)
@@ -120,7 +122,8 @@ class AIOpsMCPServer(models.Model):
     endpoint_or_command = models.CharField('地址或命令', max_length=255, blank=True, default='')
     description = models.CharField('描述', max_length=255, blank=True, default='')
     auth_config = models.JSONField('鉴权配置', default=dict, blank=True)
-    tool_whitelist = models.JSONField('工具白名单', default=list, blank=True)
+    tool_whitelist = models.JSONField('启用工具', default=list, blank=True)
+    is_builtin = models.BooleanField('内置', default=False)
     is_enabled = models.BooleanField('启用', default=True)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)
@@ -138,7 +141,7 @@ class AIOpsSkill(models.Model):
     SOURCE_INLINE = 'inline'
     SOURCE_LOCAL = 'local'
     SOURCE_CHOICES = [
-        (SOURCE_INLINE, '内置内容'),
+        (SOURCE_INLINE, '平台内置'),
         (SOURCE_LOCAL, '本地文件'),
     ]
 
@@ -148,6 +151,7 @@ class AIOpsSkill(models.Model):
     source_type = models.CharField('来源类型', max_length=16, choices=SOURCE_CHOICES, default=SOURCE_INLINE)
     content = models.TextField('内容', blank=True, default='')
     allowed_role_codes = models.JSONField('允许角色', default=list, blank=True)
+    is_builtin = models.BooleanField('内置', default=False)
     is_enabled = models.BooleanField('启用', default=True)
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
     updated_at = models.DateTimeField('更新时间', auto_now=True)

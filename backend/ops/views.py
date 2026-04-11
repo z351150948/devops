@@ -1145,7 +1145,8 @@ class TransactionTicketViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, 
 class AlertViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = Alert.objects.select_related('host').all()
     serializer_class = AlertSerializer
-    search_fields = ['title', 'source', 'message']
+    search_fields = ['title', 'source', 'message', 'host__hostname']
+    filterset_fields = ['level', 'is_acknowledged']
     rbac_permissions = {
         'list': ['ops.alert.view'],
         'retrieve': ['ops.alert.view'],

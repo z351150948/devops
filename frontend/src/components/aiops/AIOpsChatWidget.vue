@@ -10,7 +10,7 @@
               <div class="aiops-title-row">
                 <img :src="botAvatar" alt="AIOps bot" class="aiops-header-avatar" />
                 <div class="aiops-title">AIOps 智能助手</div>
-                <span class="header-badge">{{ bootstrap.provider?.model || bootstrap.provider?.name || '本地规则引擎' }}</span>
+                <span class="header-badge">{{ bootstrap.provider?.model || bootstrap.provider?.name || '未配置模型' }}</span>
                 <span class="header-badge runtime" :class="{ safe: !bootstrap.runtime?.allow_action_execution }">
                   {{ runtimeLabel }}
                 </span>
@@ -94,23 +94,123 @@
                     v-for="(message, index) in renderMessages"
                     :key="message.localKey || message.id"
                     class="message-item"
-                    :class="[message.role, { pending: message.pending }]"
+                    :class="[message.role, { pending: message.pending || isMessageProcessing(message) }]"
                   >
                     <div class="message-meta">
-                      <span class="message-role">{{ message.role === 'user' ? '你' : '助手' }}</span>
+                      <span class="message-role">{{ message.role === 'user' ? '你' : '智能助手' }}</span>
                       <span class="message-time">{{ formatDateTime(message.created_at) }}</span>
                     </div>
 
                     <div class="message-bubble">
-                      <div v-if="message.role === 'assistant'" class="message-content assistant">
+                      <div
+                        v-if="message.role === 'assistant' && shouldShowProcessCard(message)"
+                        class="analysis-process-card"
+                        :class="{ active: isMessageProcessing(message) }"
+                      >
+                        <div class="analysis-process-head">
+                          <div class="analysis-process-headline">
+                            <div class="analysis-process-title">思考过程</div>
+                            <div class="analysis-process-inline-summary">{{ getProcessSummary(message) }}</div>
+                          </div>
+                          <div class="analysis-process-actions">
+                            <span class="analysis-process-status" :class="getProcessingStatus(message)">{{ getProcessingStatusLabel(message) }}</span>
+                            <button type="button" class="analysis-process-toggle" @click="toggleProcessExpanded(message)">
+                              {{ isProcessExpanded(message) ? '收起' : '展开' }}
+                            </button>
+                          </div>
+                        </div>
+                        <div v-show="isProcessExpanded(message)" class="analysis-process-content">
+                          <div v-if="message.metadata?.processing_text" class="analysis-process-summary">
+                            {{ message.metadata.processing_text }}
+                          </div>
+                          <div v-if="message.metadata?.processing_steps?.length" class="analysis-process-list">
+                            <div
+                              v-for="(step, stepIndex) in message.metadata.processing_steps"
+                              :key="`${message.id || message.localKey}-step-${stepIndex}`"
+                              class="analysis-process-item"
+                            >
+                              <span class="analysis-process-dot" :class="step.status || 'completed'" />
+                              <div class="analysis-process-body">
+                                <div class="analysis-process-item-head">
+                                  <strong>{{ step.title }}</strong>
+                                  <span>{{ formatProcessTime(step.timestamp) }}</span>
+                                </div>
+                                <div v-if="step.detail" class="analysis-process-item-detail">{{ step.detail }}</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div v-if="message.metadata?.tool_events?.length" class="tool-event-list">
+                            <div
+                              v-for="(event, eventIndex) in message.metadata.tool_events"
+                              :key="`${message.id || message.localKey}-tool-${eventIndex}`"
+                              class="tool-event-item"
+                            >
+                              <span class="tool-event-name">{{ event.name }}</span>
+                              <span class="tool-event-detail">{{ event.detail }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div v-if="isAssistantErrorMessage(message)" class="message-error-card">
+                        <div class="message-error-head">
+                          <span class="message-error-badge">问答未完成</span>
+                          <span v-if="getAssistantErrorDisplay(message).tag" class="message-error-tag">
+                            {{ getAssistantErrorDisplay(message).tag }}
+                          </span>
+                        </div>
+                        <div class="message-error-title">{{ getAssistantErrorDisplay(message).title }}</div>
+                        <div class="message-error-desc">{{ getAssistantErrorDisplay(message).description }}</div>
+                        <div v-if="getAssistantErrorDisplay(message).detail" class="message-error-detail">
+                          {{ getAssistantErrorDisplay(message).detail }}
+                        </div>
+                        <div v-if="canViewConfig && getAssistantErrorDisplay(message).actionLabel" class="message-error-actions">
+                          <el-button size="small" text @click="openAIOpsConfig">
+                            {{ getAssistantErrorDisplay(message).actionLabel }}
+                          </el-button>
+                        </div>
+                      </div>
+                      <div v-else-if="message.role === 'assistant'" class="message-content assistant">
                         <template v-for="(block, blockIndex) in parseAssistantContent(message.content)" :key="`${message.localKey || message.id || index}-${blockIndex}`">
-                          <div v-if="block.type === 'heading'" class="rich-heading">{{ block.text }}</div>
-                          <div v-else-if="block.type === 'paragraph'" class="rich-paragraph">{{ block.text }}</div>
+                          <div v-if="block.type === 'heading'" class="rich-heading">
+                            <template v-for="(token, tokenIndex) in parseInlineMarkdown(block.text)" :key="`${blockIndex}-heading-${tokenIndex}`">
+                              <strong v-if="token.type === 'strong'">{{ token.text }}</strong>
+                              <em v-else-if="token.type === 'em'">{{ token.text }}</em>
+                              <code v-else-if="token.type === 'code'" class="rich-inline-code">{{ token.text }}</code>
+                              <a v-else-if="token.type === 'link'" :href="token.href" target="_blank" rel="noreferrer" class="rich-inline-link">{{ token.text }}</a>
+                              <span v-else>{{ token.text }}</span>
+                            </template>
+                          </div>
+                          <div v-else-if="block.type === 'paragraph'" class="rich-paragraph">
+                            <template v-for="(token, tokenIndex) in parseInlineMarkdown(block.text)" :key="`${blockIndex}-paragraph-${tokenIndex}`">
+                              <strong v-if="token.type === 'strong'">{{ token.text }}</strong>
+                              <em v-else-if="token.type === 'em'">{{ token.text }}</em>
+                              <code v-else-if="token.type === 'code'" class="rich-inline-code">{{ token.text }}</code>
+                              <a v-else-if="token.type === 'link'" :href="token.href" target="_blank" rel="noreferrer" class="rich-inline-link">{{ token.text }}</a>
+                              <span v-else>{{ token.text }}</span>
+                            </template>
+                          </div>
                           <ul v-else-if="block.type === 'list'" class="rich-list">
                             <li v-for="(item, itemIndex) in block.items" :key="`${blockIndex}-${itemIndex}`" class="rich-list-item">
-                              <div class="rich-list-title">{{ item.text }}</div>
+                              <div class="rich-list-title">
+                                <template v-for="(token, tokenIndex) in parseInlineMarkdown(item.text)" :key="`${blockIndex}-${itemIndex}-title-${tokenIndex}`">
+                                  <strong v-if="token.type === 'strong'">{{ token.text }}</strong>
+                                  <em v-else-if="token.type === 'em'">{{ token.text }}</em>
+                                  <code v-else-if="token.type === 'code'" class="rich-inline-code">{{ token.text }}</code>
+                                  <a v-else-if="token.type === 'link'" :href="token.href" target="_blank" rel="noreferrer" class="rich-inline-link">{{ token.text }}</a>
+                                  <span v-else>{{ token.text }}</span>
+                                </template>
+                              </div>
                               <ul v-if="item.children?.length" class="rich-sublist">
-                                <li v-for="(child, childIndex) in item.children" :key="`${blockIndex}-${itemIndex}-${childIndex}`">{{ child }}</li>
+                                <li v-for="(child, childIndex) in item.children" :key="`${blockIndex}-${itemIndex}-${childIndex}`">
+                                  <template v-for="(token, tokenIndex) in parseInlineMarkdown(child)" :key="`${blockIndex}-${itemIndex}-${childIndex}-${tokenIndex}`">
+                                    <strong v-if="token.type === 'strong'">{{ token.text }}</strong>
+                                    <em v-else-if="token.type === 'em'">{{ token.text }}</em>
+                                    <code v-else-if="token.type === 'code'" class="rich-inline-code">{{ token.text }}</code>
+                                    <a v-else-if="token.type === 'link'" :href="token.href" target="_blank" rel="noreferrer" class="rich-inline-link">{{ token.text }}</a>
+                                    <span v-else>{{ token.text }}</span>
+                                  </template>
+                                </li>
                               </ul>
                             </li>
                           </ul>
@@ -198,10 +298,11 @@
                     <span class="composer-tip">Enter 发送，Shift + Enter 换行</span>
                     <span v-if="analysisOnly" class="composer-tip">当前为只分析模式</span>
                     <span v-if="composer.trim()" class="composer-tip">草稿已自动保存</span>
+                    <span v-if="loading.poll" class="composer-tip">正在流式返回结果</span>
                   </div>
                   <div class="composer-action-group">
                     <el-button text :disabled="!composer.trim()" @click="clearDraft">清空</el-button>
-                    <el-button type="primary" :loading="loading.send" :disabled="!composer.trim()" @click="handleSend">
+                    <el-button type="primary" :loading="loading.send || loading.poll" :disabled="!composer.trim() || loading.poll" @click="handleSend">
                       发送
                     </el-button>
                   </div>
@@ -268,7 +369,7 @@ import {
   getAIOpsBootstrap,
   getAIOpsMessages,
   getAIOpsSessions,
-  sendAIOpsMessage,
+  sendAIOpsMessageAsync,
 } from '@/api/modules/aiops'
 import botAvatar from '@/assets/aiops-bot.svg'
 import { useAuthStore } from '@/stores/auth'
@@ -288,7 +389,7 @@ const sessions = ref([])
 const messages = ref([])
 const composer = ref('')
 const currentSessionId = ref(Number(localStorage.getItem(STORAGE_SESSION_KEY) || '') || null)
-const loading = ref({ bootstrap: false, sessions: false, messages: false, send: false })
+const loading = ref({ bootstrap: false, sessions: false, messages: false, send: false, poll: false })
 const pendingAssistantMessage = ref(null)
 const messageListRef = ref(null)
 const composerRef = ref(null)
@@ -305,6 +406,11 @@ const fabPointerState = {
   originTop: 0,
 }
 let ignoreNextFabClick = false
+let pollingTimer = null
+let pollingSessionId = null
+let pollingMessageId = null
+const processExpandedState = ref({})
+const processStatusState = ref({})
 
 const available = computed(() => bootstrap.value.enabled && authStore.hasPermission('aiops.chat.view'))
 const renderMessages = computed(() => pendingAssistantMessage.value ? [...messages.value, pendingAssistantMessage.value] : messages.value)
@@ -322,14 +428,237 @@ const runtimeLabel = computed(() => {
   if (!bootstrap.value.runtime?.allow_action_execution) return '仅分析/草稿'
   return bootstrap.value.runtime?.require_confirmation ? '执行需确认' : '可直接执行'
 })
+const canViewConfig = computed(() => authStore.hasPermission('aiops.config.view'))
+
+const ASSISTANT_ERROR_DISPLAY = {
+  provider_unavailable: {
+    title: '未配置可用模型',
+    description: '当前智能助手没有可用模型，暂时无法继续问答。请到智能体配置中启用并测试默认模型。',
+    actionLabel: '前往模型配置',
+    tag: '模型配置',
+  },
+  tool_unavailable: {
+    title: '未启用可用工具',
+    description: '当前智能助手没有可调用的 MCP 工具，无法从平台数据中取证回答。请至少启用一个可用工具。',
+    actionLabel: '前往 MCP 配置',
+    tag: '工具配置',
+  },
+  no_tool_called: {
+    title: '模型未发起工具调用',
+    description: '本次问答已进入模型，但模型没有调用任何工具，因此平台无法基于真实数据完成回答。',
+    actionLabel: '检查模型配置',
+    tag: 'Tool Calling',
+  },
+  invalid_model_response: {
+    title: '模型返回格式异常',
+    description: '当前模型返回结果无法被平台正确解析，请检查模型兼容性，或更换支持 Tool Calling 的模型。',
+    actionLabel: '检查模型配置',
+    tag: '模型兼容性',
+  },
+  runtime_error: {
+    title: '调用模型或工具时失败',
+    description: '本次问答执行过程中发生异常，请稍后重试；如果持续失败，请检查模型与 MCP 的接入配置。',
+    actionLabel: '查看智能体配置',
+    tag: '运行异常',
+  },
+  default: {
+    title: '本次问答未完成',
+    description: '智能助手暂时没能完成这次回答，请稍后重试，或检查模型与工具配置。',
+    actionLabel: '查看智能体配置',
+    tag: '运行状态',
+  },
+}
 
 function normalizeText(value) {
   return String(value || '').replace(/\r\n/g, '\n')
 }
 
+function normalizeLinkHref(value) {
+  const href = String(value || '').trim()
+  if (!href) return ''
+  if (/^(https?:|mailto:)/i.test(href)) return href
+  return ''
+}
+
+function parseInlineMarkdown(text) {
+  const source = String(text || '')
+  if (!source) return [{ type: 'text', text: '' }]
+
+  const tokens = []
+  const pattern = /(`([^`\n]+)`)|(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*\n]+)\*\*)|(\*([^*\n]+)\*)/g
+  let lastIndex = 0
+  let match = pattern.exec(source)
+
+  while (match) {
+    if (match.index > lastIndex) {
+      tokens.push({ type: 'text', text: source.slice(lastIndex, match.index) })
+    }
+    if (match[2]) {
+      tokens.push({ type: 'code', text: match[2] })
+    } else if (match[4] && match[5]) {
+      const href = normalizeLinkHref(match[5])
+      if (href) {
+        tokens.push({ type: 'link', text: match[4], href })
+      } else {
+        tokens.push({ type: 'text', text: match[4] })
+      }
+    } else if (match[7]) {
+      tokens.push({ type: 'strong', text: match[7] })
+    } else if (match[9]) {
+      tokens.push({ type: 'em', text: match[9] })
+    }
+    lastIndex = pattern.lastIndex
+    match = pattern.exec(source)
+  }
+
+  if (lastIndex < source.length) {
+    tokens.push({ type: 'text', text: source.slice(lastIndex) })
+  }
+
+  return tokens.length ? tokens : [{ type: 'text', text: source }]
+}
+
+function isAssistantErrorMessage(message) {
+  if (message?.role !== 'assistant') return false
+  return message?.message_type === 'error' || Boolean(message?.metadata?.error_code)
+}
+
+function getAssistantErrorDisplay(message) {
+  const code = message?.metadata?.error_code
+  const errorDetail = String(message?.metadata?.error_detail || '').trim()
+  const preset = ASSISTANT_ERROR_DISPLAY[code] || ASSISTANT_ERROR_DISPLAY.default
+  return {
+    ...preset,
+    detail: errorDetail || '',
+  }
+}
+
 function formatDateTime(value) {
   if (!value) return '--'
   return new Date(value).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatProcessTime(value) {
+  if (!value) return '--'
+  return new Date(value).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+}
+
+function formatProcessDuration(seconds) {
+  const safeSeconds = Math.max(0, Math.round(Number(seconds) || 0))
+  if (safeSeconds < 60) return `${safeSeconds} 秒`
+  const minutes = Math.floor(safeSeconds / 60)
+  const remainSeconds = safeSeconds % 60
+  if (!remainSeconds) return `${minutes} 分钟`
+  return `${minutes} 分 ${remainSeconds} 秒`
+}
+
+function getProcessingStatus(message) {
+  return message?.metadata?.processing_status || ''
+}
+
+function isMessageProcessing(message) {
+  return ['pending', 'running', 'streaming'].includes(getProcessingStatus(message))
+}
+
+function shouldShowProcessCard(message) {
+  if (message?.role !== 'assistant') return false
+  return Boolean(
+    isMessageProcessing(message)
+    || message?.metadata?.processing_text
+    || message?.metadata?.processing_steps?.length
+    || message?.metadata?.tool_events?.length
+  )
+}
+
+function getProcessingStatusLabel(message) {
+  const status = getProcessingStatus(message)
+  if (status === 'pending') return '排队中'
+  if (status === 'running') return '分析中'
+  if (status === 'streaming') return '输出中'
+  if (status === 'failed') return '失败'
+  if (status === 'completed') return '已完成'
+  return '处理中'
+}
+
+function getProcessTimeline(message) {
+  const steps = message?.metadata?.processing_steps || []
+  const toolEvents = message?.metadata?.tool_events || []
+  const timestamps = [
+    message?.created_at,
+    ...steps.map(item => item?.timestamp),
+    ...toolEvents.map(item => item?.timestamp),
+  ].filter(Boolean).map(value => new Date(value).getTime()).filter(value => Number.isFinite(value))
+  if (!timestamps.length) return 0
+  const start = Math.min(...timestamps)
+  const end = ['pending', 'running', 'streaming'].includes(getProcessingStatus(message))
+    ? Date.now()
+    : Math.max(...timestamps)
+  return Math.max(1, Math.round((end - start) / 1000))
+}
+
+function getProcessSummary(message) {
+  const durationText = `已思考 ${formatProcessDuration(getProcessTimeline(message))}`
+  const toolEvents = message?.metadata?.tool_events || []
+  const toolCount = new Set(toolEvents.map(item => item?.name).filter(Boolean)).size
+  const stepCount = (message?.metadata?.processing_steps || []).length
+  const parts = [durationText]
+  if (toolCount) {
+    parts.push(`调用 ${toolCount} 个工具`)
+  } else if (stepCount) {
+    parts.push(`${stepCount} 个步骤`)
+  }
+  if (getProcessingStatus(message) === 'failed') {
+    parts.push('处理未完成')
+  }
+  return parts.join(' · ')
+}
+
+function getProcessMessageKey(message) {
+  return String(message?.id || message?.localKey || '')
+}
+
+function isProcessExpanded(message) {
+  const key = getProcessMessageKey(message)
+  if (!key) return isMessageProcessing(message)
+  if (Object.prototype.hasOwnProperty.call(processExpandedState.value, key)) {
+    return processExpandedState.value[key]
+  }
+  return isMessageProcessing(message)
+}
+
+function toggleProcessExpanded(message) {
+  const key = getProcessMessageKey(message)
+  if (!key) return
+  processExpandedState.value = {
+    ...processExpandedState.value,
+    [key]: !isProcessExpanded(message),
+  }
+}
+
+function syncProcessCardState(list = renderMessages.value) {
+  const nextExpanded = {}
+  const nextStatus = {}
+  for (const message of list || []) {
+    if (!shouldShowProcessCard(message)) continue
+    const key = getProcessMessageKey(message)
+    if (!key) continue
+    const status = getProcessingStatus(message) || 'completed'
+    const previousStatus = processStatusState.value[key]
+    if (Object.prototype.hasOwnProperty.call(processExpandedState.value, key)) {
+      nextExpanded[key] = processExpandedState.value[key]
+    } else {
+      nextExpanded[key] = isMessageProcessing(message)
+    }
+    if (
+      ['pending', 'running', 'streaming'].includes(previousStatus)
+      && ['completed', 'failed'].includes(status)
+    ) {
+      nextExpanded[key] = false
+    }
+    nextStatus[key] = status
+  }
+  processExpandedState.value = nextExpanded
+  processStatusState.value = nextStatus
 }
 
 function buildQuestionPayload(raw) {
@@ -532,6 +861,68 @@ function parseAssistantContent(content) {
   return blocks.length ? blocks : [{ type: 'paragraph', text: source }]
 }
 
+function stopMessagePolling() {
+  if (pollingTimer) {
+    window.clearTimeout(pollingTimer)
+    pollingTimer = null
+  }
+  pollingSessionId = null
+  pollingMessageId = null
+  loading.value.poll = false
+}
+
+function findProcessingAssistant(list = messages.value) {
+  return [...(list || [])].reverse().find(item => item.role === 'assistant' && isMessageProcessing(item)) || null
+}
+
+async function refreshSessionListOnly() {
+  const response = await getAIOpsSessions()
+  sessions.value = response.results || response || []
+}
+
+function resumeMessagePolling(sessionId, list = messages.value) {
+  const target = findProcessingAssistant(list)
+  if (!target?.id) {
+    if (pollingSessionId === sessionId) {
+      stopMessagePolling()
+    }
+    return
+  }
+  startMessagePolling(sessionId, target.id)
+}
+
+function startMessagePolling(sessionId, assistantMessageId) {
+  if (!sessionId || !assistantMessageId) return
+  if (pollingSessionId === sessionId && pollingMessageId === assistantMessageId && pollingTimer) return
+  stopMessagePolling()
+  pollingSessionId = sessionId
+  pollingMessageId = assistantMessageId
+  loading.value.poll = true
+
+  const poll = async () => {
+    try {
+      const latestMessages = await getAIOpsMessages(sessionId)
+      if (currentSessionId.value === sessionId) {
+        messages.value = latestMessages
+        await nextTick()
+        scrollToBottom(true)
+      }
+      const target = latestMessages.find(item => item.id === assistantMessageId)
+      const status = getProcessingStatus(target)
+      if (!target || ['completed', 'failed'].includes(status)) {
+        stopMessagePolling()
+        await refreshSessionListOnly()
+        return
+      }
+      pollingTimer = window.setTimeout(poll, 1000)
+    } catch (error) {
+      stopMessagePolling()
+    }
+  }
+
+  pollingTimer = window.setTimeout(poll, 900)
+}
+
 async function fetchBootstrap() {
   loading.value.bootstrap = true
   try {
@@ -544,8 +935,7 @@ async function fetchBootstrap() {
 async function fetchSessions() {
   loading.value.sessions = true
   try {
-    const response = await getAIOpsSessions()
-    sessions.value = response.results || response || []
+    await refreshSessionListOnly()
     if (currentSessionId.value && sessions.value.some(item => item.id === currentSessionId.value)) {
       await selectSession(currentSessionId.value)
       return
@@ -561,12 +951,14 @@ async function fetchSessions() {
 }
 
 async function selectSession(sessionId) {
+  stopMessagePolling()
   currentSessionId.value = sessionId
   localStorage.setItem(STORAGE_SESSION_KEY, String(sessionId))
   mobileSessionVisible.value = false
   loading.value.messages = true
   try {
     messages.value = await getAIOpsMessages(sessionId)
+    resumeMessagePolling(sessionId, messages.value)
     loadDraft(sessionId)
     await nextTick()
     scrollToBottom(true)
@@ -598,7 +990,7 @@ async function ensureSession() {
 }
 
 async function handleSend() {
-  if (!composer.value.trim() || loading.value.send) return
+  if (!composer.value.trim() || loading.value.send || loading.value.poll) return
 
   const rawContent = composer.value
   const sessionId = await ensureSession()
@@ -619,11 +1011,12 @@ async function handleSend() {
   scrollToBottom(true)
 
   try {
-    const response = await sendAIOpsMessage(sessionId, { content })
+    const response = await sendAIOpsMessageAsync(sessionId, { content })
     messages.value.push(response.user_message)
     messages.value.push(response.assistant_message)
     pendingAssistantMessage.value = null
-    await fetchSessions()
+    await refreshSessionListOnly()
+    startMessagePolling(sessionId, response.assistant_message?.id)
     await nextTick()
     scrollToBottom(true)
     focusComposer()
@@ -660,6 +1053,11 @@ async function handleCancelAction(action) {
 function jumpToCitation(citation) {
   if (!citation?.path) return
   router.push({ path: citation.path, query: citation.query || {} })
+  closePanel()
+}
+
+function openAIOpsConfig() {
+  router.push('/aiops/config')
   closePanel()
 }
 
@@ -743,6 +1141,9 @@ async function handleOpenRequest() {
     return
   }
   loadDraft()
+  if (currentSessionId.value) {
+    resumeMessagePolling(currentSessionId.value, messages.value)
+  }
   await nextTick()
   scrollToBottom(true)
   focusComposer()
@@ -778,6 +1179,9 @@ async function toggleVisible() {
       await fetchSessions()
     } else {
       loadDraft()
+      if (currentSessionId.value) {
+        resumeMessagePolling(currentSessionId.value, messages.value)
+      }
       await nextTick()
       scrollToBottom(true)
       focusComposer()
@@ -791,6 +1195,10 @@ watch(() => renderMessages.value.length, async () => {
   await nextTick()
   scrollToBottom()
 })
+
+watch(renderMessages, value => {
+  syncProcessCardState(value)
+}, { deep: true, immediate: true })
 
 watch(analysisOnly, value => {
   localStorage.setItem(STORAGE_ANALYSIS_KEY, value ? '1' : '0')
@@ -821,6 +1229,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  stopMessagePolling()
   cleanupFabPointerListeners()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('keydown', handleGlobalKeydown)
@@ -898,6 +1307,9 @@ onBeforeUnmount(() => {
 .rich-list-item + .rich-list-item{margin-top:8px}
 .rich-list-title{font-weight:600;color:#1e293b;font-size:13px}
 .rich-sublist{margin:4px 0 0;padding-left:16px;color:#475569;font-size:12px}
+.rich-inline-code{display:inline-block;margin:0 2px;padding:1px 6px;border-radius:6px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-family:Consolas,Monaco,monospace}
+.rich-inline-link{color:#2563eb;text-decoration:none}
+.rich-inline-link:hover{text-decoration:underline}
 .rich-code{margin:8px 0 0;padding:8px 10px;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:11px;line-height:1.5;white-space:pre-wrap;overflow:auto}
 .citation-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .citation-chip{border:none;border-radius:999px;padding:4px 8px;background:#ecfeff;color:#0f766e;cursor:pointer;font-size:11px}
@@ -914,6 +1326,45 @@ onBeforeUnmount(() => {
 .pending-command{margin-top:8px;padding:8px 10px;border-radius:10px;background:#111827;color:#f8fafc;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
 .pending-actions{display:flex;gap:8px;margin-top:10px}
 .message-state-card{margin-top:10px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #cbd5e1;color:#475569;font-size:11px;line-height:1.5}
+.message-error-card{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:14px;background:linear-gradient(180deg,#fffaf5 0%,#fff 100%);border:1px solid #fed7aa}
+.message-error-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.message-error-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#fff7ed;color:#c2410c;font-size:11px;font-weight:600}
+.message-error-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#f8fafc;color:#64748b;font-size:11px}
+.message-error-title{font-size:14px;font-weight:700;color:#9a3412}
+.message-error-desc{font-size:12px;line-height:1.6;color:#7c2d12}
+.message-error-detail{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.78);border:1px solid #fdba74;font-size:11px;line-height:1.5;color:#9a3412;white-space:pre-wrap;word-break:break-word}
+.message-error-actions{display:flex;justify-content:flex-start}
+.analysis-process-card{margin-bottom:10px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
+.analysis-process-card.active{border-color:#dbe4f0;background:#f8fafc}
+.analysis-process-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.analysis-process-headline{display:flex;align-items:center;gap:8px;min-width:0}
+.analysis-process-title{font-size:12px;font-weight:600;color:#334155}
+.analysis-process-inline-summary{font-size:11px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.analysis-process-actions{display:flex;align-items:center;gap:8px}
+.analysis-process-status{padding:2px 7px;border-radius:999px;background:#f1f5f9;color:#64748b;font-size:11px}
+.analysis-process-status.pending{background:#fff7ed;color:#9a3412}
+.analysis-process-status.running,.analysis-process-status.streaming{background:#eff6ff;color:#1d4ed8}
+.analysis-process-status.completed{background:#f1f5f9;color:#64748b}
+.analysis-process-status.failed{background:#fef2f2;color:#b91c1c}
+.analysis-process-toggle{border:none;padding:2px 0;background:transparent;color:#64748b;font-size:11px;cursor:pointer}
+.analysis-process-toggle:hover{color:#334155}
+.analysis-process-content{margin-top:8px}
+.analysis-process-summary{margin-top:6px;font-size:12px;color:#475569;line-height:1.5}
+.analysis-process-list{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.analysis-process-item{display:flex;align-items:flex-start;gap:8px}
+.analysis-process-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;background:#94a3b8;flex:0 0 auto}
+.analysis-process-dot.pending{background:#f59e0b}
+.analysis-process-dot.running,.analysis-process-dot.streaming{background:#3b82f6}
+.analysis-process-dot.completed{background:#22c55e}
+.analysis-process-dot.failed{background:#ef4444}
+.analysis-process-body{min-width:0;flex:1}
+.analysis-process-item-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#94a3b8}
+.analysis-process-item-head strong{font-size:12px;font-weight:600;color:#334155}
+.analysis-process-item-detail{margin-top:2px;font-size:11px;color:#64748b;line-height:1.5}
+.tool-event-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tool-event-item{display:flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;background:#ffffff;border:1px solid #e2e8f0;font-size:11px;color:#334155}
+.tool-event-name{font-weight:600;color:#475569}
+.tool-event-detail{color:#64748b}
 .message-actions{display:flex;gap:2px;justify-content:flex-end;margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0}
 .aiops-composer{padding:10px 12px;border-top:1px solid #e2e8f0;background:#fff}
 .composer-actions{display:flex;align-items:center;justify-content:space-between;margin-top:8px}

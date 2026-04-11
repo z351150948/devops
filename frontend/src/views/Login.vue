@@ -6,7 +6,7 @@
           <div class="brand-mark">
             <img src="@/assets/brand-mark.svg" alt="SxDevOps" class="brand-mark-image" />
           </div>
-          <div class="brand-text">SxDevOps</div>
+          <div class="brand-text">SxDevOps · AI Agent</div>
         </div>
 
         <div class="overview-content">

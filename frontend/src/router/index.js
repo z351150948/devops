@@ -352,7 +352,7 @@ const routes = [
         name: 'AIOpsConfig',
         component: () => import('@/views/AIOpsConfig.vue'),
         meta: {
-          title: 'AIOps 配置',
+          title: '智能体配置',
           icon: 'ChatDotSquare',
           permission: 'aiops.config.view',
         },

@@ -1,11 +1,15 @@
 import request from '../request'
 
+const AIOPS_CHAT_TIMEOUT = 120000
+const AIOPS_MODEL_TEST_TIMEOUT = 45000
+
 export const getAIOpsBootstrap = () => request.get('/aiops/bootstrap/')
 
 export const getAIOpsSessions = (params) => request.get('/aiops/sessions/', { params })
 export const createAIOpsSession = (data) => request.post('/aiops/sessions/', data)
 export const getAIOpsMessages = (id) => request.get(`/aiops/sessions/${id}/messages/`)
-export const sendAIOpsMessage = (id, data) => request.post(`/aiops/sessions/${id}/send_message/`, data)
+export const sendAIOpsMessage = (id, data) => request.post(`/aiops/sessions/${id}/send_message/`, data, { timeout: AIOPS_CHAT_TIMEOUT })
+export const sendAIOpsMessageAsync = (id, data) => request.post(`/aiops/sessions/${id}/send_message_async/`, data, { timeout: 20000 })
 
 export const confirmAIOpsAction = (id) => request.post(`/aiops/actions/${id}/confirm/`)
 export const cancelAIOpsAction = (id) => request.post(`/aiops/actions/${id}/cancel/`)
@@ -21,12 +25,14 @@ export const getAIOpsProviders = () => request.get('/aiops/admin/providers/')
 export const createAIOpsProvider = (data) => request.post('/aiops/admin/providers/', data)
 export const updateAIOpsProvider = (id, data) => request.patch(`/aiops/admin/providers/${id}/`, data)
 export const deleteAIOpsProvider = (id) => request.delete(`/aiops/admin/providers/${id}/`)
-export const testAIOpsProvider = (id) => request.post(`/aiops/admin/providers/${id}/test_connection/`)
+export const testAIOpsProvider = (id) => request.post(`/aiops/admin/providers/${id}/test_connection/`, null, { timeout: AIOPS_MODEL_TEST_TIMEOUT })
 
 export const getAIOpsMcpServers = () => request.get('/aiops/admin/mcp-servers/')
 export const createAIOpsMcpServer = (data) => request.post('/aiops/admin/mcp-servers/', data)
 export const updateAIOpsMcpServer = (id, data) => request.patch(`/aiops/admin/mcp-servers/${id}/`, data)
 export const deleteAIOpsMcpServer = (id) => request.delete(`/aiops/admin/mcp-servers/${id}/`)
+export const testAIOpsMcpServer = (id) => request.post(`/aiops/admin/mcp-servers/${id}/test_connection/`)
+export const listAIOpsMcpTools = (id) => request.get(`/aiops/admin/mcp-servers/${id}/list_tools/`)
 
 export const getAIOpsSkills = () => request.get('/aiops/admin/skills/')
 export const createAIOpsSkill = (data) => request.post('/aiops/admin/skills/', data)
