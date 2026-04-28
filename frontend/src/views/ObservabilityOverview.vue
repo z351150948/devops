@@ -384,6 +384,12 @@ onMounted(loadOverview)
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.release-stats + .panel,
+.release-stats + .content-grid,
+.release-stats + .table-card {
+  margin-top: -8px;
+}
+
 .release-stat-card {
   border-radius: 12px;
   min-height: 72px;

@@ -1,32 +1,5 @@
-<template>
+﻿<template>
   <div class="fade-in tracing-datasource-page" :class="{ 'is-embedded': props.embedded }">
-    <section v-if="!props.embedded" class="hero panel">
-      <div class="release-hero-copy">
-        <div class="release-hero-title-row release-hero-title-inline">
-          <span class="trace-header-icon"><el-icon><Connection /></el-icon></span>
-          <h2>链路数据源</h2>
-          <p class="page-desc inline-subtitle">统一管理 SkyWalking、Tempo、Jaeger、Zipkin 的查询入口和默认配置。</p>
-        </div>
-      </div>
-      <div class="hero-actions">
-        <el-button v-if="canManageTracingDataSources" type="primary" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增数据源
-        </el-button>
-      </div>
-    </section>
-
-    <div v-else class="embedded-datasource-head">
-      <div>
-        <h3>链路数据源</h3>
-        <span>统一维护 SkyWalking、Tempo、Jaeger、Zipkin 的查询入口和默认配置。</span>
-      </div>
-      <el-button v-if="canManageTracingDataSources" size="small" type="primary" @click="openDialog()">
-        <el-icon><Plus /></el-icon>
-        新增数据源
-      </el-button>
-    </div>
-
     <div class="overview-grid">
       <div class="overview-card warm">
         <span>数据源总数</span>
@@ -47,14 +20,20 @@
     </div>
 
     <div class="table-card">
-      <div class="filter-bar">
-        <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
-          <template #prefix><el-icon><Search /></el-icon></template>
-        </el-input>
-        <el-select v-model="providerFilter" clearable placeholder="全部 Provider" style="width: 220px">
-          <el-option v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
-        </el-select>
-        <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
+      <div class="table-head">
+        <div class="filter-bar">
+          <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <el-select v-model="providerFilter" clearable placeholder="全部 Provider" style="width: 220px">
+            <el-option v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
+          </el-select>
+          <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
+        </div>
+        <el-button v-if="canManageTracingDataSources" type="primary" @click="openDialog()">
+          <el-icon><Plus /></el-icon>
+          新增数据源
+        </el-button>
       </div>
 
       <el-table :data="filteredItems" v-loading="loading" stripe style="width: 100%">
@@ -102,7 +81,14 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑链路数据源' : '新增链路数据源'" width="720px" destroy-on-close>
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId ? '编辑链路数据源' : '新增链路数据源'"
+      width="720px"
+      top="6vh"
+      append-to-body
+      destroy-on-close
+    >
       <el-form :model="form" label-width="120px">
         <el-form-item label="数据源名称">
           <el-input v-model="form.name" placeholder="例如：生产 Tempo" />
@@ -418,8 +404,8 @@ onMounted(async () => {
 }
 
 .hero,
-.hero-actions,
 .overview-grid,
+.table-head,
 .filter-bar,
 .switch-row,
 .name-cell {
@@ -494,6 +480,12 @@ onMounted(async () => {
 }
 
 .filter-bar {
+  flex: 1 1 auto;
+}
+
+.table-head {
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 10px;
 }
 

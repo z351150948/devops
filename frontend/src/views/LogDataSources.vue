@@ -8,12 +8,6 @@
           <p class="page-desc inline-subtitle">{{ activeLogTab.description }}</p>
         </div>
       </div>
-      <div class="hero-actions">
-        <el-button v-if="canManageLogDataSources" type="primary" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增数据源
-        </el-button>
-      </div>
     </section>
 
     <div class="neo-tabs theme-blue log-center-tabs">
@@ -49,14 +43,20 @@
     </div>
 
     <div class="table-card">
-      <div class="filter-bar">
-        <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
-          <template #prefix><el-icon><Search /></el-icon></template>
-        </el-input>
-        <el-select v-model="providerFilter" clearable placeholder="全部类型" style="width: 180px">
-          <el-option v-for="provider in providers" :key="provider.id" :label="providerLabel(provider.id)" :value="provider.id" />
-        </el-select>
-        <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
+      <div class="table-head">
+        <div class="filter-bar">
+          <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <el-select v-model="providerFilter" clearable placeholder="全部类型" style="width: 180px">
+            <el-option v-for="provider in providers" :key="provider.id" :label="providerLabel(provider.id)" :value="provider.id" />
+          </el-select>
+          <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
+        </div>
+        <el-button v-if="canManageLogDataSources" type="primary" @click="openDialog()">
+          <el-icon><Plus /></el-icon>
+          新增数据源
+        </el-button>
       </div>
 
       <el-table :data="filteredItems" v-loading="loading" stripe style="width: 100%">
@@ -101,7 +101,14 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑日志数据源' : '新增日志数据源'" width="720px" destroy-on-close>
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingId ? '编辑日志数据源' : '新增日志数据源'"
+      width="720px"
+      top="6vh"
+      append-to-body
+      destroy-on-close
+    >
       <el-form :model="form" label-width="110px">
         <el-form-item label="数据源名称">
           <el-input v-model="form.name" placeholder="例如：生产 ELK" />
@@ -500,30 +507,27 @@ onMounted(async () => {
   max-width: none;
 }
 
-.hero-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.hero-actions :deep(.el-button) {
-  min-height: 38px;
-  padding: 0 16px;
-  border-radius: 12px;
-}
-
 .log-center-tabs .neo-tab-btn {
   padding: 10px 24px;
   border-radius: 8px;
 }
 
-.filter-bar {
+.table-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 8px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 0;
 }
 
 .table-card {
@@ -539,29 +543,24 @@ onMounted(async () => {
 }
 
 .overview-card {
-  border-radius: 18px;
-  color: #0f172a;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 110px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  min-height: 72px;
+  padding: 10px 12px;
 }
 
 .overview-card span {
   font-size: 12px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .overview-card strong {
-  font-size: 30px;
+  font-size: 22px;
 }
 
 .overview-card.warm { background: linear-gradient(135deg, #fef3c7, #fdba74); }
 .overview-card.cool { background: linear-gradient(135deg, #dbeafe, #93c5fd); }
-.overview-card.accent { background: linear-gradient(135deg, #d1fae5, #6ee7b7); }
-.overview-card.neutral { background: linear-gradient(135deg, #e2e8f0, #cbd5e1); }
+.overview-card.accent { background: linear-gradient(135deg, #dcfce7, #86efac); }
+.overview-card.neutral { background: linear-gradient(135deg, #f1f5f9, #cbd5e1); }
 
 .name-cell {
   display: flex;

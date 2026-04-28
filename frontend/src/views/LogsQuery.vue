@@ -35,20 +35,32 @@
       </section>
 
       <div v-if="currentTab" class="query-layout">
-        <section class="panel query-panel">
-          <div class="panel-head slim-head">
-            <h3>查询条件</h3>
-            <div class="toolbar-actions">
-              <el-button @click="saveFavorite(currentTab)" :disabled="!currentTab.datasourceId">收藏此查询</el-button>
-              <el-button @click="savedDialogVisible = true">查询历史/收藏</el-button>
-              <el-button @click="loadCatalog(currentTab)" :loading="currentTab.catalogLoading">刷新数据源</el-button>
-              <el-button type="primary" @click="runQuery(currentTab)" :loading="currentTab.queryLoading">查询日志</el-button>
+        <section class="panel query-panel log-query-unified-card">
+          <div class="log-query-unified-head">
+            <div class="log-query-title-block">
+              <div class="log-query-title-row">
+                <h3>查询条件</h3>
+              </div>
+            </div>
+            <div class="toolbar-actions toolbar-actions--compact">
+              <el-button size="small" @click="saveFavorite(currentTab)" :disabled="!currentTab.datasourceId">收藏</el-button>
+              <el-button size="small" @click="savedDialogVisible = true">历史/收藏</el-button>
+              <el-button size="small" @click="loadCatalog(currentTab)" :loading="currentTab.catalogLoading">刷新数据源</el-button>
+              <el-button size="small" type="primary" @click="runQuery(currentTab)" :loading="currentTab.queryLoading">查询日志</el-button>
             </div>
           </div>
 
-          <el-form label-position="top">
-            <el-form-item label="日志数据源">
-              <el-select v-model="currentTab.datasourceId" filterable placeholder="请选择日志数据源" style="width: 100%" @change="handleDatasourceChange">
+          <div class="log-query-provider-strip">
+            <div class="log-filter-datasource-row">
+              <span class="log-query-provider-label">数据源</span>
+              <el-select
+                v-model="currentTab.datasourceId"
+                class="search-control log-datasource-control"
+                size="small"
+                filterable
+                placeholder="请选择日志数据源"
+                @change="handleDatasourceChange"
+              >
                 <el-option
                   v-for="item in dataSources"
                   :key="item.id"
@@ -56,126 +68,145 @@
                   :value="item.id"
                 />
               </el-select>
-            </el-form-item>
+            </div>
+          </div>
 
-            <el-form-item label="时间范围">
-              <el-date-picker
-                v-model="currentTab.timeRange"
-                type="datetimerange"
-                format="YYYY-MM-DD HH:mm:ss"
-                range-separator="至"
-                start-placeholder="开始时间"
-                end-placeholder="结束时间"
-                @change="handleTimeRangeChange(currentTab)"
-              />
-              <div class="quick-ranges">
-                <button
-                  v-for="item in quickRanges"
-                  :key="item.key"
-                  type="button"
-                  class="quick-range-btn"
-                  :class="{ active: currentTab.quickRange === item.key }"
-                  @click="applyQuickRange(currentTab, item)"
-                >
-                  {{ item.label }}
-                </button>
+          <div class="search-panel search-panel--merged log-search-panel">
+            <div class="log-filter-grid log-filter-grid--primary">
+              <div class="log-inline-filter log-inline-filter--time">
+                <span class="log-inline-filter__label">时间</span>
+                <el-date-picker
+                  v-model="currentTab.timeRange"
+                  class="search-control log-time-control"
+                  size="small"
+                  type="datetimerange"
+                  format="YYYY-MM-DD HH:mm:ss"
+                  range-separator="至"
+                  start-placeholder="开始时间"
+                  end-placeholder="结束时间"
+                  :shortcuts="logTimeRangeShortcuts"
+                  @change="handleTimeRangeChange(currentTab)"
+                />
               </div>
-            </el-form-item>
+              <div class="log-inline-filter log-inline-filter--compact">
+                <span class="log-inline-filter__label">数量</span>
+                <el-input-number v-model="currentTab.limit" class="search-number" size="small" :min="20" :max="2000" :step="20" />
+              </div>
+            </div>
 
-            <el-form-item label="返回条数">
-              <el-input-number v-model="currentTab.limit" :min="20" :max="2000" :step="20" />
-              <span class="inline-tip">演示数据源已扩充更多日志，返回条数会尽量按上限展示。</span>
-            </el-form-item>
-
-            <template v-if="isLoki">
-              <el-form-item label="标签过滤">
-                <div class="stack">
-                  <div v-for="(filter, index) in currentTab.labelFilters" :key="index" class="filter-row">
-                    <el-select v-model="filter.key" placeholder="标签" filterable @change="onLokiLabelKeyChange(currentTab, index)">
-                      <el-option v-for="item in currentTab.lokiLabels" :key="item" :label="item" :value="item" />
-                    </el-select>
-                    <el-select v-model="filter.operator" class="operator-select">
-                      <el-option label="=" value="=" />
-                      <el-option label="!=" value="!=" />
-                      <el-option label="=~" value="=~" />
-                      <el-option label="!~" value="!~" />
-                    </el-select>
-                    <el-select v-model="filter.value" placeholder="值" filterable allow-create @focus="loadLokiLabelValues(currentTab, index)">
-                      <el-option v-for="item in filter.options" :key="item" :label="item" :value="item" />
-                    </el-select>
-                    <el-button text type="danger" @click="removeLabelFilter(currentTab, index)">移除</el-button>
+            <el-form label-position="left" label-width="168px" class="log-query-form compact-query-form">
+              <template v-if="isLoki">
+                <el-form-item label="标签过滤" class="loki-inline-item">
+                  <div class="stack">
+                    <div v-for="(filter, index) in currentTab.labelFilters" :key="index" class="filter-row">
+                      <el-select v-model="filter.key" size="small" placeholder="标签" filterable @change="onLokiLabelKeyChange(currentTab, index)">
+                        <el-option v-for="item in currentTab.lokiLabels" :key="item" :label="item" :value="item" />
+                      </el-select>
+                      <el-select v-model="filter.operator" size="small" class="operator-select">
+                        <el-option label="=" value="=" />
+                        <el-option label="!=" value="!=" />
+                        <el-option label="=~" value="=~" />
+                        <el-option label="!~" value="!~" />
+                      </el-select>
+                      <el-select v-model="filter.value" size="small" placeholder="值" filterable allow-create @focus="loadLokiLabelValues(currentTab, index)">
+                        <el-option v-for="item in filter.options" :key="item" :label="item" :value="item" />
+                      </el-select>
+                      <div class="filter-row-actions">
+                        <el-button text type="danger" class="filter-row-btn filter-row-btn--danger" @click="removeLabelFilter(currentTab, index)">移除</el-button>
+                        <el-button
+                          v-if="index === currentTab.labelFilters.length - 1"
+                          text
+                          type="primary"
+                          class="filter-row-btn filter-row-btn--primary"
+                          @click="addLabelFilter(currentTab)"
+                        >
+                          新增标签
+                        </el-button>
+                      </div>
+                    </div>
                   </div>
-                  <el-button text type="primary" @click="addLabelFilter(currentTab)">新增标签</el-button>
+                </el-form-item>
+                <el-form-item label="内容检索" class="loki-inline-item loki-content-item">
+                  <el-input v-model="currentTab.lokiContentQuery" size="small" placeholder="例如：error OR timeout" />
+                </el-form-item>
+                <el-form-item class="syntax-form-item loki-syntax-item">
+                  <template #label>
+                    <span class="field-label-with-help">
+                      <span>LogQL</span>
+                      <el-button link type="primary" @click="openSyntaxHelp('loki')">查询语法帮助</el-button>
+                    </span>
+                  </template>
+                  <el-input v-model="currentTab.lokiManualQuery" type="textarea" :rows="2" placeholder='{job="nginx"} |= "error"' />
+                </el-form-item>
+              </template>
+
+              <template v-else-if="isElk">
+                <div class="log-filter-grid log-filter-grid--secondary">
+                  <div class="log-inline-filter">
+                    <span class="log-inline-filter__label">索引</span>
+                    <el-select v-model="currentTab.sourceName" class="search-control" size="small" placeholder="选择索引或输入索引模式" filterable allow-create clearable>
+                      <el-option v-for="item in currentTab.catalogItems" :key="item.name" :label="item.name" :value="item.name" />
+                    </el-select>
+                  </div>
                 </div>
-              </el-form-item>
-              <el-form-item label="内容检索">
-                <el-input v-model="currentTab.lokiContentQuery" placeholder="例如：error OR timeout" />
-              </el-form-item>
-              <el-form-item>
-                <template #label>
-                  <span class="field-label-with-help">
-                    <span>LogQL</span>
-                    <el-button link type="primary" @click="openSyntaxHelp('loki')">查询语法帮助</el-button>
-                  </span>
-                </template>
-                <el-input v-model="currentTab.lokiManualQuery" type="textarea" :rows="3" placeholder='{job="nginx"} |= "error"' />
-                <div class="helper">留空时自动生成：{{ generatedLokiQuery }}</div>
-              </el-form-item>
-            </template>
+                <el-form-item class="syntax-form-item">
+                  <template #label>
+                    <span class="field-label-with-help">
+                      <span>Lucene 查询</span>
+                      <el-button link type="primary" @click="openSyntaxHelp('elk')">查询语法帮助</el-button>
+                    </span>
+                  </template>
+                  <el-input v-model="currentTab.queryText" type="textarea" :rows="2" placeholder='service.name:"payment" AND level:error' />
+                </el-form-item>
+              </template>
 
-            <template v-else-if="isElk">
-              <el-form-item label="索引">
-                <el-select v-model="currentTab.sourceName" placeholder="选择索引或直接输入索引模式" filterable allow-create clearable>
-                  <el-option v-for="item in currentTab.catalogItems" :key="item.name" :label="item.name" :value="item.name" />
-                </el-select>
-              </el-form-item>
-              <el-form-item>
-                <template #label>
-                  <span class="field-label-with-help">
-                    <span>Lucene 查询</span>
-                    <el-button link type="primary" @click="openSyntaxHelp('elk')">查询语法帮助</el-button>
-                  </span>
-                </template>
-                <el-input v-model="currentTab.queryText" type="textarea" :rows="3" placeholder='service.name:"payment" AND level:error' />
-              </el-form-item>
-            </template>
+              <template v-else-if="isSls">
+                <div class="log-filter-grid log-filter-grid--secondary">
+                  <div class="log-inline-filter">
+                    <span class="log-inline-filter__label">Logstore</span>
+                    <el-select v-model="currentTab.sourceName" class="search-control" size="small" placeholder="选择 Logstore" filterable allow-create clearable>
+                      <el-option v-for="item in currentTab.catalogItems" :key="item.name" :label="item.name" :value="item.name" />
+                    </el-select>
+                  </div>
+                </div>
+                <el-form-item class="syntax-form-item">
+                  <template #label>
+                    <span class="field-label-with-help">
+                      <span>SLS 查询语句</span>
+                      <el-button link type="primary" @click="openSyntaxHelp('sls')">查询语法帮助</el-button>
+                    </span>
+                  </template>
+                  <el-input v-model="currentTab.queryText" type="textarea" :rows="2" placeholder='timeout OR auth error OR cache' />
+                </el-form-item>
+              </template>
+            </el-form>
 
-            <template v-else-if="isSls">
-              <el-form-item label="Logstore">
-                <el-select v-model="currentTab.sourceName" placeholder="选择 Logstore" filterable allow-create clearable>
-                  <el-option v-for="item in currentTab.catalogItems" :key="item.name" :label="item.name" :value="item.name" />
-                </el-select>
-              </el-form-item>
-              <el-form-item>
-                <template #label>
-                  <span class="field-label-with-help">
-                    <span>SLS 查询语句</span>
-                    <el-button link type="primary" @click="openSyntaxHelp('sls')">查询语法帮助</el-button>
-                  </span>
-                </template>
-                <el-input v-model="currentTab.queryText" type="textarea" :rows="3" placeholder='timeout OR auth error OR cache' />
-              </el-form-item>
-            </template>
-          </el-form>
+            <div class="search-summary-bar log-query-summary-bar">
+              <span v-for="item in querySummaryPills" :key="item.label" class="query-pill">
+                {{ item.label }}：{{ item.value }}
+              </span>
+            </div>
+          </div>
         </section>
 
-        <section class="panel info-panel">
+        <section class="panel info-panel compact-info-panel">
           <div class="panel-head slim-head">
             <h3>当前数据源</h3>
             <el-tag v-if="currentDataSource" :type="providerTagType(activeProvider)">{{ providerLabel(activeProvider) }}</el-tag>
           </div>
 
-          <div v-if="currentDataSource" class="source-card compact-card">
-            <div class="source-title-row">
+          <div v-if="currentDataSource" class="source-card compact-card compact-source-card">
+            <div class="source-title-row source-title-row--tight">
               <strong class="source-title">{{ currentDataSource.name }}</strong>
-              <el-tag v-if="currentDataSource.is_default" size="small" type="warning">默认</el-tag>
+              <div class="source-title-tags">
+                <el-tag size="small" :type="currentDataSource.is_enabled ? 'success' : 'info'">{{ currentDataSource.is_enabled ? '启用' : '停用' }}</el-tag>
+                <el-tag v-if="currentDataSource.is_default" size="small" type="warning">默认</el-tag>
+              </div>
             </div>
-            <p class="source-desc">{{ currentDataSource.description || '未填写描述' }}</p>
-            <div class="source-meta">
-              <span>状态：{{ currentDataSource.is_enabled ? '启用' : '停用' }}</span>
-              <span>更新时间：{{ formatTime(currentDataSource.updated_at) }}</span>
+            <div class="source-pills">
+              <span v-if="currentDataSource.description" class="query-pill">描述：{{ currentDataSource.description }}</span>
             </div>
-            <div class="summary-list">
+            <div class="summary-list summary-list--compact">
               <div class="summary-item" v-for="item in currentSummary" :key="item.label">
                 <span>{{ item.label }}</span>
                 <strong>{{ item.value }}</strong>
@@ -183,33 +214,7 @@
             </div>
           </div>
 
-          <div class="tips-box compact-card">
-            <strong>查询提醒</strong>
-            <p v-if="isLoki">Loki 当前可暂时忽略，后续恢复连通后可再演示。</p>
-            <p v-else-if="isElk">可直接演示 `payment error`、`gateway warning`、`checkout error`。</p>
-            <p v-else-if="isSls">可直接演示 `timeout`、`auth error`、`cache`，并切换不同 Logstore。</p>
-            <p v-else>请选择一个日志数据源开始查询。</p>
-          </div>
         </section>
-      </div>
-
-      <div v-if="currentTab" class="stats-grid compact-stats">
-        <div class="stat-card warm">
-          <span>日志总数</span>
-          <strong>{{ currentResults.total || 0 }}</strong>
-        </div>
-        <div class="stat-card cool">
-          <span>当前来源</span>
-          <strong>{{ currentResults.source || '--' }}</strong>
-        </div>
-        <div class="stat-card accent">
-          <span>查询耗时</span>
-          <strong>{{ currentResults.took_ms != null ? `${currentResults.took_ms} ms` : '--' }}</strong>
-        </div>
-        <div class="stat-card neutral">
-          <span>错误日志</span>
-          <strong>{{ errorCount }}</strong>
-        </div>
       </div>
 
       <section v-if="currentTab" class="panel chart-panel compact-panel">
@@ -226,6 +231,9 @@
           <div class="result-tags">
             <el-tag type="warning">总匹配 {{ currentResults.total || 0 }} 条</el-tag>
             <el-tag type="success">已返回 {{ currentResults.logs.length }} 条</el-tag>
+            <el-tag type="primary" effect="plain">来源 {{ currentResults.source || '--' }}</el-tag>
+            <el-tag type="info" effect="plain">耗时 {{ currentResults.took_ms != null ? `${currentResults.took_ms} ms` : '--' }}</el-tag>
+            <el-tag type="danger" effect="plain">错误 {{ errorCount }}</el-tag>
             <el-tag v-if="currentResults.progress" type="info">{{ currentResults.progress }}</el-tag>
           </div>
         </div>
@@ -414,6 +422,14 @@ const quickRanges = [
   { key: '1h', label: '最近1小时', minutes: 60 },
   { key: '6h', label: '最近6小时', minutes: 360 },
 ]
+const logTimeRangeShortcuts = quickRanges.map((item) => ({
+  text: item.label,
+  value: () => {
+    const end = new Date()
+    const start = new Date(end.getTime() - item.minutes * 60 * 1000)
+    return [start, end]
+  },
+}))
 
 const loadingSources = ref(false)
 const dataSources = ref([])
@@ -458,17 +474,21 @@ const currentSummary = computed(() => {
   }
   return []
 })
-const generatedLokiQuery = computed(() => {
-  if (!currentTab.value) return ''
-  const selector = currentTab.value.labelFilters
-    .filter((item) => item.key && item.value)
-    .map((item) => `${item.key}${item.operator}"${escapeLogValue(item.value)}"`)
-  const base = selector.length ? `{${selector.join(',')}}` : '{job!=""}'
-  return currentTab.value.lokiContentQuery.trim()
-    ? `${base} |= "${escapeLogValue(currentTab.value.lokiContentQuery.trim())}"`
-    : base
+const querySummaryPills = computed(() => {
+  const items = []
+  if (currentDataSource.value?.name) {
+    items.push({ label: '数据源', value: currentDataSource.value.name })
+  }
+  if (activeProvider.value) {
+    items.push({ label: '类型', value: providerLabel(activeProvider.value) })
+  }
+  if (currentTab.value?.sourceName) {
+    items.push({ label: isElk.value ? '索引' : '来源', value: currentTab.value.sourceName })
+  }
+  items.push({ label: '时间', value: formatTimeRangeSummary(currentTab.value?.timeRange) })
+  items.push({ label: '数量', value: String(currentTab.value?.limit || 0) })
+  return items
 })
-
 watch(activeTabName, async () => {
   await nextTick()
   renderChart()
@@ -563,6 +583,14 @@ function openSyntaxHelp(provider) {
 function formatTime(value) {
   if (!value) return '--'
   return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatTimeRangeSummary(range) {
+  if (!Array.isArray(range) || range.length !== 2) return '--'
+  const [start, end] = normalizeTimeRange(range)
+  const startText = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`
+  const endText = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`
+  return `${startText} - ${endText}`
 }
 
 function getPreferredDatasourceId() {
@@ -1352,8 +1380,8 @@ onUnmounted(() => {
 
 .query-layout {
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1.65fr) minmax(300px, 0.85fr);
+  gap: 6px;
+  grid-template-columns: minmax(0, 1.82fr) minmax(280px, 0.78fr);
 }
 
 .panel-head {
@@ -1366,11 +1394,19 @@ onUnmounted(() => {
 .field-label-with-help {
   align-items: center;
   display: inline-flex;
-  gap: 8px;
+  gap: 5px;
+  justify-content: flex-start;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.field-label-with-help :deep(.el-button) {
+  min-height: 20px;
+  padding: 0;
 }
 
 .slim-head {
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .toolbar-actions,
@@ -1380,61 +1416,245 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.log-query-unified-card {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.04);
+  padding: 9px 11px;
+}
+
+.log-query-unified-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.log-query-title-block {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.log-query-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.log-query-title-row h3 {
+  color: #0f172a;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.log-query-provider-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 4px;
+  width: 100%;
+}
+
+.log-filter-datasource-row {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-height: 28px;
+  width: 100%;
+}
+
+.log-query-provider-label {
+  color: #64748b;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.log-datasource-control {
+  flex: 1 1 auto;
+  max-width: none;
+}
+
+.search-panel {
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.search-panel--merged {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(226, 232, 240, 0.64);
+  border-radius: 0;
+  padding: 6px 0 0;
+}
+
+.log-search-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.log-filter-grid {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+}
+
+.log-filter-grid--primary {
+  align-items: center;
+  column-gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 132px;
+}
+
+.log-filter-grid--secondary {
+  align-items: center;
+  column-gap: 8px;
+  grid-template-columns: 1fr;
+}
+
+.log-inline-filter {
+  align-items: center;
+  column-gap: 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.log-inline-filter--compact {
+  width: 100%;
+}
+
+.log-inline-filter--time {
+  min-width: 0;
+  width: 100%;
+}
+
+.log-inline-filter__label {
+  color: #64748b;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  margin-right: 1px;
+  white-space: nowrap;
+}
+
+.search-control,
+.search-number {
+  width: 100%;
+}
+
+.search-control :deep(.el-select__wrapper),
+.search-control :deep(.el-input__wrapper),
+.search-control :deep(.el-range-editor.el-input__wrapper),
+.search-number :deep(.el-input__wrapper) {
+  background: rgba(248, 250, 252, 0.82);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(226, 232, 240, 0.92) inset;
+  min-height: 30px;
+}
+
+.search-control :deep(.el-input__inner),
+.search-control :deep(.el-select__selected-item),
+.search-control :deep(.el-range-input),
+.search-number :deep(.el-input__inner) {
+  font-size: 12px;
+}
+
+.search-control :deep(.el-select__wrapper:hover),
+.search-control :deep(.el-input__wrapper:hover),
+.search-control :deep(.el-range-editor.el-input__wrapper:hover),
+.search-number :deep(.el-input__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(191, 219, 254, 0.96) inset;
+}
+
+.log-time-control {
+  min-width: 0;
+  width: 100%;
+}
+
+.log-time-control :deep(.el-range-input),
+.log-time-control :deep(.el-range-separator) {
+  font-size: 12px;
+}
+
+.log-time-control :deep(.el-range-editor.el-input__wrapper) {
+  min-height: 30px;
+}
+
 .toolbar-actions {
   align-items: center;
 }
 
+.toolbar-actions--compact {
+  gap: 4px;
+  justify-content: flex-end;
+}
+
 .toolbar-actions :deep(.el-button) {
-  min-height: 38px;
-  padding: 0 16px;
-  border-radius: 12px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
 }
 
 .stack {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .filter-row {
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr) 90px minmax(0, 1fr) auto;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 84px minmax(0, 1fr) auto;
 }
 
 .operator-select {
-  width: 90px;
+  width: 84px;
 }
 
-.quick-ranges {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 8px;
+.filter-row-actions {
+  align-items: center;
+  display: inline-flex;
+  gap: 2px;
+  justify-content: flex-start;
+  margin-top: -2px;
+  white-space: nowrap;
 }
 
-.quick-range-btn {
-  background: #f8fafc;
-  border: 1px solid #dbeafe;
-  border-radius: 999px;
-  color: #64748b;
-  cursor: pointer;
+.filter-row-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+.filter-row-btn {
+  border-radius: 8px;
   font-size: 12px;
-  line-height: 1;
-  padding: 8px 12px;
+  min-height: 24px;
+  padding: 0 6px;
 }
 
-.quick-range-btn.active {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #fff;
+.filter-row-btn--danger {
+  color: #b91c1c;
 }
 
-.inline-tip,
+.filter-row-btn--primary {
+  color: #2563eb;
+}
+
 .helper,
 .source-desc,
 .source-meta,
-.tips-box p,
 .empty-state,
 .expand-text,
 .time-text,
@@ -1442,24 +1662,9 @@ onUnmounted(() => {
   color: var(--text-secondary);
 }
 
-.inline-tip {
-  font-size: 12px;
-  line-height: 1.45;
-  margin-left: 10px;
-  padding: 4px 8px;
+.source-card {
   border-radius: 10px;
-  background: linear-gradient(90deg, rgba(59, 130, 246, 0.08) 0%, rgba(14, 165, 233, 0.04) 100%);
-  border: 1px solid rgba(59, 130, 246, 0.14);
-}
-
-.source-card,
-.tips-box {
-  border-radius: 10px;
-  padding: 8px 11px;
-}
-
-.tips-box {
-  margin-top: -10px;
+  padding: 8px 10px;
 }
 
 .compact-card {
@@ -1467,27 +1672,62 @@ onUnmounted(() => {
   border: 1px solid rgba(59, 130, 246, 0.14);
 }
 
+.compact-info-panel {
+  padding: 9px 10px;
+}
+
+.compact-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .source-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: space-between;
+}
+
+.source-title-row--tight {
+  gap: 6px;
+  min-width: 0;
 }
 
 .source-title {
   color: #0f172a;
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 1.35;
+  min-width: 0;
+}
+
+.source-title-tags {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.source-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .summary-list {
   display: grid;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.summary-list--compact {
+  gap: 6px;
 }
 
 .summary-item {
   background: rgba(255, 255, 255, 0.72);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 7px 9px;
 }
 
 .summary-item span {
@@ -1503,58 +1743,110 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
-.compact-stats {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.log-query-form :deep(.el-form-item) {
+  align-items: flex-start;
+  margin-bottom: 7px;
 }
 
-.stat-card {
-  border-radius: 16px;
-  color: #0f172a;
+.log-query-form :deep(.el-form-item__label) {
+  color: #475569;
+  display: flex;
+  font-size: 12px;
+  line-height: 1.35;
+  min-height: 28px;
+  padding: 4px 8px 0 0;
+  white-space: nowrap;
+}
+
+.log-query-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.log-query-form :deep(.syntax-form-item) {
+  align-items: stretch;
   display: flex;
   flex-direction: column;
+  margin-top: 1px;
+}
+
+.log-query-form :deep(.syntax-form-item .el-form-item__label) {
+  justify-content: space-between;
+  line-height: 1.1;
+  min-height: 0;
+  padding: 9px 0 2px;
+  width: 100% !important;
+}
+
+.log-query-form :deep(.syntax-form-item .el-form-item__content) {
+  margin-left: 0 !important;
+  margin-top: -1px;
+  width: 100%;
+}
+
+.log-query-form :deep(.loki-inline-item .el-form-item__label) {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding-right: 6px;
+  width: auto !important;
+}
+
+.log-query-form :deep(.loki-inline-item .el-form-item__content) {
+  flex: 1 1 auto;
+  margin-left: 0 !important;
+  min-width: 0;
+}
+
+.log-query-form :deep(.loki-content-item) {
+  margin-bottom: 3px;
+}
+
+.log-query-form :deep(.loki-syntax-item) {
+  margin-top: -2px;
+}
+
+.log-query-form :deep(.loki-syntax-item .el-form-item__label) {
+  padding-top: 4px;
+}
+
+.log-query-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  min-height: 88px;
-  padding: 14px 16px;
+  margin-top: -2px;
 }
 
-.stat-card span {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.query-pill {
+  background: rgba(248, 250, 252, 0.82);
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  border-radius: 999px;
+  color: #64748b;
+  font-size: 10px;
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  white-space: nowrap;
 }
-
-.stat-card strong {
-  font-size: 24px;
-}
-
-.stat-card.warm { background: linear-gradient(135deg, #fef3c7, #fdba74); }
-.stat-card.cool { background: linear-gradient(135deg, #dbeafe, #93c5fd); }
-.stat-card.accent { background: linear-gradient(135deg, #d1fae5, #6ee7b7); }
-.stat-card.neutral { background: linear-gradient(135deg, #e2e8f0, #cbd5e1); }
 
 .compact-panel {
-  padding-top: 10px;
+  padding-top: 8px;
 }
 
 .chart {
-  height: 140px;
+  height: 112px;
 }
 
 .compact-empty {
-  min-height: 120px;
+  min-height: 92px;
 }
 
 .log-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .compact-log-card {
   border: 1px solid #e2e8f0;
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: hidden;
 }
 
@@ -1562,7 +1854,7 @@ onUnmounted(() => {
   background: #fff;
   border: 0;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 7px 10px;
   text-align: left;
   width: 100%;
 }
@@ -1570,21 +1862,22 @@ onUnmounted(() => {
 .log-head-row {
   align-items: center;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: space-between;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .log-meta-inline {
   align-items: center;
   display: flex;
-  gap: 6px;
+  gap: 4px;
   flex-wrap: wrap;
 }
 
 .inline-message {
   color: #0f172a;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.42;
   overflow: hidden;
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1601,12 +1894,12 @@ onUnmounted(() => {
 
 .expand-text {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .result-tags {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -1696,7 +1989,6 @@ onUnmounted(() => {
   padding: 8px 11px;
 }
 
-.tips-box strong,
 .syntax-block strong {
   color: #0f172a;
   display: block;
@@ -1709,7 +2001,6 @@ onUnmounted(() => {
   padding-left: 18px;
 }
 
-.tips-box p,
 .syntax-block li {
   color: #64748b;
   font-size: 12px;
@@ -1726,18 +2017,18 @@ onUnmounted(() => {
 .compact-detail {
   background: #f8fafc;
   border-top: 1px solid #e2e8f0;
-  padding: 12px;
+  padding: 9px 10px;
 }
 
 .detail-actions {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .compact-grid {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .compact-attr {
@@ -1746,12 +2037,13 @@ onUnmounted(() => {
   border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 3px;
+  padding: 7px 9px;
 }
 
 .compact-attr span {
   color: #475569;
+  font-size: 12px;
   word-break: break-word;
 }
 
@@ -1771,14 +2063,14 @@ pre {
 }
 
 @media (max-width: 1080px) {
-  .query-layout,
-  .compact-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .query-layout {
     grid-template-columns: 1fr;
   }
+
+  .log-filter-grid--primary {
+    grid-template-columns: 1fr;
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -1786,7 +2078,6 @@ pre {
     align-items: flex-start;
   }
 
-  .compact-stats,
   .filter-row,
   .compact-grid {
     grid-template-columns: 1fr;
@@ -1794,6 +2085,7 @@ pre {
 
   .log-head-row,
   .panel-head,
+  .log-query-unified-head,
   .toolbar-actions,
   .saved-item,
   .saved-dialog-head {
@@ -1801,10 +2093,27 @@ pre {
     flex-direction: column;
   }
 
-  .inline-tip {
-    display: block;
-    margin-left: 0;
-    margin-top: 8px;
+  .log-filter-datasource-row,
+  .log-inline-filter,
+  .source-title-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .log-filter-datasource-row,
+  .source-title-row {
+    flex-direction: column;
+  }
+
+  .field-label-with-help {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .log-query-form :deep(.el-form-item__label) {
+    min-height: 0;
+    padding-top: 2px;
+    white-space: normal;
   }
 }
 .hero.panel.hero-panel { border-radius: 20px; }
