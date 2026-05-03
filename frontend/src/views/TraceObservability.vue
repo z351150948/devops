@@ -1652,17 +1652,49 @@ function openDeploymentsForTrace() {
   })
 }
 
+function firstTraceContextValue(keys = []) {
+  const directSources = [
+    traceDetail.value || {},
+    rootSpan.value || {},
+    route.query || {},
+  ]
+  for (const source of directSources) {
+    for (const key of keys) {
+      const value = source?.[key] ?? source?.[key.replace('.', '_')]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+  }
+
+  const attributeRows = normalizeAttributes([
+    ...(rootSpan.value?.resource_tags || []),
+    ...(rootSpan.value?.resourceTags || []),
+    ...(rootSpan.value?.resource_attributes || []),
+    ...(rootSpan.value?.resourceAttributes || []),
+    ...(rootSpan.value?.tags || []),
+  ])
+  for (const key of keys) {
+    const row = attributeRows.find((item) => item.key === key || item.key === key.replace('.', '_'))
+    if (row && String(row.value).trim()) return String(row.value).trim()
+  }
+  return ''
+}
+
 async function openGrafanaForTrace() {
   if (!canViewGrafana.value || !selectedTraceId.value) return
   const [start, end] = normalizeTimeRange(filters.timeRange)
+  const service = traceContextService.value || firstTraceContextValue(['service.name', 'service', 'workload', 'app', 'container'])
+  const namespace = firstTraceContextValue(['service.namespace', 'namespace', 'k8s.namespace.name', 'kubernetes_namespace_name'])
   const tags = {
-    'service.name': traceContextService.value || '',
-    service: traceContextService.value || '',
+    'service.name': service || '',
+    'service.namespace': namespace || '',
+    service: service || '',
+    namespace: namespace || '',
   }
   try {
     const resolved = await resolveTraceToGrafana({
       trace_id: selectedTraceId.value,
       tracing_datasource_id: filters.datasourceId,
+      dashboard_key: 'kubernetes-compute-resources-workload',
       tags,
       from: start ? start.getTime() : undefined,
       to: end ? end.getTime() : undefined,
@@ -1672,18 +1704,24 @@ async function openGrafanaForTrace() {
       query: {
         ...(resolved.query || {}),
         provider: filters.provider || undefined,
+        'var-workload': resolved.query?.['var-workload'] || service || undefined,
+        'var-namespace': resolved.query?.['var-namespace'] || namespace || undefined,
+        fullscreen: '1',
       },
     })
   } catch {
     router.push({
       path: '/observability/grafana',
       query: {
-        dashboard: 'apm-overview',
-        service: traceContextService.value || undefined,
+        dashboard: 'kubernetes-compute-resources-workload',
+        service: service || undefined,
+        'var-workload': service || undefined,
+        'var-namespace': namespace || undefined,
         traceId: selectedTraceId.value,
         provider: filters.provider || undefined,
         from: start ? start.getTime() : undefined,
         to: end ? end.getTime() : undefined,
+        fullscreen: '1',
       },
     })
   }

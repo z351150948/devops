@@ -101,6 +101,30 @@
           </div>
         </div>
 
+        <div class="relation-guide">
+          <div class="relation-guide__item">
+            <span class="relation-guide__index">1</span>
+            <div>
+              <strong>选择关联对象</strong>
+              <p>Loki 日志源和 Tempo 链路源是一组跳转关系的边界。</p>
+            </div>
+          </div>
+          <div class="relation-guide__item">
+            <span class="relation-guide__index">2</span>
+            <div>
+              <strong>开启跳转方向</strong>
+              <p>按日志、链路、看板三个入口分别控制可用跳转。</p>
+            </div>
+          </div>
+          <div class="relation-guide__item">
+            <span class="relation-guide__index">3</span>
+            <div>
+              <strong>配置标签映射</strong>
+              <p>统一把 service.name / service.namespace 映射到 Loki 标签和 Grafana 变量。</p>
+            </div>
+          </div>
+        </div>
+
         <el-form :model="form" label-width="104px" class="dialog-form">
           <section class="form-section">
             <div class="section-title">
@@ -244,6 +268,7 @@
       </div>
 
       <template #footer>
+        <el-button plain type="primary" @click="applyWorkloadPreset">套用 Workload 看板映射</el-button>
         <el-button @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
       </template>
@@ -277,6 +302,15 @@ const logDataSources = ref([])
 const tracingDataSources = ref([])
 const grafanaDashboards = ref([])
 const traceIdFieldsText = ref('trace_id, traceId, traceID')
+const WORKLOAD_DASHBOARD_KEY = 'kubernetes-compute-resources-workload'
+const WORKLOAD_GRAFANA_MAPPINGS = [
+  { trace_tag: 'service.name', variable: 'workload' },
+  { trace_tag: 'service.namespace', variable: 'namespace' },
+]
+const WORKLOAD_LOG_MAPPINGS = [
+  { trace_tag: 'service.name', log_label: 'container' },
+  { trace_tag: 'service.namespace', log_label: 'namespace' },
+]
 const form = ref(createEmptyForm())
 
 const canManageLinks = computed(() => authStore.hasPermission('ops.observability.link.manage'))
@@ -316,15 +350,9 @@ function createEmptyForm() {
     trace_id_fields: ['trace_id', 'traceId', 'traceID'],
     trace_id_regex: '"trace_id"\\s*:\\s*"([0-9a-fA-F]{16,32})"',
     log_query_template: '${__tags} | json | trace_id="${__trace.traceId}"',
-    log_label_mappings: [
-      { trace_tag: 'service.name', log_label: 'container' },
-      { trace_tag: 'service.namespace', log_label: 'namespace' },
-    ],
-    grafana_dashboard_key: 'kubernetes-compute-resources-workload',
-    grafana_variable_mappings: [
-      { trace_tag: 'service.name', variable: 'workload' },
-      { trace_tag: 'service.namespace', variable: 'namespace' },
-    ],
+    log_label_mappings: WORKLOAD_LOG_MAPPINGS.map((item) => ({ ...item })),
+    grafana_dashboard_key: WORKLOAD_DASHBOARD_KEY,
+    grafana_variable_mappings: WORKLOAD_GRAFANA_MAPPINGS.map((item) => ({ ...item })),
     span_start_shift: '-5m',
     span_end_shift: '5m',
     window_minutes: 10,
@@ -387,6 +415,17 @@ function removeGrafanaMapping(index) {
   form.value.grafana_variable_mappings.splice(index, 1)
 }
 
+function applyWorkloadPreset() {
+  form.value.grafana_dashboard_key = WORKLOAD_DASHBOARD_KEY
+  form.value.grafana_variable_mappings = WORKLOAD_GRAFANA_MAPPINGS.map((item) => ({ ...item }))
+  form.value.log_label_mappings = WORKLOAD_LOG_MAPPINGS.map((item) => ({ ...item }))
+  form.value.log_to_grafana_enabled = true
+  form.value.trace_to_grafana_enabled = true
+  form.value.grafana_to_log_enabled = true
+  form.value.grafana_to_trace_enabled = true
+  ElMessage.success('已套用 Kubernetes Workload 看板映射')
+}
+
 function dashboardTitle(key) {
   if (!key) return '--'
   const dashboard = grafanaDashboards.value.find((item) => item.key === key || item.slug === key)
@@ -396,6 +435,7 @@ function dashboardTitle(key) {
 function buildPayload() {
   return {
     ...form.value,
+    grafana_dashboard_key: form.value.grafana_dashboard_key || WORKLOAD_DASHBOARD_KEY,
     trace_id_fields: traceIdFieldsText.value.split(',').map((item) => item.trim()).filter(Boolean),
     log_label_mappings: form.value.log_label_mappings.filter((item) => item.trace_tag && item.log_label),
     grafana_variable_mappings: form.value.grafana_variable_mappings.filter((item) => item.trace_tag && item.variable),
@@ -530,6 +570,49 @@ onMounted(fetchAll)
   flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+}
+
+.relation-guide {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.relation-guide__item {
+  align-items: flex-start;
+  background: #f8fafc;
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  border-radius: 12px;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+.relation-guide__index {
+  align-items: center;
+  background: #0f766e;
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 22px;
+  font-size: 12px;
+  font-weight: 700;
+  height: 22px;
+  justify-content: center;
+}
+
+.relation-guide strong {
+  color: #0f172a;
+  display: block;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.relation-guide p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 4px 0 0;
 }
 
 .dialog-form {
@@ -671,6 +754,7 @@ onMounted(fetchAll)
 
 @media (max-width: 980px) {
   .dialog-summary,
+  .relation-guide,
   .section-grid,
   .section-grid--two,
   .switch-grid,

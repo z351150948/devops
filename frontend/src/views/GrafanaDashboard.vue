@@ -798,7 +798,9 @@ function appendGrafanaDisplayParams(url = '') {
     parsed.searchParams.set('theme', 'light')
     return parsed.toString()
   } catch {
-    return value
+    const base = value.replace(/[?&](?:kiosk|theme)=[^&#]*/g, '').replace(/[?&]$/, '')
+    const separator = base.includes('?') ? '&' : '?'
+    return `${base}${separator}kiosk=true&theme=light`
   }
 }
 
@@ -1331,12 +1333,12 @@ function openExternal(url) {
 }
 
 function appendGrafanaContext(url) {
-  const value = String(url || '').trim()
+  const value = appendGrafanaDisplayParams(String(url || '').trim())
   if (!value) return ''
   const params = new URLSearchParams()
   Object.entries(route.query).forEach(([key, raw]) => {
     if (['dashboard', 'folder', 'keyword', 'tag', 'fullscreen'].includes(key)) return
-    if (!['traceId', 'service', 'provider', 'source', 'from', 'to'].includes(key) && !key.startsWith('var-')) return
+    if (!['traceId', 'service', 'workload', 'namespace', 'provider', 'source', 'from', 'to'].includes(key) && !key.startsWith('var-')) return
     const values = Array.isArray(raw) ? raw : [raw]
     values.forEach((item) => {
       if (item !== undefined && item !== null && String(item).trim()) {

@@ -274,7 +274,7 @@
                   <span>{{ attr.value }}</span>
                 </div>
               </div>
-              <div v-if="item.attributes?.trace_id && (canViewTracing || canViewGrafana)" class="detail-actions">
+              <div v-if="traceIdFromLog(item) && (canViewTracing || canViewGrafana)" class="detail-actions">
                 <span class="detail-actions__label">关联跳转</span>
                 <div class="detail-actions__buttons">
                   <el-button v-if="canViewTracing" size="small" link type="primary" @click="openTraceFromLog(item)">链路追踪</el-button>
@@ -863,8 +863,41 @@ function traceServiceFromLog(item) {
     attributes.service,
     attributes['service.name'],
     attributes.serviceName,
+    attributes.workload,
+    attributes.app,
+    attributes.application,
+    attributes.container,
+    attributes.container_name,
+    attributes['k8s.container.name'],
     item?.source,
   ].find((value) => typeof value === 'string' && value.trim()) || ''
+}
+
+function traceNamespaceFromLog(item) {
+  const attributes = item?.attributes || {}
+  return [
+    attributes.service_namespace,
+    attributes.serviceNamespace,
+    attributes['service.namespace'],
+    attributes.namespace,
+    attributes['k8s.namespace.name'],
+    attributes.kubernetes_namespace_name,
+  ].find((value) => typeof value === 'string' && value.trim()) || ''
+}
+
+function traceIdFromLog(item) {
+  const attributes = item?.attributes || {}
+  const direct = [
+    attributes.trace_id,
+    attributes.traceId,
+    attributes.traceID,
+    attributes['trace.id'],
+    attributes.otelTraceID,
+  ].find((value) => typeof value === 'string' && value.trim())
+  if (direct) return direct.trim()
+  const message = String(item?.message || '')
+  const match = message.match(/(?:trace_id|traceId|traceID|trace\.id)["']?\s*[:=]\s*["']?([0-9a-fA-F]{16,32})/)
+  return match?.[1] || ''
 }
 
 async function applyTraceRoutePreset(force = false) {
@@ -1003,7 +1036,7 @@ async function applyKeywordRoutePreset(force = false) {
 }
 
 async function openTraceFromLog(item) {
-  const traceId = item?.attributes?.trace_id
+  const traceId = traceIdFromLog(item)
   if (!traceId) return
   const service = traceServiceFromLog(item)
   try {
@@ -1034,14 +1067,16 @@ async function openTraceFromLog(item) {
 }
 
 async function openGrafanaFromLog(item) {
-  const traceId = item?.attributes?.trace_id
+  const traceId = traceIdFromLog(item)
   if (!traceId) return
   const service = traceServiceFromLog(item)
+  const namespace = traceNamespaceFromLog(item)
   const range = normalizeTimeRange(currentTab.value?.timeRange)
   try {
     const resolved = await resolveLogToGrafana({
       trace_id: traceId,
       log_datasource_id: currentTab.value?.datasourceId,
+      dashboard_key: 'kubernetes-compute-resources-workload',
       attributes: item.attributes || {},
       message: item.message || '',
       from: toTimestampMs(range[0]),
@@ -1052,18 +1087,24 @@ async function openGrafanaFromLog(item) {
       query: {
         ...(resolved.query || {}),
         service: service || undefined,
+        'var-workload': resolved.query?.['var-workload'] || service || undefined,
+        'var-namespace': resolved.query?.['var-namespace'] || namespace || undefined,
+        fullscreen: '1',
       },
     })
   } catch {
     router.push({
       path: '/observability/grafana',
       query: {
-        dashboard: 'apm-overview',
+        dashboard: 'kubernetes-compute-resources-workload',
         traceId,
         service: service || undefined,
+        'var-workload': service || undefined,
+        'var-namespace': namespace || undefined,
         source: 'log',
         from: toTimestampMs(range[0]),
         to: toTimestampMs(range[1]),
+        fullscreen: '1',
       },
     })
   }

@@ -81,6 +81,29 @@ DEFAULT_GRAFANA_VARIABLE_MAPPINGS = [
     {'trace_tag': 'service.namespace', 'variable': 'namespace'},
 ]
 
+SERVICE_TAG_ALIASES = [
+    'service.name',
+    'service',
+    'service_name',
+    'serviceName',
+    'workload',
+    'app',
+    'application',
+    'container',
+    'container_name',
+    'k8s.container.name',
+    'kubernetes_container_name',
+]
+NAMESPACE_TAG_ALIASES = [
+    'service.namespace',
+    'namespace',
+    'service_namespace',
+    'serviceNamespace',
+    'k8s.namespace.name',
+    'kubernetes_namespace_name',
+    'kubernetes.namespace',
+]
+
 
 def _normalize_trace_id_fields(values):
     fields = []
@@ -113,6 +136,39 @@ def _normalize_grafana_variable_mappings(values):
         if trace_tag and variable:
             mappings.append({'trace_tag': trace_tag, 'variable': variable})
     return mappings or list(DEFAULT_GRAFANA_VARIABLE_MAPPINGS)
+
+
+def _first_text_value(data, keys):
+    if not isinstance(data, dict):
+        return ''
+    lowered = {str(key).lower().replace('_', '.'): value for key, value in data.items()}
+    for key in keys:
+        candidates = {
+            key,
+            key.replace('.', '_'),
+            key.replace('_', '.'),
+            key.lower(),
+            key.lower().replace('_', '.'),
+        }
+        for candidate in candidates:
+            value = data.get(candidate)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            lowered_value = lowered.get(candidate.lower().replace('_', '.'))
+            if isinstance(lowered_value, str) and lowered_value.strip():
+                return lowered_value.strip()
+    return ''
+
+
+def _merge_standard_trace_tags(tags):
+    normalized = dict(tags or {})
+    service = _first_text_value(normalized, SERVICE_TAG_ALIASES)
+    namespace = _first_text_value(normalized, NAMESPACE_TAG_ALIASES)
+    if service and not normalized.get('service.name'):
+        normalized['service.name'] = service
+    if namespace and not normalized.get('service.namespace'):
+        normalized['service.namespace'] = namespace
+    return normalized
 
 
 def _trace_id_from_mapping(attributes, fields=None, message='', regex=''):
@@ -234,7 +290,7 @@ def _find_grafana_dashboard(dashboard_key=''):
 
 
 def _render_grafana_query(link, trace_id, tags=None):
-    tags = tags or {}
+    tags = _merge_standard_trace_tags(tags or {})
     query = {'traceId': trace_id}
     service = tags.get('service.name') or tags.get('service') or ''
     if isinstance(service, str) and service.strip():
@@ -278,7 +334,7 @@ def _tags_from_grafana_context(link, context):
         tags['service.name'] = service.strip()
     if isinstance(namespace, str) and namespace.strip() and not tags.get('service.namespace'):
         tags['service.namespace'] = namespace.strip()
-    return tags
+    return _merge_standard_trace_tags(tags)
 
 
 def _tags_from_log_attributes(link, attributes):
@@ -287,11 +343,13 @@ def _tags_from_log_attributes(link, attributes):
         value = attributes.get(item['log_label']) if isinstance(attributes, dict) else ''
         if isinstance(value, str) and value.strip() and not tags.get(item['trace_tag']):
             tags[item['trace_tag']] = value.strip()
-    return tags
+    return _merge_standard_trace_tags(tags)
 
 
 def _grafana_resolve_payload(link, trace_id, tags=None, request_data=None):
-    grafana, dashboard = _find_grafana_dashboard(link.grafana_dashboard_key)
+    request_data = request_data or {}
+    dashboard_hint = request_data.get('dashboard_key') or request_data.get('dashboard') or request_data.get('grafana_dashboard_key') or link.grafana_dashboard_key
+    grafana, dashboard = _find_grafana_dashboard(dashboard_hint)
     if not dashboard:
         return None
     dashboard_key = dashboard.get('key') or dashboard.get('slug') or link.grafana_dashboard_key
@@ -300,7 +358,6 @@ def _grafana_resolve_payload(link, trace_id, tags=None, request_data=None):
         'dashboard': dashboard_key,
         'source': 'trace',
     })
-    request_data = request_data or {}
     if request_data.get('from'):
         query['from'] = request_data.get('from')
     if request_data.get('to'):

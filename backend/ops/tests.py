@@ -562,6 +562,103 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(payload['query']['traceId'], '0123456789abcdef0123456789abcdef')
         self.assertEqual(payload['query']['var-service'], 'checkout')
 
+    def test_datasource_link_resolves_trace_to_workload_dashboard(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            trace_to_grafana_enabled=True,
+            grafana_dashboard_key='apm-overview',
+            grafana_variable_mappings=[
+                {'trace_tag': 'service.name', 'variable': 'workload'},
+                {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+            ],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_trace_to_grafana/',
+            {
+                'trace_id': '0123456789abcdef0123456789abcdef',
+                'tracing_datasource_id': trace_source.id,
+                'dashboard_key': 'Kubernetes / Compute Resources / Workload',
+                'tags': {'service.name': 'checkout', 'service.namespace': 'default'},
+                'from': 1710000000000,
+                'to': 1710000300000,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['dashboard']['key'], 'kubernetes-compute-resources-workload')
+        self.assertEqual(payload['query']['dashboard'], 'kubernetes-compute-resources-workload')
+        self.assertEqual(payload['query']['traceId'], '0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['query']['var-workload'], 'checkout')
+        self.assertEqual(payload['query']['var-namespace'], 'default')
+        self.assertEqual(payload['query']['from'], 1710000000000)
+
+    def test_datasource_link_resolves_log_to_workload_dashboard(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            log_to_grafana_enabled=True,
+            grafana_dashboard_key='apm-overview',
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'app'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+            grafana_variable_mappings=[
+                {'trace_tag': 'service.name', 'variable': 'workload'},
+                {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+            ],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_log_to_grafana/',
+            {
+                'trace_id': '0123456789abcdef0123456789abcdef',
+                'log_datasource_id': log_source.id,
+                'attributes': {'app': 'checkout', 'namespace': 'default'},
+                'message': 'checkout failed',
+                'dashboard_key': 'Kubernetes / Compute Resources / Workload',
+                'from': 1710000000000,
+                'to': 1710000300000,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['dashboard']['key'], 'kubernetes-compute-resources-workload')
+        self.assertEqual(payload['query']['dashboard'], 'kubernetes-compute-resources-workload')
+        self.assertEqual(payload['query']['source'], 'log')
+        self.assertEqual(payload['query']['traceId'], '0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['query']['var-workload'], 'checkout')
+        self.assertEqual(payload['query']['var-namespace'], 'default')
+
     def test_datasource_link_resolves_workload_dashboard_to_loki_query(self):
         log_source = LogDataSource.objects.create(
             name='电商-k3s-loki',
