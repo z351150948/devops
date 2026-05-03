@@ -20,6 +20,7 @@ router.register(r'transaction-tickets', views.TransactionTicketViewSet, basename
 router.register(r'alerts', views.AlertViewSet)
 router.register(r'logs', views.LogEntryViewSet)
 router.register(r'log/datasources', log_views.LogDataSourceViewSet, basename='log-datasource')
+router.register(r'observability/datasource-links', observability_views.ObservabilityDataSourceLinkViewSet, basename='observability-datasource-link')
 router.register(r'observability/tracing/datasources', observability_views.TracingDataSourceViewSet, basename='tracing-datasource')
 router.register(r'k8s/clusters', k8s_views.K8sClusterViewSet)
 router.register(r'docker/hosts', docker_views.DockerHostViewSet)

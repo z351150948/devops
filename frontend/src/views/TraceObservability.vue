@@ -489,7 +489,7 @@
                       <span class="service-dot" :style="{ background: row.serviceColor }"></span>
                       <div class="operation-cell">
                         <strong>{{ row.endpoint_name || row.service_code || 'Span' }}</strong>
-                        <span>{{ row.service_code || '--' }} · {{ row.type || 'Span' }} · {{ row.layer || 'UNSET' }}</span>
+                        <span>{{ row.service_code || '--' }} · {{ formatSpanKind(row.type) }} · {{ row.layer || 'UNSET' }}</span>
                       </div>
                     </div>
                     <div class="timeline-track">
@@ -499,27 +499,45 @@
                   </button>
 
                   <div v-if="isSpanExpanded(row.span_id)" class="timeline-detail">
-                    <div class="timeline-detail-grid">
-                      <div>
-                        <span class="detail-label">Start</span>
-                        <strong>{{ formatTime(row.start_time) }}</strong>
-                      </div>
-                      <div>
-                        <span class="detail-label">Instance</span>
-                        <strong>{{ row.service_instance_name || '--' }}</strong>
-                      </div>
-                      <div>
-                        <span class="detail-label">Peer</span>
-                        <strong>{{ row.peer || '--' }}</strong>
-                      </div>
-                      <div>
-                        <span class="detail-label">Span ID</span>
-                        <strong>{{ row.span_id }}</strong>
-                      </div>
+                    <div class="span-attribute-summary">
+                      <span class="service-line" :style="{ background: row.serviceColor }"></span>
+                      <span>Service: <strong>{{ row.service_code || '--' }}</strong></span>
+                      <span>Duration: <strong>{{ formatDuration(row.duration_ms) }}</strong></span>
+                      <span>Start: <strong>{{ formatTime(row.start_time) }}</strong></span>
+                      <span>Child Count: <strong>{{ spanChildCount(row) }}</strong></span>
+                      <span>Kind: <strong>{{ formatSpanKind(row.type) }}</strong></span>
+                      <span>Status: <strong>{{ row.is_error ? 'error' : 'unset' }}</strong></span>
+                      <span v-if="row.component">Library: <strong>{{ row.component }}</strong></span>
+                      <span class="span-id-inline">SpanID: <strong>{{ row.span_id }}</strong></span>
                     </div>
-                    <div v-if="row.tags?.length" class="timeline-tags">
-                      <span v-for="tag in row.tags" :key="`${row.span_id}-${tag.key}`" class="span-chip">{{ tag.key }} = {{ tag.value }}</span>
-                    </div>
+                    <details class="attribute-section">
+                      <summary>
+                        <span class="attribute-chevron">⌄</span>
+                        <strong>Span attributes</strong>
+                        <span>{{ spanAttributes(row).length }} items</span>
+                      </summary>
+                      <div class="attribute-table">
+                        <div v-for="attr in spanAttributes(row)" :key="`${row.span_id}-span-${attr.key}`" class="attribute-row">
+                          <span>{{ attr.key }}</span>
+                          <code>{{ formatAttributeValue(attr.value) }}</code>
+                        </div>
+                        <div v-if="!spanAttributes(row).length" class="attribute-empty">暂无 Span attributes</div>
+                      </div>
+                    </details>
+                    <details class="attribute-section">
+                      <summary>
+                        <span class="attribute-chevron">⌄</span>
+                        <strong>Resource attributes</strong>
+                        <span>{{ resourceAttributes(row).length }} items</span>
+                      </summary>
+                      <div class="attribute-table">
+                        <div v-for="attr in resourceAttributes(row)" :key="`${row.span_id}-resource-${attr.key}`" class="attribute-row">
+                          <span>{{ attr.key }}</span>
+                          <code>{{ formatAttributeValue(attr.value) }}</code>
+                        </div>
+                        <div v-if="!resourceAttributes(row).length" class="attribute-empty">暂无 Resource attributes</div>
+                      </div>
+                    </details>
                     <div v-if="row.logs?.length" class="span-log-list">
                       <div v-for="log in row.logs" :key="`${row.span_id}-${log.time}`" class="span-log-item">
                         <strong>{{ formatTime(log.time) }}</strong>
@@ -568,6 +586,7 @@
     <template v-else-if="activeTraceTab === 'datasources' && canViewTraceDataSources">
       <TracingDataSources embedded />
     </template>
+
   </div>
 </template>
 
@@ -576,7 +595,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router'
 import { Connection, Document, RefreshRight, Search } from '@element-plus/icons-vue'
 import echarts from '@/lib/echarts'
-import { getObservabilityOverview, getTraceDetail, getTracingCatalog, getTracingDataSources, searchTracing } from '@/api/modules/ops'
+import { getObservabilityOverview, getTraceDetail, getTracingCatalog, getTracingDataSources, resolveTraceToGrafana, resolveTraceToLogs, searchTracing } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 import TracingDataSources from './TracingDataSources.vue'
 
@@ -668,6 +687,12 @@ const filteredTracingDataSources = computed(() =>
 const selectedTracingDataSource = computed(() =>
   tracingDataSources.value.find((item) => String(item.id) === String(filters.datasourceId))
 )
+
+function preferredTracingDataSource(provider = '') {
+  const enabled = tracingDataSources.value.filter((item) => item.is_enabled)
+  const scoped = provider ? enabled.filter((item) => item.provider === provider) : enabled
+  return scoped.find((item) => item.is_default) || scoped[0] || enabled.find((item) => item.is_default) || enabled[0] || null
+}
 
 const sortLabel = computed(() => ({
   latest: '最近开始',
@@ -1021,6 +1046,133 @@ function formatLog(items = []) {
   return items.map((item) => `${item.key}: ${item.value}`).join(' | ')
 }
 
+function normalizeAttributes(items = []) {
+  const seen = new Set()
+  return (items || [])
+    .map((item) => ({
+      key: String(item?.key || '').trim(),
+      value: item?.value,
+    }))
+    .filter((item) => item.key && item.value !== undefined && item.value !== null && String(item.value).trim() !== '')
+    .filter((item) => {
+      if (seen.has(item.key)) return false
+      seen.add(item.key)
+      return true
+    })
+}
+
+function spanAttributes(row) {
+  return normalizeAttributes(row?.tags || [])
+}
+
+function isResourceLikeAttribute(key) {
+  const normalized = String(key || '').trim()
+  if (!normalized) return false
+  const resourceLikePrefixes = [
+    'service.',
+    'telemetry.',
+    'otel.',
+    'k8s.',
+    'container.',
+    'host.',
+    'cloud.',
+    'process.',
+    'os.',
+    'deployment.',
+    'resource.',
+    'faas.',
+    'aws.',
+    'gcp.',
+    'azure.',
+    'heroku.',
+  ]
+  const resourceLikeKeys = new Set([
+    'service',
+    'job',
+    'instance',
+    'namespace',
+    'pod',
+    'pod_name',
+    'container_name',
+    'node',
+    'node_name',
+    'cluster',
+    'cluster_name',
+    'environment',
+    'env',
+    'version',
+    'hostname',
+    'host.name',
+    'host.hostname',
+  ])
+  return resourceLikePrefixes.some((prefix) => normalized.startsWith(prefix)) || resourceLikeKeys.has(normalized)
+}
+
+function resourceAttributes(row) {
+  const attrs = normalizeAttributes([
+    ...(row?.resource_tags || []),
+    ...(row?.resourceTags || []),
+    ...(row?.resource_attributes || []),
+    ...(row?.resourceAttributes || []),
+  ])
+  const existing = new Set(attrs.map((item) => item.key))
+  normalizeAttributes([
+    ...(row?.scope_tags || []),
+    ...(row?.scopeTags || []),
+    ...(row?.scope_attributes || []),
+    ...(row?.scopeAttributes || []),
+    ...(row?.tags || []),
+  ]).forEach((item) => {
+    if (existing.has(item.key)) return
+    if (!isResourceLikeAttribute(item.key)) return
+    attrs.push(item)
+    existing.add(item.key)
+  })
+  const fallback = [
+    ['service.name', row?.service_code],
+    ['service.instance.id', row?.service_instance_name],
+    ['service.namespace', traceDetail.value?.service_namespace],
+  ]
+  fallback.forEach(([key, value]) => {
+    if (!existing.has(key) && value !== undefined && value !== null && String(value).trim()) {
+      attrs.push({ key, value })
+      existing.add(key)
+    }
+  })
+  const priority = ['service.name', 'service.namespace', 'service.version', 'service.instance.id']
+  return attrs.sort((left, right) => {
+    const leftIndex = priority.indexOf(left.key)
+    const rightIndex = priority.indexOf(right.key)
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex)
+    }
+    return left.key.localeCompare(right.key)
+  })
+}
+
+function formatAttributeValue(value) {
+  if (typeof value === 'string') return value
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function formatSpanKind(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return 'span'
+  return raw
+    .replace(/^SPAN_KIND_/i, '')
+    .replace(/^kind_/i, '')
+    .replace(/^span_/i, '')
+    .toLowerCase()
+}
+
+function spanChildCount(row) {
+  const spanId = String(row?.span_id ?? '')
+  if (!spanId) return 0
+  return traceSpans.value.filter((item) => String(item.parent_span_id ?? '') === spanId).length
+}
+
 function normalizeTimeRange(value) {
   if (!Array.isArray(value) || value.length !== 2) return [null, null]
   const start = value[0] instanceof Date ? value[0] : new Date(value[0])
@@ -1202,6 +1354,17 @@ async function loadTracingDataSources() {
   tracingDataSources.value = Array.isArray(response) ? response : response.results || []
 }
 
+function applyDefaultTracingDataSource() {
+  if (filters.datasourceId) return false
+  const datasource = preferredTracingDataSource(filters.provider)
+  if (!datasource) return false
+  filters.datasourceId = String(datasource.id)
+  if (datasource.provider) {
+    filters.provider = datasource.provider
+  }
+  return true
+}
+
 async function loadCatalog() {
   loading.catalog = true
   try {
@@ -1269,6 +1432,8 @@ async function applyRouteTracePreset(force = false) {
   const traceId = typeof route.query.traceId === 'string' ? route.query.traceId.trim() : ''
   const provider = typeof route.query.provider === 'string' ? route.query.provider.trim() : ''
   const datasourceId = typeof route.query.datasourceId === 'string' ? route.query.datasourceId.trim() : ''
+  const routeService = typeof route.query.service === 'string' ? route.query.service.trim() : ''
+  const routeKeyword = typeof route.query.keyword === 'string' ? route.query.keyword.trim() : ''
   let contextChanged = false
   if (provider && provider !== filters.provider) {
     filters.provider = provider
@@ -1278,7 +1443,7 @@ async function applyRouteTracePreset(force = false) {
     filters.datasourceId = datasourceId
     contextChanged = true
   }
-  if (!traceId && contextChanged) {
+  if (contextChanged) {
     filters.serviceId = ''
     selectedTraceId.value = ''
     selectedSpanId.value = ''
@@ -1287,15 +1452,32 @@ async function applyRouteTracePreset(force = false) {
     await loadOverview()
     await loadTracingDataSources()
     await loadCatalog()
-    return true
   }
-  if (!traceId) return false
-  if (!force && filters.traceId === traceId) return false
-  filters.traceId = traceId
-  filters.keyword = typeof route.query.keyword === 'string' ? route.query.keyword.trim() : ''
-  filters.serviceId = serviceIdFromRouteValue(typeof route.query.service === 'string' ? route.query.service.trim() : '')
+
   filters.durationMinutes = routeWindowMinutes()
   filters.timeRange = buildRelativeTimeRange(filters.durationMinutes)
+
+  if (!traceId) {
+    const nextServiceId = serviceIdFromRouteValue(routeService)
+    const nextKeyword = routeKeyword || routeService
+    if (!nextServiceId && !nextKeyword) {
+      return contextChanged
+    }
+    if (!force && filters.traceId === '' && filters.serviceId === nextServiceId && filters.keyword === nextKeyword) {
+      return false
+    }
+    filters.traceId = ''
+    filters.keyword = nextKeyword
+    filters.serviceId = nextServiceId
+    filters.traceState = 'ALL'
+    await runSearch(true)
+    return true
+  }
+
+  if (!force && filters.traceId === traceId) return false
+  filters.traceId = traceId
+  filters.keyword = routeKeyword
+  filters.serviceId = serviceIdFromRouteValue(routeService)
   filters.traceState = 'ALL'
   await runSearch(true)
   return true
@@ -1341,7 +1523,7 @@ function changeTraceTab(tabName) {
     path: route.path,
     query: {
       ...route.query,
-      tab: tab === 'datasources' ? 'datasources' : undefined,
+      tab: tab === 'datasources' ? tab : undefined,
     },
   })
 }
@@ -1367,6 +1549,7 @@ async function changeProvider(provider) {
     },
   })
   await loadTracingDataSources()
+  applyDefaultTracingDataSource(provider)
   await loadOverview()
   await loadCatalog()
 }
@@ -1397,19 +1580,44 @@ async function changeDataSource(datasourceId) {
   await loadCatalog()
 }
 
-function openLogsForTrace(row) {
+function traceTagsForLogJump(row) {
+  return {
+    'service.name': row?.service_name || row?.service_id || traceContextService.value || '',
+    'service.namespace': row?.service_namespace || row?.namespace || '',
+  }
+}
+
+async function openLogsForTrace(row) {
   if (!canQueryLogs.value || !row?.trace_id) return
-  router.push({
-    path: '/logs/query',
-    query: {
-      traceId: row.trace_id,
-      service: row.service_name || row.service_id || '',
-      provider: filters.provider,
-      datasourceId: filters.datasourceId,
-      window: String(filters.durationMinutes || 60),
-      autoRun: '1',
-    },
-  })
+  try {
+    const resolved = await resolveTraceToLogs({
+      trace_id: row.trace_id,
+      tracing_datasource_id: filters.datasourceId,
+      tags: traceTagsForLogJump(row),
+    })
+    router.push({
+      path: '/logs/query',
+      query: {
+        traceId: row.trace_id,
+        service: row.service_name || row.service_id || '',
+        logProvider: resolved.log_datasource?.provider,
+        logDatasourceId: resolved.log_datasource?.id ? String(resolved.log_datasource.id) : undefined,
+        lokiQuery: resolved.query || undefined,
+        window: String(resolved.window_minutes || filters.durationMinutes || 60),
+        autoRun: '1',
+      },
+    })
+  } catch {
+    router.push({
+      path: '/logs/query',
+      query: {
+        traceId: row.trace_id,
+        service: row.service_name || row.service_id || '',
+        window: String(filters.durationMinutes || 60),
+        autoRun: '1',
+      },
+    })
+  }
 }
 
 function openLogsForCurrentTrace() {
@@ -1444,17 +1652,41 @@ function openDeploymentsForTrace() {
   })
 }
 
-function openGrafanaForTrace() {
+async function openGrafanaForTrace() {
   if (!canViewGrafana.value || !selectedTraceId.value) return
-  router.push({
-    path: '/observability/grafana',
-    query: {
-      dashboard: 'apm-overview',
-      service: traceContextService.value || undefined,
-      traceId: selectedTraceId.value,
-      provider: filters.provider || undefined,
-    },
-  })
+  const [start, end] = normalizeTimeRange(filters.timeRange)
+  const tags = {
+    'service.name': traceContextService.value || '',
+    service: traceContextService.value || '',
+  }
+  try {
+    const resolved = await resolveTraceToGrafana({
+      trace_id: selectedTraceId.value,
+      tracing_datasource_id: filters.datasourceId,
+      tags,
+      from: start ? start.getTime() : undefined,
+      to: end ? end.getTime() : undefined,
+    })
+    router.push({
+      path: '/observability/grafana',
+      query: {
+        ...(resolved.query || {}),
+        provider: filters.provider || undefined,
+      },
+    })
+  } catch {
+    router.push({
+      path: '/observability/grafana',
+      query: {
+        dashboard: 'apm-overview',
+        service: traceContextService.value || undefined,
+        traceId: selectedTraceId.value,
+        provider: filters.provider || undefined,
+        from: start ? start.getTime() : undefined,
+        to: end ? end.getTime() : undefined,
+      },
+    })
+  }
 }
 
 function renderTopology() {
@@ -1645,11 +1877,12 @@ onMounted(async () => {
   filters.provider = typeof route.query.provider === 'string' ? route.query.provider : ''
   filters.datasourceId = typeof route.query.datasourceId === 'string' ? route.query.datasourceId : ''
   await loadTracingDataSources()
+  if (!filters.datasourceId) {
+    applyDefaultTracingDataSource(filters.provider)
+  }
   await loadOverview()
   await loadCatalog()
-  if (route.query.traceId) {
-    await applyRouteTracePreset(true)
-  } else if (!traces.value.length && services.value.length) {
+  if (!(await applyRouteTracePreset(true)) && !traces.value.length && services.value.length) {
     await runSearch(true)
   }
   window.addEventListener('resize', handleResize)
@@ -1666,7 +1899,11 @@ watch(
 watch(
   () => route.query.tab,
   (value) => {
-    activeTraceTab.value = value === 'datasources' && canViewTraceDataSources.value ? 'datasources' : 'traces'
+    if (value === 'datasources' && canViewTraceDataSources.value) {
+      activeTraceTab.value = 'datasources'
+    } else {
+      activeTraceTab.value = 'traces'
+    }
   },
   { immediate: true }
 )
@@ -2881,7 +3118,7 @@ onUnmounted(() => {
 .trace-timeline-card {
   border: 1px solid #e2e8f0;
   border-radius: 10px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .timeline-axis-row {
@@ -2904,6 +3141,7 @@ onUnmounted(() => {
 .timeline-body {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 .timeline-row {
@@ -2916,6 +3154,7 @@ onUnmounted(() => {
   gap: 6px;
   grid-template-columns: 220px minmax(0, 1fr) 64px;
   padding: 5px 8px;
+  position: relative;
   text-align: left;
   width: 100%;
 }
@@ -2943,6 +3182,11 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+.timeline-row:hover,
+.timeline-row:focus-visible {
+  z-index: 8;
+}
+
 .timeline-label {
   align-items: center;
   display: flex;
@@ -2968,6 +3212,7 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 0;
   min-width: 0;
+  position: relative;
 }
 
 .operation-cell strong {
@@ -3007,42 +3252,134 @@ onUnmounted(() => {
 }
 
 .timeline-detail {
-  background: linear-gradient(180deg, rgba(248, 250, 252, 0.72) 0%, #ffffff 100%);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.56) 0%, #ffffff 100%);
   border-bottom: 1px solid #e2e8f0;
-  padding: 6px 8px 8px 18px;
+  padding: 9px 12px 12px 82px;
 }
 
-.timeline-detail-grid {
-  display: grid;
-  gap: 6px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  margin-bottom: 6px;
-}
-
-.timeline-detail-grid > div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.timeline-detail-grid strong {
-  color: #0f172a;
-  font-size: 11px;
-}
-
-.timeline-tags {
+.span-attribute-summary {
+  align-items: center;
+  color: #64748b;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  margin-bottom: 8px;
 }
 
-.span-chip {
-  background: rgba(15, 118, 110, 0.08);
-  border: 1px solid rgba(15, 118, 110, 0.12);
+.span-attribute-summary strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.service-line {
   border-radius: 999px;
+  display: inline-block;
+  height: 6px;
+  width: 22px;
+}
+
+.span-id-inline {
+  margin-left: 0;
+}
+
+.attribute-section {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(226, 232, 240, 0.82);
+  border-radius: 9px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.attribute-section summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.attribute-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.attribute-section summary strong {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.attribute-section summary > span:last-child {
+  color: #94a3b8;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.attribute-section[open] summary > span:last-child {
+  display: none;
+}
+
+.attribute-chevron {
+  color: #64748b;
+  display: inline-flex;
+  font-size: 15px;
+  line-height: 1;
+  transition: transform 0.16s ease;
+}
+
+.attribute-section:not([open]) .attribute-chevron {
+  transform: rotate(-90deg);
+}
+
+.attribute-table {
+  background: rgba(248, 250, 252, 0.52);
+  border-top: 1px solid rgba(226, 232, 240, 0.78);
+  padding: 0 8px 8px;
+}
+
+.attribute-row {
+  align-items: center;
+  background: transparent;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.56);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(140px, 0.3fr) minmax(0, 1fr);
+  min-height: 29px;
+  padding: 5px 6px;
+}
+
+.attribute-row:nth-child(2n) {
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.attribute-row span {
+  color: #64748b;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attribute-row code {
   color: #0f766e;
-  font-size: 10px;
-  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.attribute-empty {
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 10px 8px 0;
+}
+
+.attribute-section:not([open]) .attribute-table {
+  display: none;
 }
 
 .span-log-list {
@@ -3109,8 +3446,7 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1280px) {
-  .trace-kpi-grid,
-  .timeline-detail-grid {
+  .trace-kpi-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -3228,8 +3564,12 @@ onUnmounted(() => {
   }
 
   .trace-kpi-grid,
-  .timeline-detail-grid {
+  .attribute-row {
     grid-template-columns: 1fr;
+  }
+
+  .timeline-detail {
+    padding-left: 18px;
   }
 
   .trace-result-main {

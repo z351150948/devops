@@ -24,6 +24,7 @@ from .models import (
     NginxDomain,
     NginxEnvironment,
     NginxRoute,
+    ObservabilityDataSourceLink,
     TracingDataSource,
     TransactionTicket,
 )
@@ -1022,6 +1023,7 @@ class TracingDataSourceSerializer(serializers.ModelSerializer):
 
         if provider == 'skywalking':
             config.setdefault('graphql_path', '/graphql')
+        config['demo_mode'] = False
 
         attrs['config'] = config
         return attrs
@@ -1053,6 +1055,98 @@ class TracingDataSourceSerializer(serializers.ModelSerializer):
                 masked[key] = value
         data['config'] = masked
         return data
+
+
+DEFAULT_TRACE_ID_FIELDS = ['trace_id', 'traceId', 'traceID']
+DEFAULT_TRACE_ID_REGEX = r'"trace_id"\s*:\s*"([0-9a-fA-F]{16,32})"'
+DEFAULT_LOG_QUERY_TEMPLATE = '${__tags} | json | trace_id="${__trace.traceId}"'
+DEFAULT_LOG_LABEL_MAPPINGS = [
+    {'trace_tag': 'service.name', 'log_label': 'container'},
+    {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+]
+DEFAULT_GRAFANA_VARIABLE_MAPPINGS = [
+    {'trace_tag': 'service.name', 'variable': 'workload'},
+    {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+]
+
+
+class ObservabilityDataSourceLinkSerializer(serializers.ModelSerializer):
+    log_datasource_name = serializers.CharField(source='log_datasource.name', read_only=True)
+    log_provider = serializers.CharField(source='log_datasource.provider', read_only=True)
+    tracing_datasource_name = serializers.CharField(source='tracing_datasource.name', read_only=True)
+    tracing_provider = serializers.CharField(source='tracing_datasource.provider', read_only=True)
+
+    class Meta:
+        model = ObservabilityDataSourceLink
+        fields = '__all__'
+
+    def validate_trace_id_fields(self, value):
+        if value in (None, ''):
+            return DEFAULT_TRACE_ID_FIELDS
+        if not isinstance(value, list):
+            raise serializers.ValidationError('trace_id_fields 必须是数组')
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def validate_log_label_mappings(self, value):
+        if value in (None, ''):
+            return DEFAULT_LOG_LABEL_MAPPINGS
+        if not isinstance(value, list):
+            raise serializers.ValidationError('log_label_mappings 必须是数组')
+        mappings = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            trace_tag = str(item.get('trace_tag') or '').strip()
+            log_label = str(item.get('log_label') or '').strip()
+            if trace_tag and log_label:
+                mappings.append({'trace_tag': trace_tag, 'log_label': log_label})
+        return mappings
+
+    def validate_grafana_variable_mappings(self, value):
+        if value in (None, ''):
+            return DEFAULT_GRAFANA_VARIABLE_MAPPINGS
+        if not isinstance(value, list):
+            raise serializers.ValidationError('grafana_variable_mappings 必须是数组')
+        mappings = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            trace_tag = str(item.get('trace_tag') or '').strip()
+            variable = str(item.get('variable') or '').strip()
+            if trace_tag and variable:
+                mappings.append({'trace_tag': trace_tag, 'variable': variable})
+        return mappings
+
+    def validate(self, attrs):
+        log_datasource = attrs.get('log_datasource') or getattr(self.instance, 'log_datasource', None)
+        tracing_datasource = attrs.get('tracing_datasource') or getattr(self.instance, 'tracing_datasource', None)
+        if log_datasource and log_datasource.provider != 'loki':
+            raise serializers.ValidationError({'log_datasource': '当前关联跳转仅支持 Loki 日志数据源'})
+        if tracing_datasource and tracing_datasource.provider != 'tempo':
+            raise serializers.ValidationError({'tracing_datasource': '当前默认关联模板面向 Tempo 链路数据源'})
+
+        attrs.setdefault('trace_id_fields', DEFAULT_TRACE_ID_FIELDS)
+        attrs.setdefault('trace_id_regex', DEFAULT_TRACE_ID_REGEX)
+        attrs.setdefault('log_query_template', DEFAULT_LOG_QUERY_TEMPLATE)
+        attrs.setdefault('log_label_mappings', DEFAULT_LOG_LABEL_MAPPINGS)
+        attrs.setdefault('grafana_variable_mappings', DEFAULT_GRAFANA_VARIABLE_MAPPINGS)
+        return attrs
+
+    def _sync_default(self, instance):
+        if instance.is_default:
+            ObservabilityDataSourceLink.objects.filter(is_default=True).exclude(pk=instance.pk).update(
+                is_default=False
+            )
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self._sync_default(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        self._sync_default(instance)
+        return instance
 
 
 class GrafanaSettingSerializer(serializers.ModelSerializer):

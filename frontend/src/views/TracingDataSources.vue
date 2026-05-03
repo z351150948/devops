@@ -45,18 +45,20 @@
         <el-table-column label="更新时间" width="180">
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" :width="canManageTracingDataSources ? 280 : 120" fixed="right">
+        <el-table-column label="操作" :width="canManageTracingDataSources ? 248 : 112" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openTracing(row)">打开追踪</el-button>
-            <template v-if="canManageTracingDataSources">
-              <el-button link type="success" size="small" @click="handleTest(row)" :loading="testingId === row.id">测试连接</el-button>
-              <el-button link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
-              <el-popconfirm title="确定删除该链路数据源吗？" @confirm="handleDelete(row.id)">
-                <template #reference>
-                  <el-button link type="danger" size="small">删除</el-button>
-                </template>
-              </el-popconfirm>
-            </template>
+            <div class="row-actions">
+              <el-button link type="primary" size="small" @click="openTracing(row)">打开追踪</el-button>
+              <template v-if="canManageTracingDataSources">
+                <el-button link type="success" size="small" @click="handleTest(row)" :loading="testingId === row.id">测试连接</el-button>
+                <el-button link type="primary" size="small" @click="openDialog(row)">编辑</el-button>
+                <el-popconfirm title="确定删除该链路数据源吗？" @confirm="handleDelete(row.id)">
+                  <template #reference>
+                    <el-button link type="danger" size="small">删除</el-button>
+                  </template>
+                </el-popconfirm>
+              </template>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -82,11 +84,12 @@
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="例如：生产环境 OpenTelemetry 查询入口" />
         </el-form-item>
-        <div class="switch-row">
-          <el-switch v-model="form.is_enabled" active-text="启用" inactive-text="停用" />
-          <el-switch v-model="form.is_default" active-text="设为默认" inactive-text="普通数据源" />
-          <el-switch v-model="form.config.demo_mode" active-text="允许回退演示" inactive-text="严格真实连接" />
-        </div>
+        <el-form-item label="状态">
+          <div class="switch-row switch-row--form">
+            <el-switch v-model="form.is_enabled" active-text="启用" inactive-text="停用" />
+            <el-switch v-model="form.is_default" active-text="设为默认" inactive-text="普通数据源" />
+          </div>
+        </el-form-item>
 
         <template v-if="form.provider === 'skywalking'">
           <el-form-item label="UI 地址">
@@ -117,8 +120,10 @@
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
+        <div class="dialog-footer-actions">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleSave" :loading="saving">保存</el-button>
+        </div>
       </template>
     </el-dialog>
   </div>
@@ -180,9 +185,7 @@ function getProviderDefaults(provider) {
   if (provider === 'skywalking') {
     config.graphql_path = config.graphql_path || '/graphql'
   }
-  if (config.demo_mode === undefined) {
-    config.demo_mode = true
-  }
+  config.demo_mode = false
   return config
 }
 
@@ -265,6 +268,7 @@ function onProviderChange(provider) {
   form.value.config = {
     ...getProviderDefaults(provider),
     ...form.value.config,
+    demo_mode: false,
   }
   if (provider === 'skywalking') {
     delete form.value.config.query_url
@@ -292,7 +296,10 @@ function openDialog(row) {
       description: row.description,
       is_enabled: row.is_enabled,
       is_default: row.is_default,
-      config,
+      config: {
+        ...config,
+        demo_mode: false,
+      },
     }
   } else {
     editingId.value = null
@@ -312,7 +319,10 @@ async function handleSave() {
       description: form.value.description,
       is_enabled: form.value.is_enabled,
       is_default: form.value.is_default,
-      config: form.value.config,
+      config: {
+        ...form.value.config,
+        demo_mode: false,
+      },
     }
     if (editingId.value) {
       await updateTracingDataSource(editingId.value, payload)
@@ -446,7 +456,33 @@ onMounted(async () => {
 }
 
 .switch-row {
-  margin: 4px 0 14px;
+  align-items: center;
+}
+
+.switch-row--form {
+  min-height: 32px;
+  width: 100%;
+}
+
+.row-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  justify-content: flex-end;
+  line-height: 1;
+}
+
+.row-actions :deep(.el-button) {
+  margin-left: 0;
+  padding-inline: 2px;
+}
+
+.dialog-footer-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .name-text {

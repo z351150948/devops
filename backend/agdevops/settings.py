@@ -55,6 +55,15 @@ DEFAULT_GRAFANA_DASHBOARDS = [
         'tags': ['Nginx', 'Latency', 'Availability'],
         'description': '聚焦入口 QPS、响应时间分位和可用性目标。',
     },
+    {
+        'key': 'kubernetes-compute-resources-workload',
+        'title': 'Kubernetes / Compute Resources / Workload',
+        'slug': 'kubernetes-compute-resources-workload',
+        'path': '/d/k8s-resources-workload',
+        'panel_count': 16,
+        'tags': ['Kubernetes', 'Workload', 'Compute'],
+        'description': '按 namespace 和 workload 查看 Kubernetes 工作负载资源。',
+    },
 ]
 
 

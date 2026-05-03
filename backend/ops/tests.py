@@ -6,7 +6,18 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
-from ops.models import Alert, DockerHost, GrafanaSetting, Host, K8sCluster, K8sConfigRevision
+from ops.models import (
+    Alert,
+    DockerHost,
+    GrafanaSetting,
+    Host,
+    K8sCluster,
+    K8sConfigRevision,
+    LogDataSource,
+    ObservabilityDataSourceLink,
+    TracingDataSource,
+)
+from ops.tracing_providers import _tempo_flatten_trace, _trace_detail_from_spans
 
 
 TEST_LOG_PROVIDER_CONFIGS = {
@@ -431,6 +442,244 @@ class ObservabilityViewsTests(TestCase):
         self.user = get_user_model().objects.create_superuser('observer-admin', 'observer@example.com', 'Admin@123456')
         self.client.force_authenticate(user=self.user)
 
+    def test_datasource_link_resolves_trace_to_loki_query(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            trace_id_fields=['trace_id', 'traceId'],
+            log_query_template='${__tags} | json | trace_id="${__trace.traceId}"',
+            log_label_mappings=[{'trace_tag': 'service.name', 'log_label': 'container'}],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_trace_to_logs/',
+            {
+                'trace_id': '0123456789abcdef0123456789abcdef',
+                'tracing_datasource_id': trace_source.id,
+                'tags': {'service.name': 'checkout'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['log_datasource']['id'], log_source.id)
+        self.assertEqual(payload['query'], '{container="checkout"} | json | trace_id="0123456789abcdef0123456789abcdef"')
+
+    def test_datasource_link_resolves_trace_to_grafana_dashboard(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            trace_to_grafana_enabled=True,
+            grafana_dashboard_key='apm-overview',
+            grafana_variable_mappings=[{'trace_tag': 'service.name', 'variable': 'service'}],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_trace_to_grafana/',
+            {
+                'trace_id': '0123456789abcdef0123456789abcdef',
+                'tracing_datasource_id': trace_source.id,
+                'tags': {'service.name': 'checkout'},
+                'from': 1710000000000,
+                'to': 1710000300000,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['dashboard']['key'], 'apm-overview')
+        self.assertEqual(payload['query']['dashboard'], 'apm-overview')
+        self.assertEqual(payload['query']['traceId'], '0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['query']['var-service'], 'checkout')
+        self.assertEqual(payload['query']['from'], 1710000000000)
+
+    def test_datasource_link_resolves_log_to_grafana_dashboard(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            log_to_grafana_enabled=True,
+            grafana_dashboard_key='apm-overview',
+            log_label_mappings=[{'trace_tag': 'service.name', 'log_label': 'container'}],
+            grafana_variable_mappings=[{'trace_tag': 'service.name', 'variable': 'service'}],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_log_to_grafana/',
+            {
+                'trace_id': '0123456789abcdef0123456789abcdef',
+                'log_datasource_id': log_source.id,
+                'attributes': {'container': 'checkout'},
+                'message': 'checkout failed',
+                'from': 1710000000000,
+                'to': 1710000300000,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['dashboard']['key'], 'apm-overview')
+        self.assertEqual(payload['query']['dashboard'], 'apm-overview')
+        self.assertEqual(payload['query']['source'], 'log')
+        self.assertEqual(payload['query']['traceId'], '0123456789abcdef0123456789abcdef')
+        self.assertEqual(payload['query']['var-service'], 'checkout')
+
+    def test_datasource_link_resolves_workload_dashboard_to_loki_query(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            grafana_dashboard_key='kubernetes-compute-resources-workload',
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+            grafana_variable_mappings=[
+                {'trace_tag': 'service.name', 'variable': 'workload'},
+                {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+            ],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_grafana_to_logs/',
+            {
+                'dashboard_key': 'kubernetes-compute-resources-workload',
+                'var-workload': 'checkout',
+                'var-namespace': 'default',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['log_datasource']['id'], log_source.id)
+        self.assertEqual(payload['tags']['service.name'], 'checkout')
+        self.assertEqual(payload['tags']['service.namespace'], 'default')
+        self.assertEqual(payload['query'], '{container="checkout",namespace="default"}')
+
+    def test_datasource_link_resolves_workload_dashboard_to_trace_target(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            grafana_dashboard_key='kubernetes-compute-resources-workload',
+            grafana_variable_mappings=[
+                {'trace_tag': 'service.name', 'variable': 'workload'},
+                {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+            ],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_grafana_to_trace/',
+            {
+                'dashboard_key': 'Kubernetes / Compute Resources / Workload',
+                'query': {
+                    'var-workload': 'checkout',
+                    'var-namespace': 'default',
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['tracing_datasource']['id'], trace_source.id)
+        self.assertEqual(payload['service'], 'checkout')
+        self.assertEqual(payload['tags']['service.namespace'], 'default')
+
+    def test_datasource_link_resolves_log_to_trace_target(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            trace_id_fields=['trace_id'],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_log_to_trace/',
+            {
+                'log_datasource_id': log_source.id,
+                'attributes': {'trace_id': 'abcdef0123456789abcdef0123456789'},
+                'message': 'checkout failed',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['trace_id'], 'abcdef0123456789abcdef0123456789')
+        self.assertEqual(payload['tracing_datasource']['id'], trace_source.id)
+
     def test_observability_overview_falls_back_to_demo_without_skywalking_oap(self):
         with override_settings(
             OBSERVABILITY_CONFIG={
@@ -457,7 +706,7 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(payload['modules']['tracing']['source'], 'demo')
         self.assertEqual(payload['modules']['tracing']['provider'], 'skywalking')
         self.assertEqual(payload['modules']['grafana']['source'], 'demo')
-        self.assertEqual(payload['summary']['dashboard_count'], 4)
+        self.assertEqual(payload['summary']['dashboard_count'], 5)
         self.assertGreaterEqual(payload['summary']['service_count'], 1)
         self.assertTrue(any(item['provider'] == 'demo' for item in payload['providers']))
 
@@ -774,7 +1023,7 @@ class ObservabilityViewsTests(TestCase):
                     'query_url': 'http://tempo.example.com',
                     'ui_url': 'http://grafana.example.com/explore',
                     'authorization': 'Bearer secret-token',
-                    'demo_mode': False,
+                    'demo_mode': True,
                 },
             },
             format='json',
@@ -783,6 +1032,7 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(response.status_code, 201)
         payload = response.json()
         self.assertEqual(payload['provider'], 'tempo')
+        self.assertIs(payload['config']['demo_mode'], False)
         self.assertEqual(payload['config']['authorization'], 'configured')
 
         list_response = self.client.get('/api/observability/tracing/datasources/')
@@ -1141,6 +1391,67 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(search_response.status_code, 400)
         self.assertIn('provider 与链路数据源类型不一致', catalog_response.json()['detail'])
         self.assertIn('provider 与链路数据源类型不一致', search_response.json()['detail'])
+
+    def test_trace_detail_preserves_tempo_resource_and_scope_attributes(self):
+        detail = _trace_detail_from_spans('tempo-trace-1', [
+            {
+                'span_id': 'span-root',
+                'parent_span_id': '',
+                'service_code': 'api-gateway',
+                'endpoint_name': 'GET /api/products',
+                'start_time': '2026-05-03T12:00:00+00:00',
+                'end_time': '2026-05-03T12:00:01+00:00',
+                'duration_ms': 1000,
+                'tags': [{'key': 'http.method', 'value': 'GET'}],
+                'resource_tags': [
+                    {'key': 'service.name', 'value': 'api-gateway'},
+                    {'key': 'k8s.pod.name', 'value': 'api-gateway-123'},
+                ],
+                'scope_tags': [{'key': 'telemetry.scope.name', 'value': 'opentelemetry.instrumentation.django'}],
+            }
+        ])
+
+        span = detail['spans'][0]
+        self.assertEqual(span['resource_tags'][1]['key'], 'k8s.pod.name')
+        self.assertEqual(span['scope_tags'][0]['value'], 'opentelemetry.instrumentation.django')
+
+    def test_tempo_flatten_trace_keeps_full_resource_attributes(self):
+        spans = _tempo_flatten_trace({
+            'batches': [
+                {
+                    'resource': {
+                        'attributes': {
+                            'service.name': {'stringValue': 'api-gateway'},
+                            'k8s.namespace.name': {'stringValue': 'default'},
+                            'k8s.pod.name': {'stringValue': 'api-gateway-123'},
+                            'telemetry.sdk.language': {'stringValue': 'python'},
+                        }
+                    },
+                    'scopeSpans': [
+                        {
+                            'scope': {'name': 'opentelemetry.instrumentation.django', 'version': '0.45b0'},
+                            'spans': [
+                                {
+                                    'spanId': 'span-root',
+                                    'name': 'GET /api/products',
+                                    'startTimeUnixNano': '1770000000000000000',
+                                    'endTimeUnixNano': '1770000001000000000',
+                                    'attributes': [{'key': 'http.method', 'value': {'stringValue': 'GET'}}],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        })
+
+        self.assertEqual(len(spans), 1)
+        resource_keys = {item['key'] for item in spans[0]['resource_tags']}
+        scope_keys = {item['key'] for item in spans[0]['scope_tags']}
+        self.assertIn('k8s.namespace.name', resource_keys)
+        self.assertIn('k8s.pod.name', resource_keys)
+        self.assertIn('telemetry.sdk.language', resource_keys)
+        self.assertIn('telemetry.scope.name', scope_keys)
 
     @patch('ops.tracing_providers.http_requests.post')
     def test_trace_detail_returns_span_summary_from_skywalking(self, mock_post):

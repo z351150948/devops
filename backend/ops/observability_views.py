@@ -1,5 +1,8 @@
 ﻿from urllib.parse import quote
 
+import json
+import re
+
 from django.conf import settings
 from django.db.models import Count
 from rest_framework import status, viewsets
@@ -12,8 +15,13 @@ from eventwall.models import EventRecord
 from eventwall.services import record_event
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 from rbac.services import user_has_permissions
-from .models import Alert, GrafanaSetting, LogDataSource, TracingDataSource
-from .serializers import AlertSerializer, GrafanaSettingSerializer, TracingDataSourceSerializer
+from .models import Alert, GrafanaSetting, LogDataSource, ObservabilityDataSourceLink, TracingDataSource
+from .serializers import (
+    AlertSerializer,
+    GrafanaSettingSerializer,
+    ObservabilityDataSourceLinkSerializer,
+    TracingDataSourceSerializer,
+)
 from .tracing_providers import (
     DEMO_TRACES,
     ObservabilityError,
@@ -30,6 +38,7 @@ DEMO_GRAFANA_DASHBOARDS = [
     {'key': 'infra-overview', 'title': '基础设施总览', 'slug': 'infra-overview', 'path': '/d/infra-overview', 'panel_count': 14, 'tags': ['Node', 'CPU', 'Memory'], 'description': '聚合节点 CPU、内存、磁盘与 Pod 负载走势。'},
     {'key': 'log-drilldown', 'title': '日志钻取看板', 'slug': 'log-drilldown', 'path': '/d/log-drilldown', 'panel_count': 12, 'tags': ['Loki', 'Error', 'Audit'], 'description': '配合日志中心快速回放错误时段与关键日志。'},
     {'key': 'ingress-slo', 'title': '入口流量与 SLO', 'slug': 'ingress-slo', 'path': '/d/ingress-slo', 'panel_count': 10, 'tags': ['Nginx', 'Latency', 'Availability'], 'description': '聚焦入口 QPS、响应时间分位和可用性目标。'},
+    {'key': 'kubernetes-compute-resources-workload', 'title': 'Kubernetes / Compute Resources / Workload', 'slug': 'kubernetes-compute-resources-workload', 'path': '/d/k8s-resources-workload', 'panel_count': 16, 'tags': ['Kubernetes', 'Workload', 'Compute'], 'description': '按 namespace 和 workload 查看 Kubernetes 工作负载资源。'},
 ]
 
 
@@ -51,12 +60,261 @@ def _observability_access(request):
         'alerts': _has_permission(request, 'ops.alert.view'),
         'trace': _has_permission(request, 'ops.trace.view'),
         'trace_datasource': _has_permission(request, 'ops.trace.datasource.view'),
+        'links': _has_permission(request, 'ops.observability.link.view'),
         'grafana': _has_permission(request, 'ops.grafana.view'),
     }
 
 
 def _observability_defaults():
     return getattr(settings, 'OBSERVABILITY_CONFIG', {}) or {}
+
+
+DEFAULT_TRACE_ID_FIELDS = ['trace_id', 'traceId', 'traceID', 'trace.id', 'otelTraceID']
+DEFAULT_TRACE_ID_REGEX = re.compile(r'(?:"?(?:trace_id|traceId|traceID|trace\.id)"?\s*[:=]\s*"?(?P<trace>[0-9a-fA-F]{16,32})"?)')
+DEFAULT_LOG_QUERY_TEMPLATE = '${__tags} | json | trace_id="${__trace.traceId}"'
+DEFAULT_LOG_LABEL_MAPPINGS = [
+    {'trace_tag': 'service.name', 'log_label': 'container'},
+    {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+]
+DEFAULT_GRAFANA_VARIABLE_MAPPINGS = [
+    {'trace_tag': 'service.name', 'variable': 'workload'},
+    {'trace_tag': 'service.namespace', 'variable': 'namespace'},
+]
+
+
+def _normalize_trace_id_fields(values):
+    fields = []
+    for item in values or DEFAULT_TRACE_ID_FIELDS:
+        text = str(item or '').strip()
+        if text and text not in fields:
+            fields.append(text)
+    return fields
+
+
+def _normalize_label_mappings(values):
+    mappings = []
+    for item in values or DEFAULT_LOG_LABEL_MAPPINGS:
+        if not isinstance(item, dict):
+            continue
+        trace_tag = str(item.get('trace_tag') or '').strip()
+        log_label = str(item.get('log_label') or '').strip()
+        if trace_tag and log_label:
+            mappings.append({'trace_tag': trace_tag, 'log_label': log_label})
+    return mappings or list(DEFAULT_LOG_LABEL_MAPPINGS)
+
+
+def _normalize_grafana_variable_mappings(values):
+    mappings = []
+    for item in values or DEFAULT_GRAFANA_VARIABLE_MAPPINGS:
+        if not isinstance(item, dict):
+            continue
+        trace_tag = str(item.get('trace_tag') or '').strip()
+        variable = str(item.get('variable') or '').strip()
+        if trace_tag and variable:
+            mappings.append({'trace_tag': trace_tag, 'variable': variable})
+    return mappings or list(DEFAULT_GRAFANA_VARIABLE_MAPPINGS)
+
+
+def _trace_id_from_mapping(attributes, fields=None, message='', regex=''):
+    fields = _normalize_trace_id_fields(fields)
+    attributes = attributes or {}
+    if isinstance(attributes, dict):
+        for field in fields:
+            for candidate in (field, field.replace('.', '_')):
+                value = attributes.get(candidate)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        for key, value in attributes.items():
+            key_text = str(key).lower().replace('.', '_')
+            if key_text in {'trace_id', 'traceid', 'oteltraceid'} and isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(message, str) and message.strip():
+        try:
+            parsed = json.loads(message)
+            if isinstance(parsed, dict):
+                nested = _trace_id_from_mapping(parsed, fields=fields, message='', regex=regex)
+                if nested:
+                    return nested
+        except ValueError:
+            pass
+        pattern = DEFAULT_TRACE_ID_REGEX
+        if regex:
+            try:
+                pattern = re.compile(regex)
+            except re.error:
+                pattern = DEFAULT_TRACE_ID_REGEX
+        match = pattern.search(message)
+        if match:
+            return (match.groupdict().get('trace') or (match.group(1) if match.lastindex else match.group(0))).strip()
+    return ''
+
+
+def _render_log_selector(tags, mappings):
+    tags = tags or {}
+    mappings = _normalize_label_mappings(mappings)
+    selector_parts = []
+    for item in mappings:
+        value = tags.get(item['trace_tag'])
+        if isinstance(value, str) and value.strip():
+            selector_parts.append(f'{item["log_label"]}="{value.strip()}"')
+    return '{' + ','.join(selector_parts) + '}' if selector_parts else ''
+
+
+def _render_log_query(link, trace_id, tags=None):
+    template = (link.log_query_template or DEFAULT_LOG_QUERY_TEMPLATE).strip() or DEFAULT_LOG_QUERY_TEMPLATE
+    selector = _render_log_selector(tags, link.log_label_mappings)
+    query = template.replace('${__tags}', selector)
+    query = query.replace('${__trace.traceId}', trace_id)
+    query = query.replace('${__trace.traceID}', trace_id)
+    query = query.replace('${__trace.id}', trace_id)
+    query = query.replace('${traceId}', trace_id)
+    if not trace_id:
+        query = re.sub(r'\s*\|\s*(?:json\s*\|\s*)?trace_?id\s*=\s*""', '', query, flags=re.IGNORECASE)
+    return query.strip()
+
+
+def _resolve_observability_link(log_datasource_id='', tracing_datasource_id='', default_to_enabled=True):
+    queryset = ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource').filter(is_enabled=True)
+    has_filter = bool(log_datasource_id or tracing_datasource_id)
+    if log_datasource_id:
+        queryset = queryset.filter(log_datasource_id=log_datasource_id)
+    if tracing_datasource_id:
+        queryset = queryset.filter(tracing_datasource_id=tracing_datasource_id)
+    link = queryset.order_by('-is_default', 'name').first()
+    if link or has_filter or not default_to_enabled:
+        return link
+    return (
+        ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource')
+        .filter(is_enabled=True)
+        .order_by('-is_default', 'name')
+        .first()
+    )
+
+
+def _resolve_observability_link_for_dashboard(dashboard_key=''):
+    key = str(dashboard_key or '').strip()
+    queryset = ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource').filter(is_enabled=True)
+    if key:
+        exact = queryset.filter(grafana_dashboard_key__iexact=key).order_by('-is_default', 'name').first()
+        if exact:
+            return exact
+    return queryset.order_by('-is_default', 'name').first()
+
+
+def _link_payload(link):
+    data = ObservabilityDataSourceLinkSerializer(link).data
+    data['trace_id_fields'] = data.get('trace_id_fields') or DEFAULT_TRACE_ID_FIELDS
+    data['trace_id_regex'] = data.get('trace_id_regex') or DEFAULT_TRACE_ID_REGEX.pattern
+    data['log_query_template'] = data.get('log_query_template') or DEFAULT_LOG_QUERY_TEMPLATE
+    data['log_label_mappings'] = data.get('log_label_mappings') or DEFAULT_LOG_LABEL_MAPPINGS
+    data['grafana_variable_mappings'] = data.get('grafana_variable_mappings') or DEFAULT_GRAFANA_VARIABLE_MAPPINGS
+    return data
+
+
+def _find_grafana_dashboard(dashboard_key=''):
+    grafana = _grafana_meta()
+    dashboards = grafana.get('dashboards') or []
+    key = str(dashboard_key or '').strip()
+    if key:
+        normalized_key = key.lower()
+        for dashboard in dashboards:
+            candidates = [
+                dashboard.get('key'),
+                dashboard.get('slug'),
+                dashboard.get('title'),
+            ]
+            if any(str(candidate or '').strip().lower() == normalized_key for candidate in candidates):
+                return grafana, dashboard
+    for dashboard in dashboards:
+        tags = {str(tag).lower() for tag in dashboard.get('tags') or []}
+        title = str(dashboard.get('title') or '').lower()
+        if 'apm' in tags or '应用' in tags or 'trace' in tags or '链路' in title or 'apm' in title:
+            return grafana, dashboard
+    return grafana, dashboards[0] if dashboards else {}
+
+
+def _render_grafana_query(link, trace_id, tags=None):
+    tags = tags or {}
+    query = {'traceId': trace_id}
+    service = tags.get('service.name') or tags.get('service') or ''
+    if isinstance(service, str) and service.strip():
+        query['service'] = service.strip()
+    for item in _normalize_grafana_variable_mappings(link.grafana_variable_mappings):
+        value = tags.get(item['trace_tag'])
+        if isinstance(value, str) and value.strip():
+            query[f'var-{item["variable"]}'] = value.strip()
+    return query
+
+
+def _dashboard_context_from_request(data):
+    context = {}
+    for key, value in (data or {}).items():
+        if key in {'dashboard_key', 'dashboard', 'log_datasource_id', 'tracing_datasource_id', 'datasource_id'}:
+            continue
+        if isinstance(value, str) and value.strip():
+            context[key] = value.strip()
+        elif isinstance(value, (int, float)):
+            context[key] = value
+    raw_query = data.get('query') if isinstance(data, dict) else {}
+    if isinstance(raw_query, dict):
+        for key, value in raw_query.items():
+            if isinstance(value, str) and value.strip():
+                context[key] = value.strip()
+            elif isinstance(value, (int, float)):
+                context[key] = value
+    return context
+
+
+def _tags_from_grafana_context(link, context):
+    tags = {}
+    context = context or {}
+    for item in _normalize_grafana_variable_mappings(link.grafana_variable_mappings):
+        value = context.get(f'var-{item["variable"]}') or context.get(item['variable'])
+        if isinstance(value, str) and value.strip():
+            tags[item['trace_tag']] = value.strip()
+    service = context.get('service') or context.get('var-service') or context.get('workload') or context.get('var-workload')
+    namespace = context.get('namespace') or context.get('var-namespace')
+    if isinstance(service, str) and service.strip() and not tags.get('service.name'):
+        tags['service.name'] = service.strip()
+    if isinstance(namespace, str) and namespace.strip() and not tags.get('service.namespace'):
+        tags['service.namespace'] = namespace.strip()
+    return tags
+
+
+def _tags_from_log_attributes(link, attributes):
+    tags = dict(attributes or {})
+    for item in _normalize_label_mappings(link.log_label_mappings):
+        value = attributes.get(item['log_label']) if isinstance(attributes, dict) else ''
+        if isinstance(value, str) and value.strip() and not tags.get(item['trace_tag']):
+            tags[item['trace_tag']] = value.strip()
+    return tags
+
+
+def _grafana_resolve_payload(link, trace_id, tags=None, request_data=None):
+    grafana, dashboard = _find_grafana_dashboard(link.grafana_dashboard_key)
+    if not dashboard:
+        return None
+    dashboard_key = dashboard.get('key') or dashboard.get('slug') or link.grafana_dashboard_key
+    query = _render_grafana_query(link, trace_id, tags=tags)
+    query.update({
+        'dashboard': dashboard_key,
+        'source': 'trace',
+    })
+    request_data = request_data or {}
+    if request_data.get('from'):
+        query['from'] = request_data.get('from')
+    if request_data.get('to'):
+        query['to'] = request_data.get('to')
+    return {
+        'link': _link_payload(link),
+        'trace_id': trace_id,
+        'grafana': {
+            'configured': grafana.get('configured'),
+            'url': grafana.get('url'),
+        },
+        'dashboard': dashboard,
+        'query': query,
+    }
 
 
 def _join_external_url(base, path=''):
@@ -167,6 +425,188 @@ def _alert_module_summary():
         'info': Alert.objects.filter(level='info').count(),
         'recent': AlertSerializer(latest, many=True).data,
     }
+
+
+class ObservabilityDataSourceLinkViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource').all()
+    serializer_class = ObservabilityDataSourceLinkSerializer
+    pagination_class = None
+    event_module = 'ops'
+    event_resource_type = 'observability_datasource_link'
+    event_resource_label = '可观测数据源关联'
+    event_resource_name_fields = ('name',)
+    demo_account_allowed_actions = {'resolve_trace_to_logs', 'resolve_log_to_trace', 'resolve_trace_to_grafana', 'resolve_log_to_grafana', 'resolve_grafana_to_logs', 'resolve_grafana_to_trace'}
+    rbac_permissions = {
+        'list': ['ops.observability.link.view'],
+        'retrieve': ['ops.observability.link.view'],
+        'create': ['ops.observability.link.manage'],
+        'update': ['ops.observability.link.manage'],
+        'partial_update': ['ops.observability.link.manage'],
+        'destroy': ['ops.observability.link.manage'],
+        'resolve_trace_to_logs': ['ops.observability.link.view', 'ops.log.query'],
+        'resolve_log_to_trace': ['ops.observability.link.view', 'ops.trace.view'],
+        'resolve_trace_to_grafana': ['ops.observability.link.view', 'ops.grafana.view'],
+        'resolve_log_to_grafana': ['ops.observability.link.view', 'ops.grafana.view'],
+        'resolve_grafana_to_logs': ['ops.observability.link.view', 'ops.log.query'],
+        'resolve_grafana_to_trace': ['ops.observability.link.view', 'ops.trace.view'],
+    }
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        log_datasource_id = self.request.query_params.get('log_datasource_id')
+        tracing_datasource_id = self.request.query_params.get('tracing_datasource_id')
+        is_enabled = self.request.query_params.get('is_enabled')
+        if log_datasource_id:
+            queryset = queryset.filter(log_datasource_id=log_datasource_id)
+        if tracing_datasource_id:
+            queryset = queryset.filter(tracing_datasource_id=tracing_datasource_id)
+        if is_enabled in ('true', 'false'):
+            queryset = queryset.filter(is_enabled=is_enabled == 'true')
+        return queryset.order_by('-is_default', 'name')
+
+    @action(detail=False, methods=['post'])
+    def resolve_trace_to_logs(self, request):
+        trace_id = str(request.data.get('trace_id') or '').strip()
+        if not trace_id:
+            return Response({'detail': '缺少 trace_id'}, status=status.HTTP_400_BAD_REQUEST)
+        link = _resolve_observability_link(
+            tracing_datasource_id=request.data.get('tracing_datasource_id') or request.data.get('datasource_id') or '',
+        )
+        if not link or not link.trace_to_log_enabled:
+            return Response({'detail': '未找到可用的链路到日志数据源关联'}, status=status.HTTP_404_NOT_FOUND)
+        tags = request.data.get('tags') if isinstance(request.data.get('tags'), dict) else {}
+        query = _render_log_query(link, trace_id, tags=tags)
+        return Response({
+            'link': _link_payload(link),
+            'trace_id': trace_id,
+            'log_datasource': {
+                'id': link.log_datasource_id,
+                'name': link.log_datasource.name,
+                'provider': link.log_datasource.provider,
+            },
+            'query': query,
+            'source': link.log_datasource.name,
+            'window_minutes': link.window_minutes,
+            'span_start_shift': link.span_start_shift,
+            'span_end_shift': link.span_end_shift,
+        })
+
+    @action(detail=False, methods=['post'])
+    def resolve_log_to_trace(self, request):
+        link = _resolve_observability_link(
+            log_datasource_id=request.data.get('log_datasource_id') or request.data.get('datasource_id') or '',
+        )
+        if not link or not link.log_to_trace_enabled:
+            return Response({'detail': '未找到可用的日志到链路数据源关联'}, status=status.HTTP_404_NOT_FOUND)
+
+        attributes = request.data.get('attributes') if isinstance(request.data.get('attributes'), dict) else {}
+        message = request.data.get('message') or ''
+        trace_id = (
+            str(request.data.get('trace_id') or '').strip()
+            or _trace_id_from_mapping(attributes, fields=link.trace_id_fields, message=message, regex=link.trace_id_regex)
+        )
+        if not trace_id:
+            return Response({'detail': '未能从日志内容中解析 Trace ID'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'link': _link_payload(link),
+            'trace_id': trace_id,
+            'tracing_datasource': {
+                'id': link.tracing_datasource_id,
+                'name': link.tracing_datasource.name,
+                'provider': link.tracing_datasource.provider,
+            },
+        })
+
+    @action(detail=False, methods=['post'])
+    def resolve_trace_to_grafana(self, request):
+        trace_id = str(request.data.get('trace_id') or '').strip()
+        if not trace_id:
+            return Response({'detail': '缺少 trace_id'}, status=status.HTTP_400_BAD_REQUEST)
+        link = _resolve_observability_link(
+            tracing_datasource_id=request.data.get('tracing_datasource_id') or request.data.get('datasource_id') or '',
+        )
+        if not link or not link.trace_to_grafana_enabled:
+            return Response({'detail': '未找到可用的链路到 Grafana 看板关联'}, status=status.HTTP_404_NOT_FOUND)
+        tags = request.data.get('tags') if isinstance(request.data.get('tags'), dict) else {}
+        payload = _grafana_resolve_payload(link, trace_id, tags=tags, request_data=request.data)
+        if not payload:
+            return Response({'detail': '未找到可用的 Grafana 看板配置'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(payload)
+
+    @action(detail=False, methods=['post'])
+    def resolve_log_to_grafana(self, request):
+        link = _resolve_observability_link(
+            log_datasource_id=request.data.get('log_datasource_id') or request.data.get('datasource_id') or '',
+        )
+        if not link or not link.log_to_grafana_enabled:
+            return Response({'detail': '未找到可用的日志到 Grafana 看板关联'}, status=status.HTTP_404_NOT_FOUND)
+
+        attributes = request.data.get('attributes') if isinstance(request.data.get('attributes'), dict) else {}
+        message = request.data.get('message') or ''
+        trace_id = (
+            str(request.data.get('trace_id') or '').strip()
+            or _trace_id_from_mapping(attributes, fields=link.trace_id_fields, message=message, regex=link.trace_id_regex)
+        )
+        if not trace_id:
+            return Response({'detail': '未能从日志内容中解析 Trace ID'}, status=status.HTTP_400_BAD_REQUEST)
+        tags = _tags_from_log_attributes(link, attributes)
+        payload = _grafana_resolve_payload(link, trace_id, tags=tags, request_data=request.data)
+        if not payload:
+            return Response({'detail': '未找到可用的 Grafana 看板配置'}, status=status.HTTP_404_NOT_FOUND)
+        payload['query']['source'] = 'log'
+        return Response(payload)
+
+    @action(detail=False, methods=['post'])
+    def resolve_grafana_to_logs(self, request):
+        dashboard_key = request.data.get('dashboard_key') or request.data.get('dashboard') or request.data.get('grafana_dashboard_key') or ''
+        link = _resolve_observability_link_for_dashboard(dashboard_key)
+        if not link or not link.grafana_to_log_enabled:
+            return Response({'detail': '未找到可用的 Grafana 看板到日志关联'}, status=status.HTTP_404_NOT_FOUND)
+        context = _dashboard_context_from_request(request.data)
+        tags = _tags_from_grafana_context(link, context)
+        if not tags:
+            return Response({'detail': '看板上下文缺少可用于日志查询的变量'}, status=status.HTTP_400_BAD_REQUEST)
+        trace_id = str(context.get('traceId') or context.get('trace_id') or '').strip()
+        query = _render_log_query(link, trace_id, tags=tags)
+        if not query:
+            return Response({'detail': '看板上下文缺少可用于日志查询的变量'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            'link': _link_payload(link),
+            'dashboard_key': dashboard_key,
+            'trace_id': trace_id,
+            'tags': tags,
+            'log_datasource': {
+                'id': link.log_datasource_id,
+                'name': link.log_datasource.name,
+                'provider': link.log_datasource.provider,
+            },
+            'query': query,
+            'window_minutes': link.window_minutes,
+        })
+
+    @action(detail=False, methods=['post'])
+    def resolve_grafana_to_trace(self, request):
+        dashboard_key = request.data.get('dashboard_key') or request.data.get('dashboard') or request.data.get('grafana_dashboard_key') or ''
+        link = _resolve_observability_link_for_dashboard(dashboard_key)
+        if not link or not link.grafana_to_trace_enabled:
+            return Response({'detail': '未找到可用的 Grafana 看板到链路关联'}, status=status.HTTP_404_NOT_FOUND)
+        context = _dashboard_context_from_request(request.data)
+        tags = _tags_from_grafana_context(link, context)
+        service = tags.get('service.name') or context.get('service') or context.get('var-service') or ''
+        trace_id = str(context.get('traceId') or context.get('trace_id') or '').strip()
+        return Response({
+            'link': _link_payload(link),
+            'dashboard_key': dashboard_key,
+            'trace_id': trace_id,
+            'tags': tags,
+            'service': service,
+            'tracing_datasource': {
+                'id': link.tracing_datasource_id,
+                'name': link.tracing_datasource.name,
+                'provider': link.tracing_datasource.provider,
+            },
+            'window_minutes': link.window_minutes,
+        })
 
 
 class TracingDataSourceViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.ModelViewSet):
@@ -320,7 +760,7 @@ def observability_overview(request):
     access = _observability_access(request)
     denied = _deny_if_missing_any(
         request,
-        ['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.grafana.view'],
+        ['ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view', 'ops.grafana.view'],
     )
     if denied:
         return denied

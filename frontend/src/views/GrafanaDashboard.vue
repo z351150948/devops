@@ -1,20 +1,27 @@
 <template>
   <div class="observability-page" :class="{ 'is-immersive': fullscreenVisible }">
-    <section v-if="fullscreenVisible && selectedDashboard?.url" class="immersive-shell panel">
+    <section v-if="fullscreenVisible && selectedDashboardUrl" class="immersive-shell panel">
       <div class="immersive-toolbar">
         <div class="immersive-toolbar__meta">
-          <strong>{{ selectedDashboard.title }}</strong>
-          <span>Grafana 看板沉浸展示</span>
+          <div class="immersive-toolbar__title-row">
+            <strong>{{ selectedDashboard.title }}</strong>
+            <div v-if="selectedDashboard.tags?.length" class="dashboard-tags dashboard-tags--inline immersive-toolbar__tags">
+              <span v-for="tag in selectedDashboard.tags" :key="`immersive-${selectedDashboard.key}-${tag}`" class="dashboard-chip">{{ tag }}</span>
+            </div>
+          </div>
+          <span>Grafana 看板展示</span>
         </div>
         <div class="immersive-toolbar__actions">
-          <el-button size="small" @click="openExternal(selectedDashboard.url)">外部打开</el-button>
-          <el-button size="small" type="primary" @click="closeFullscreen">退出沉浸展示</el-button>
+          <el-button size="small" v-if="canViewTracing" type="success" plain @click="openTraceFromDashboard(selectedDashboard)">查链路</el-button>
+          <el-button size="small" v-if="canQueryLogs" type="warning" plain @click="openLogsFromDashboard(selectedDashboard)">查日志</el-button>
+          <el-button size="small" @click="openExternal(selectedDashboardUrl)">外部打开</el-button>
+          <el-button size="small" type="primary" @click="closeFullscreen">退出看板</el-button>
         </div>
       </div>
       <div class="immersive-stage">
         <iframe
           class="immersive-frame"
-          :src="selectedDashboard.url"
+          :src="selectedDashboardUrl"
           :title="`${selectedDashboard.title}-immersive`"
         />
       </div>
@@ -361,6 +368,13 @@ org_role = Viewer</pre>
             <span v-else class="config-url-hint">建议粘贴可直接打开的完整仪表盘地址</span>
           </div>
         </div>
+        <div class="drawer-field drawer-field--inline">
+          <label>展示参数</label>
+          <div class="drawer-inline-control">
+            <el-switch v-model="dashboardDrawer.appendKioskParams" active-text="自动追加 kiosk=true&theme=light" inactive-text="不追加" />
+            <span class="config-url-hint">用于嵌入展示时隐藏 Grafana 菜单并使用浅色主题。</span>
+          </div>
+        </div>
         <div class="drawer-field__hint">
           新建看板会直接写入当前目录；保存后会立刻同步到看板列表。
         </div>
@@ -380,7 +394,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, ArrowRight, Delete, EditPen, Folder, FolderAdd, FolderOpened, Histogram, Link, MoreFilled, Plus, QuestionFilled, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getGrafanaConfig, getObservabilityOverview, updateGrafanaConfig } from '@/api/modules/ops'
+import { getGrafanaConfig, getObservabilityOverview, resolveGrafanaToLogs, resolveGrafanaToTrace, updateGrafanaConfig } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
@@ -416,6 +430,7 @@ const dashboardDrawer = reactive({
   visible: false,
   mode: 'create',
   editingKey: '',
+  appendKioskParams: true,
 })
 const dashboardDraft = reactive(createEmptyDashboard())
 
@@ -707,6 +722,7 @@ const knownFolderOptions = computed(() => {
 const selectedDashboard = computed(() => {
   return filteredDashboards.value.find((item) => item.key === selectedKey.value) || filteredDashboards.value[0] || null
 })
+const selectedDashboardUrl = computed(() => appendGrafanaContext(selectedDashboard.value?.url || ''))
 
 const folderDialogPreviewPath = computed(() => {
   const parent = normalizeFolderPath(folderDialog.parentPath)
@@ -770,6 +786,19 @@ function getDashboardUrlError(url = '') {
     return ''
   } catch {
     return '请输入可直接访问的完整 URL'
+  }
+}
+
+function appendGrafanaDisplayParams(url = '') {
+  const value = String(url || '').trim()
+  if (!value) return ''
+  try {
+    const parsed = new URL(value)
+    parsed.searchParams.set('kiosk', 'true')
+    parsed.searchParams.set('theme', 'light')
+    return parsed.toString()
+  } catch {
+    return value
   }
 }
 
@@ -1066,20 +1095,22 @@ function openDashboardDrawer(source = null) {
   } else {
     resetDashboardDraft(createEmptyDashboard(defaultFolder))
   }
+  dashboardDrawer.appendKioskParams = true
   dashboardDrawer.visible = true
 }
 
 async function submitDashboardDrawer() {
   const title = String(dashboardDraft.title || '').trim()
-  const fullUrl = String(dashboardDraft.full_url || '').trim()
+  const rawFullUrl = String(dashboardDraft.full_url || '').trim()
+  const fullUrl = dashboardDrawer.appendKioskParams ? appendGrafanaDisplayParams(rawFullUrl) : rawFullUrl
   const folder = normalizeFolderPath(dashboardDraft.folder || '')
-  const urlError = getDashboardUrlError(fullUrl)
+  const urlError = getDashboardUrlError(rawFullUrl)
 
   if (!title) {
     ElMessage.error('请填写看板名称')
     return
   }
-  if (!fullUrl) {
+  if (!rawFullUrl) {
     ElMessage.error('请填写完整 Grafana URL')
     return
   }
@@ -1271,7 +1302,11 @@ function syncFromRoute() {
 }
 
 function syncRouteQuery() {
+  const preservedQuery = Object.fromEntries(
+    Object.entries(route.query).filter(([key]) => !['dashboard', 'folder', 'keyword', 'tag', 'fullscreen'].includes(key))
+  )
   const currentQuery = {
+    ...preservedQuery,
     dashboard: selectedKey.value || undefined,
     folder: selectedFolderPath.value || undefined,
     keyword: filters.keyword || undefined,
@@ -1279,13 +1314,7 @@ function syncRouteQuery() {
     fullscreen: fullscreenVisible.value ? '1' : undefined,
   }
   const nextFingerprint = JSON.stringify(currentQuery)
-  const currentFingerprint = JSON.stringify({
-    dashboard: typeof route.query.dashboard === 'string' ? route.query.dashboard : undefined,
-    folder: typeof route.query.folder === 'string' ? route.query.folder : undefined,
-    keyword: typeof route.query.keyword === 'string' ? route.query.keyword : undefined,
-    tag: typeof route.query.tag === 'string' ? route.query.tag : undefined,
-    fullscreen: typeof route.query.fullscreen === 'string' ? route.query.fullscreen : undefined,
-  })
+  const currentFingerprint = JSON.stringify(route.query)
   if (nextFingerprint === currentFingerprint) {
     return
   }
@@ -1298,6 +1327,110 @@ function syncRouteQuery() {
 function openExternal(url) {
   if (url) {
     window.open(url, '_blank', 'noopener,noreferrer')
+  }
+}
+
+function appendGrafanaContext(url) {
+  const value = String(url || '').trim()
+  if (!value) return ''
+  const params = new URLSearchParams()
+  Object.entries(route.query).forEach(([key, raw]) => {
+    if (['dashboard', 'folder', 'keyword', 'tag', 'fullscreen'].includes(key)) return
+    if (!['traceId', 'service', 'provider', 'source', 'from', 'to'].includes(key) && !key.startsWith('var-')) return
+    const values = Array.isArray(raw) ? raw : [raw]
+    values.forEach((item) => {
+      if (item !== undefined && item !== null && String(item).trim()) {
+        params.append(key, String(item))
+      }
+    })
+  })
+  const query = params.toString()
+  if (!query) return value
+  return `${value}${value.includes('?') ? '&' : '?'}${query}`
+}
+
+function dashboardContextFromRoute() {
+  const context = {}
+  Object.entries(route.query).forEach(([key, raw]) => {
+    const values = Array.isArray(raw) ? raw : [raw]
+    const value = values.find((item) => item !== undefined && item !== null && String(item).trim())
+    if (value === undefined || value === null || !String(value).trim()) return
+    if (key.startsWith('var-') || ['traceId', 'trace_id', 'service', 'workload', 'namespace', 'from', 'to'].includes(key)) {
+      context[key] = String(value).trim()
+    }
+  })
+  return context
+}
+
+function dashboardJumpPayload(node) {
+  const context = dashboardContextFromRoute()
+  return {
+    dashboard_key: node?.key || selectedDashboard.value?.key || '',
+    query: context,
+    ...context,
+  }
+}
+
+function firstResolvedTag(resolved, keys = []) {
+  const tags = resolved?.tags || {}
+  for (const key of keys) {
+    const value = tags[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function jumpErrorMessage(error, fallback) {
+  return error?.response?.data?.detail || error?.response?.data?.error || error?.message || fallback
+}
+
+async function openTraceFromDashboard(node) {
+  try {
+    const resolved = await resolveGrafanaToTrace(dashboardJumpPayload(node))
+    const traceId = String(resolved.trace_id || '').trim()
+    const service = String(resolved.service || firstResolvedTag(resolved, ['service.name', 'service']) || '').trim()
+    if (!traceId && !service) {
+      ElMessage.warning('当前看板缺少 workload / service 或 Trace ID，上下文不足，无法跳转链路。')
+      return
+    }
+    router.push({
+      path: '/observability/tracing',
+      query: {
+        traceId: traceId || undefined,
+        service: service || undefined,
+        keyword: traceId ? undefined : service || undefined,
+        provider: resolved.tracing_datasource?.provider || undefined,
+        datasourceId: resolved.tracing_datasource?.id ? String(resolved.tracing_datasource.id) : undefined,
+        window: resolved.window_minutes ? String(resolved.window_minutes) : undefined,
+      },
+    })
+  } catch (error) {
+    ElMessage.error(jumpErrorMessage(error, '看板跳链路失败，请检查数据源关联配置。'))
+  }
+}
+
+async function openLogsFromDashboard(node) {
+  try {
+    const resolved = await resolveGrafanaToLogs(dashboardJumpPayload(node))
+    const query = String(resolved.query || '').trim()
+    if (!query) {
+      ElMessage.warning('当前看板缺少可用于日志查询的标签变量。')
+      return
+    }
+    router.push({
+      path: '/logs/query',
+      query: {
+        traceId: resolved.trace_id || undefined,
+        service: firstResolvedTag(resolved, ['service.name', 'service']) || undefined,
+        logProvider: resolved.log_datasource?.provider || undefined,
+        logDatasourceId: resolved.log_datasource?.id ? String(resolved.log_datasource.id) : undefined,
+        lokiQuery: query,
+        window: resolved.window_minutes ? String(resolved.window_minutes) : '60',
+        autoRun: '1',
+      },
+    })
+  } catch (error) {
+    ElMessage.error(jumpErrorMessage(error, '看板跳日志失败，请检查数据源关联配置。'))
   }
 }
 
@@ -1588,6 +1721,7 @@ onBeforeUnmount(() => {
 }
 
 .dashboard-groups {
+  --dashboard-action-inset: clamp(18px, 3vw, 56px);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1611,7 +1745,26 @@ onBeforeUnmount(() => {
   border: 1px solid rgba(226, 232, 240, 0.92);
   cursor: pointer;
   position: relative;
+  overflow: hidden;
   transition: 0.2s ease;
+}
+
+.group-head::after {
+  content: '';
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 34px;
+  height: 24px;
+  transform: translateY(-50%);
+  background:
+    radial-gradient(circle at 6px 7px, rgba(245, 158, 11, 0.22) 0 2px, transparent 2.4px),
+    radial-gradient(circle at 18px 7px, rgba(148, 163, 184, 0.16) 0 2px, transparent 2.4px),
+    radial-gradient(circle at 30px 7px, rgba(148, 163, 184, 0.11) 0 2px, transparent 2.4px),
+    linear-gradient(90deg, transparent 0, rgba(148, 163, 184, 0.16) 38%, rgba(148, 163, 184, 0.04) 100%);
+  mask-image: linear-gradient(90deg, transparent 0, #000 28%, #000 100%);
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .group-head.is-selected {
@@ -1644,6 +1797,8 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 7px;
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .group-head__toggle {
@@ -1699,6 +1854,9 @@ onBeforeUnmount(() => {
   gap: 6px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-right: var(--dashboard-action-inset);
+  position: relative;
+  z-index: 1;
 }
 
 .group-head__count {
@@ -1737,6 +1895,7 @@ onBeforeUnmount(() => {
 .dashboard-card--tree {
   margin-left: calc(var(--tree-depth) * 18px);
   position: relative;
+  overflow: hidden;
 }
 
 .dashboard-card--tree::before {
@@ -1748,6 +1907,24 @@ onBeforeUnmount(() => {
   width: 1px;
   border-radius: 999px;
   background: rgba(226, 232, 240, 0.82);
+}
+
+.dashboard-card--tree::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  width: 38px;
+  height: 28px;
+  transform: translateY(-50%);
+  background:
+    linear-gradient(90deg, transparent 0 8px, rgba(79, 107, 149, 0.14) 8px 10px, transparent 10px 16px, rgba(148, 163, 184, 0.12) 16px 18px, transparent 18px 24px, rgba(148, 163, 184, 0.08) 24px 26px, transparent 26px),
+    radial-gradient(circle at 10px 7px, rgba(79, 107, 149, 0.12) 0 1.8px, transparent 2.2px),
+    radial-gradient(circle at 22px 15px, rgba(148, 163, 184, 0.13) 0 1.8px, transparent 2.2px),
+    radial-gradient(circle at 34px 9px, rgba(148, 163, 184, 0.09) 0 1.8px, transparent 2.2px);
+  mask-image: linear-gradient(90deg, transparent 0, #000 30%, #000 100%);
+  opacity: 0.56;
+  pointer-events: none;
 }
 
 .dashboard-card.active {
@@ -1771,6 +1948,8 @@ onBeforeUnmount(() => {
 
 .dashboard-row__meta {
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .dashboard-row__mainline {
@@ -1792,7 +1971,10 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+  margin-right: var(--dashboard-action-inset);
   opacity: 0.78;
+  position: relative;
+  z-index: 1;
   transition: opacity 0.18s ease;
 }
 
@@ -2027,6 +2209,19 @@ onBeforeUnmount(() => {
   justify-content: space-between;
 }
 
+.drawer-field--inline {
+  align-items: flex-start;
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+}
+
+.drawer-inline-control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
 .drawer-footer {
   display: flex;
   justify-content: flex-end;
@@ -2064,6 +2259,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+.immersive-toolbar__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .immersive-toolbar__meta strong {
@@ -2076,8 +2280,13 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
+.immersive-toolbar__tags {
+  gap: 5px;
+}
+
 .immersive-toolbar__actions {
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -2113,13 +2322,19 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
+  .dashboard-groups {
+    --dashboard-action-inset: 0px;
+  }
+
   .hero,
   .context-strip,
   .section-head,
   .immersive-toolbar,
-  .dialog-field--inline {
+  .dialog-field--inline,
+  .drawer-field--inline {
     align-items: stretch;
     flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .dashboard-row {

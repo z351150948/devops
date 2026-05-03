@@ -32,6 +32,40 @@ SENSITIVE_KEYS = {
     'access_key_id',
     'access_key_secret',
 }
+TRACE_ID_KEYS = ('trace_id', 'traceId', 'traceID', 'trace.id', 'trace.trace_id', 'otelTraceID')
+TRACE_ID_PATTERN = re.compile(r'(?:"?(?:trace_id|traceId|traceID|trace\.id)"?\s*[:=]\s*"?(?P<trace>[0-9a-fA-F]{16,32})"?)')
+
+
+def _extract_trace_id(attributes, message=''):
+    if isinstance(attributes, dict):
+        for key in TRACE_ID_KEYS:
+            value = attributes.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for key, value in attributes.items():
+            if str(key).lower().replace('.', '_') in {'trace_id', 'traceid'} and isinstance(value, str) and value.strip():
+                return value.strip()
+    if isinstance(message, str) and message.strip():
+        try:
+            parsed = json.loads(message)
+            if isinstance(parsed, dict):
+                nested = _extract_trace_id(parsed, '')
+                if nested:
+                    return nested
+        except ValueError:
+            pass
+        match = TRACE_ID_PATTERN.search(message)
+        if match:
+            return match.group('trace')
+    return ''
+
+
+def _with_trace_id(attributes, message=''):
+    enriched = dict(attributes or {})
+    trace_id = _extract_trace_id(enriched, message)
+    if trace_id and not enriched.get('trace_id'):
+        enriched['trace_id'] = trace_id
+    return enriched
 
 
 class ProviderError(Exception):
@@ -145,11 +179,19 @@ def _safe_json(response):
         return {'raw': response.text}
 
 
+def _friendly_provider_error(provider, message):
+    text = str(message or '')
+    if provider == 'Loki' and 'empty-compatible value' in text:
+        return 'Loki 查询条件无效：标签选择器必须至少包含一个非空匹配条件，例如 app=~".+"，不能只使用 app=~".*" 或 job!="" 这类可能匹配空值的条件。'
+    return text
+
+
 def _raise_for_status(response, provider):
     if response.ok:
         return
     payload = _safe_json(response)
     message = payload.get('error') or payload.get('message') or f'{provider} request failed'
+    message = _friendly_provider_error(provider, message)
     raise ProviderError(message, status_code=response.status_code, detail=payload)
 
 
@@ -1036,12 +1078,13 @@ def _query_loki(config, payload):
         for entry in _demo_loki_entries(start_ms, end_ms):
             if not _matches_demo_loki_query(entry, query):
                 continue
+            attributes = _with_trace_id({**entry['stream'], **entry.get('attributes', {})}, entry['message'])
             matched_logs.append({
                 'timestamp': _iso_from_ns(entry['timestamp_ns']),
                 'message': entry['message'],
                 'level': _detect_level(entry['message'], entry['stream']),
                 'source': entry['stream'].get('job') or entry['stream'].get('app') or 'loki',
-                'attributes': {**entry['stream'], **entry.get('attributes', {})},
+                'attributes': attributes,
             })
         return {
             'provider': 'loki',
@@ -1065,13 +1108,14 @@ def _query_loki(config, payload):
     for stream in streams:
         labels = stream.get('stream', {})
         for timestamp, message in stream.get('values', []):
+            attributes = _with_trace_id(labels, message)
             logs.append({
                 'sort_key': int(timestamp),
                 'timestamp': _iso_from_ns(timestamp),
                 'message': message,
                 'level': _detect_level(message, labels),
                 'source': labels.get('job') or labels.get('app') or labels.get('service_name') or 'loki',
-                'attributes': labels,
+                'attributes': attributes,
             })
     logs.sort(key=lambda item: item['sort_key'], reverse=True)
     for item in logs:
@@ -1152,7 +1196,7 @@ def _query_elk(config, payload):
             'message': _pick_message(source, message_fields),
             'level': _detect_level(source.get('level') or source.get('log.level') or '', source) if source else 'unknown',
             'source': hit.get('_index') or 'elasticsearch',
-            'attributes': attributes,
+            'attributes': _with_trace_id(attributes, _pick_message(source, message_fields)),
         })
         if logs[-1]['level'] == 'unknown':
             logs[-1]['level'] = _detect_level(logs[-1]['message'], source)
@@ -1209,7 +1253,7 @@ def _query_sls(config, payload):
             'message': _pick_message(item, ['message', 'content', 'msg', '__content__']),
             'level': _detect_level(item.get('level') or item.get('severity') or '', item),
             'source': logstore,
-            'attributes': item,
+            'attributes': _with_trace_id(item, _pick_message(item, ['message', 'content', 'msg', '__content__'])),
         })
         if logs[-1]['level'] == 'unknown':
             logs[-1]['level'] = _detect_level(logs[-1]['message'], item)

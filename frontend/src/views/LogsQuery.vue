@@ -116,13 +116,13 @@
                       <el-select v-model="filter.key" size="small" placeholder="标签" filterable @change="onLokiLabelKeyChange(currentTab, index)">
                         <el-option v-for="item in currentTab.lokiLabels" :key="item" :label="item" :value="item" />
                       </el-select>
-                      <el-select v-model="filter.operator" size="small" class="operator-select">
+                      <el-select v-model="filter.operator" size="small" class="operator-select" @change="syncLokiManualQuery(currentTab)">
                         <el-option label="=" value="=" />
                         <el-option label="!=" value="!=" />
                         <el-option label="=~" value="=~" />
                         <el-option label="!~" value="!~" />
                       </el-select>
-                      <el-select v-model="filter.value" size="small" placeholder="值" filterable allow-create @focus="loadLokiLabelValues(currentTab, index)">
+                      <el-select v-model="filter.value" size="small" placeholder="值" filterable allow-create @change="syncLokiManualQuery(currentTab)" @focus="loadLokiLabelValues(currentTab, index)">
                         <el-option v-for="item in filter.options" :key="item" :label="item" :value="item" />
                       </el-select>
                       <div class="filter-row-actions">
@@ -141,7 +141,7 @@
                   </div>
                 </el-form-item>
                 <el-form-item label="内容检索" class="loki-inline-item loki-content-item">
-                  <el-input v-model="currentTab.lokiContentQuery" size="small" placeholder="例如：error OR timeout" />
+                  <el-input v-model="currentTab.lokiContentQuery" size="small" placeholder="例如：error OR timeout" @input="handleLokiContentInput(currentTab)" />
                 </el-form-item>
                 <el-form-item class="syntax-form-item loki-syntax-item">
                   <template #label>
@@ -274,8 +274,12 @@
                   <span>{{ attr.value }}</span>
                 </div>
               </div>
-              <div v-if="canViewTracing && item.attributes?.trace_id" class="detail-actions">
-                <el-button size="small" type="primary" plain @click="openTraceFromLog(item)">查看链路追踪</el-button>
+              <div v-if="item.attributes?.trace_id && (canViewTracing || canViewGrafana)" class="detail-actions">
+                <span class="detail-actions__label">关联跳转</span>
+                <div class="detail-actions__buttons">
+                  <el-button v-if="canViewTracing" size="small" link type="primary" @click="openTraceFromLog(item)">链路追踪</el-button>
+                  <el-button v-if="canViewGrafana" size="small" link type="warning" @click="openGrafanaFromLog(item)">监控看板</el-button>
+                </div>
               </div>
               <pre>{{ item.message }}</pre>
             </div>
@@ -356,7 +360,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useRoute, useRouter } from 'vue-router'
 import echarts from '@/lib/echarts'
 import { ElMessage } from 'element-plus'
-import { getLogDataSources, getLogProviderCatalog, queryLogs } from '@/api/modules/ops'
+import { getLogDataSources, getLogProviderCatalog, queryLogs, resolveLogToGrafana, resolveLogToTrace } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
@@ -469,6 +473,7 @@ const currentResults = computed(() => currentTab.value?.results || { total: 0, s
 const errorCount = computed(() => currentResults.value.logs.filter((item) => item.level === 'error').length)
 const currentHelpDoc = computed(() => SYNTAX_HELP_DOCS[helpProvider.value] || SYNTAX_HELP_DOCS.loki)
 const canViewTracing = computed(() => authStore.hasPermission('ops.trace.view'))
+const canViewGrafana = computed(() => authStore.hasPermission('ops.grafana.view'))
 const currentSummary = computed(() => {
   const config = currentDataSource.value?.config || {}
   if (activeProvider.value === 'loki') return [{ label: '接入地址', value: config.endpoint || '--' }]
@@ -556,6 +561,7 @@ function createQueryTab(seed = {}) {
     labelFilters: [makeLabelFilter()],
     lokiContentQuery: '',
     lokiManualQuery: '',
+    lokiQuerySuffix: '',
     catalogItems: [],
     catalogLoading: false,
     queryLoading: false,
@@ -622,6 +628,12 @@ function getPreferredDatasourceByProvider(provider) {
   const preferred = dataSources.value.find((item) => item.provider === provider && item.is_default)
     || dataSources.value.find((item) => item.provider === provider)
   return preferred || dataSources.value.find((item) => item.id === getPreferredDatasourceId()) || dataSources.value[0] || null
+}
+
+function getDatasourceById(id) {
+  const value = Number(id)
+  if (!value) return null
+  return dataSources.value.find((item) => item.id === value) || null
 }
 
 function persistDatasource(id) {
@@ -754,6 +766,7 @@ function resetTabState(tab) {
   tab.labelFilters = [makeLabelFilter()]
   tab.lokiContentQuery = ''
   tab.lokiManualQuery = ''
+  tab.lokiQuerySuffix = ''
   tab.errorMessage = ''
   tab.results = emptyResults()
   tab.expandedRows = []
@@ -765,8 +778,52 @@ function routeTraceId() {
 }
 
 function routeTraceProvider() {
-  const raw = route.query.provider
+  const raw = route.query.logProvider || route.query.provider
   return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeLogDatasourceId() {
+  const raw = route.query.logDatasourceId
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeLokiQuery() {
+  const raw = route.query.lokiQuery
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function unescapeLogValue(value) {
+  return String(value || '').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+}
+
+function parseLokiSelector(query) {
+  const text = String(query || '').trim()
+  const selectorMatch = text.match(/^\{([^}]*)\}/)
+  if (!selectorMatch) return []
+  const filters = []
+  const pattern = /([A-Za-z_][\w.:-]*)\s*(=~|!~|!=|=)\s*"((?:\\.|[^"])*)"/g
+  let match = pattern.exec(selectorMatch[1])
+  while (match) {
+    filters.push({
+      ...makeLabelFilter(),
+      key: match[1],
+      operator: match[2],
+      value: unescapeLogValue(match[3]),
+    })
+    match = pattern.exec(selectorMatch[1])
+  }
+  return filters
+}
+
+function parseLokiContentFilter(query) {
+  const match = String(query || '').match(/\|\s*(?:=|~)\s*"((?:\\.|[^"])*)"/)
+  return match ? unescapeLogValue(match[1]) : ''
+}
+
+function parseLokiQuerySuffix(query) {
+  const text = String(query || '').trim()
+  const selectorMatch = text.match(/^\{[^}]*\}/)
+  return selectorMatch ? text.slice(selectorMatch[0].length).trimStart() : ''
 }
 
 function routeLogKeyword() {
@@ -792,6 +849,13 @@ function buildKeywordLogTitle(keyword) {
   return routeLogTitle() || `检索 ${keyword.slice(0, 10)}`
 }
 
+function buildLokiRouteTitle(query) {
+  const service = typeof route.query.service === 'string' ? route.query.service.trim() : ''
+  if (routeLogTitle()) return routeLogTitle()
+  if (service) return `看板日志 ${service.slice(0, 10)}`
+  return `看板日志 ${query.slice(0, 10)}`
+}
+
 function traceServiceFromLog(item) {
   const attributes = item?.attributes || {}
   return [
@@ -809,6 +873,8 @@ async function applyTraceRoutePreset(force = false) {
   const currentFingerprint = JSON.stringify({
     traceId,
     provider: routeTraceProvider(),
+    logDatasourceId: routeLogDatasourceId(),
+    lokiQuery: routeLokiQuery(),
     source: route.query.source || '',
   })
   if (!force && currentTab.value?.routeFingerprint === currentFingerprint) return false
@@ -820,7 +886,7 @@ async function applyTraceRoutePreset(force = false) {
     activeTabName.value = tab.id
   }
 
-  const datasource = getPreferredDatasourceByProvider(routeTraceProvider())
+  const datasource = getDatasourceById(routeLogDatasourceId()) || getPreferredDatasourceByProvider(routeTraceProvider())
   if (!datasource) return false
 
   tab.title = buildTraceLogTitle(traceId)
@@ -832,13 +898,55 @@ async function applyTraceRoutePreset(force = false) {
   await prepareTab(tab)
 
   if (datasource.provider === 'loki') {
-    tab.lokiContentQuery = traceId
+    applyLokiQueryToControls(tab, routeLokiQuery(), traceId)
   } else {
     tab.queryText = traceId
   }
 
   if (typeof route.query.source === 'string' && route.query.source.trim()) {
     tab.sourceName = route.query.source.trim()
+  }
+
+  if (route.query.autoRun !== '0') {
+    await runQuery(tab)
+  }
+  return true
+}
+
+async function applyLokiRoutePreset(force = false) {
+  const lokiQuery = routeLokiQuery()
+  if (!lokiQuery || routeTraceId() || !dataSources.value.length) return false
+  const currentFingerprint = JSON.stringify({
+    lokiQuery,
+    provider: routeTraceProvider(),
+    logDatasourceId: routeLogDatasourceId(),
+    window: route.query.window || '',
+    autoRun: route.query.autoRun || '',
+  })
+  if (!force && currentTab.value?.routeFingerprint === currentFingerprint) return false
+
+  let tab = currentTab.value
+  if (!tab) {
+    tab = createQueryTab()
+    queryTabs.value = [tab]
+    activeTabName.value = tab.id
+  }
+
+  const datasource = getDatasourceById(routeLogDatasourceId()) || getPreferredDatasourceByProvider(routeTraceProvider() || 'loki')
+  if (!datasource) return false
+
+  tab.title = buildLokiRouteTitle(lokiQuery)
+  tab.datasourceId = datasource.id
+  tab.timeRange = defaultTimeRange(Number(route.query.window || 60))
+  tab.quickRange = ''
+  tab.limit = 200
+  tab.routeFingerprint = currentFingerprint
+  await prepareTab(tab)
+
+  if (datasource.provider === 'loki') {
+    applyLokiQueryToControls(tab, lokiQuery)
+  } else {
+    tab.queryText = lokiQuery
   }
 
   if (route.query.autoRun !== '0') {
@@ -879,6 +987,7 @@ async function applyKeywordRoutePreset(force = false) {
 
   if (datasource.provider === 'loki') {
     tab.lokiContentQuery = keyword
+    syncLokiManualQuery(tab)
   } else {
     tab.queryText = keyword
   }
@@ -893,17 +1002,71 @@ async function applyKeywordRoutePreset(force = false) {
   return true
 }
 
-function openTraceFromLog(item) {
+async function openTraceFromLog(item) {
   const traceId = item?.attributes?.trace_id
   if (!traceId) return
   const service = traceServiceFromLog(item)
-  router.push({
-    path: '/observability/tracing',
-    query: {
-      traceId,
-      service: service || undefined,
-    },
-  })
+  try {
+    const resolved = await resolveLogToTrace({
+      trace_id: traceId,
+      log_datasource_id: currentTab.value?.datasourceId,
+      attributes: item.attributes || {},
+      message: item.message || '',
+    })
+    router.push({
+      path: '/observability/tracing',
+      query: {
+        traceId: resolved.trace_id || traceId,
+        service: service || undefined,
+        provider: resolved.tracing_datasource?.provider || undefined,
+        datasourceId: resolved.tracing_datasource?.id ? String(resolved.tracing_datasource.id) : undefined,
+      },
+    })
+  } catch {
+    router.push({
+      path: '/observability/tracing',
+      query: {
+        traceId,
+        service: service || undefined,
+      },
+    })
+  }
+}
+
+async function openGrafanaFromLog(item) {
+  const traceId = item?.attributes?.trace_id
+  if (!traceId) return
+  const service = traceServiceFromLog(item)
+  const range = normalizeTimeRange(currentTab.value?.timeRange)
+  try {
+    const resolved = await resolveLogToGrafana({
+      trace_id: traceId,
+      log_datasource_id: currentTab.value?.datasourceId,
+      attributes: item.attributes || {},
+      message: item.message || '',
+      from: toTimestampMs(range[0]),
+      to: toTimestampMs(range[1]),
+    })
+    router.push({
+      path: '/observability/grafana',
+      query: {
+        ...(resolved.query || {}),
+        service: service || undefined,
+      },
+    })
+  } catch {
+    router.push({
+      path: '/observability/grafana',
+      query: {
+        dashboard: 'apm-overview',
+        traceId,
+        service: service || undefined,
+        source: 'log',
+        from: toTimestampMs(range[0]),
+        to: toTimestampMs(range[1]),
+      },
+    })
+  }
 }
 
 async function initializeTabs() {
@@ -928,6 +1091,7 @@ async function prepareTab(tab) {
   if (!tab.datasourceId) return
   persistDatasource(tab.datasourceId)
   await loadCatalog(tab)
+  syncLokiManualQuery(tab)
 }
 
 function saveFavorite(tab) {
@@ -965,10 +1129,13 @@ async function applySavedQuery(item) {
   currentTab.value.sourceName = item.sourceName || ''
   currentTab.value.queryText = item.queryText || ''
   currentTab.value.lokiContentQuery = item.lokiContentQuery || ''
-  currentTab.value.lokiManualQuery = item.lokiManualQuery || ''
   currentTab.value.labelFilters = (item.labelFilters || []).length
     ? item.labelFilters.map((filter) => ({ ...makeLabelFilter(), ...filter }))
     : [makeLabelFilter()]
+  currentTab.value.lokiManualQuery = item.lokiManualQuery || ''
+  if (!currentTab.value.lokiManualQuery) {
+    syncLokiManualQuery(currentTab.value)
+  }
   savedDialogVisible.value = false
   ElMessage.success('已套用查询条件')
 }
@@ -1062,16 +1229,19 @@ async function loadCatalog(tab = currentTab.value) {
 
 function addLabelFilter(tab) {
   tab.labelFilters.push(makeLabelFilter())
+  syncLokiManualQuery(tab)
 }
 
 function removeLabelFilter(tab, index) {
   tab.labelFilters.splice(index, 1)
   if (!tab.labelFilters.length) addLabelFilter(tab)
+  syncLokiManualQuery(tab)
 }
 
 async function onLokiLabelKeyChange(tab, index) {
   tab.labelFilters[index].value = ''
   tab.labelFilters[index].options = []
+  syncLokiManualQuery(tab)
   await loadLokiLabelValues(tab, index)
 }
 
@@ -1092,6 +1262,69 @@ function escapeLogValue(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
+function buildLokiSelector(tab) {
+  const selector = (tab.labelFilters || [])
+    .filter((item) => item.key && item.value)
+    .map((item) => `${item.key}${item.operator || '='}"${escapeLogValue(item.value)}"`)
+  return selector.length ? `{${selector.join(',')}}` : ''
+}
+
+function buildGeneratedLokiQuery(tab) {
+  const base = buildLokiSelector(tab)
+  if (!base) return ''
+  if (tab.lokiQuerySuffix) {
+    return `${base} ${tab.lokiQuerySuffix}`.trim()
+  }
+  const content = String(tab.lokiContentQuery || '').trim()
+  return content ? `${base} |= "${escapeLogValue(content)}"` : base
+}
+
+function syncLokiManualQuery(tab) {
+  if (!tab) return
+  const datasource = dataSources.value.find((item) => item.id === tab.datasourceId)
+  if (datasource?.provider !== 'loki') return
+  tab.lokiManualQuery = buildGeneratedLokiQuery(tab)
+}
+
+function handleLokiContentInput(tab) {
+  if (!tab) return
+  tab.lokiQuerySuffix = ''
+  syncLokiManualQuery(tab)
+}
+
+function applyLokiQueryToControls(tab, query, fallbackTraceId = '') {
+  const filters = parseLokiSelector(query)
+  tab.labelFilters = filters.length ? filters : [makeLabelFilter()]
+  tab.lokiQuerySuffix = parseLokiQuerySuffix(query)
+  tab.lokiContentQuery = parseLokiContentFilter(query) || fallbackTraceId || ''
+  tab.lokiManualQuery = String(query || '').trim() || buildGeneratedLokiQuery(tab)
+}
+
+function emptyResultReason(tab, response) {
+  const datasource = dataSources.value.find((item) => item.id === tab.datasourceId)
+  const provider = providerLabel(datasource?.provider || '')
+  const query = datasource?.provider === 'loki' ? tab.lokiManualQuery : tab.queryText
+  const reasons = [
+    `数据源：${datasource?.name || provider || '未选择'}`,
+    `时间范围：${formatTimeRangeSummary(tab.timeRange)}`,
+    query ? `查询条件：${query}` : '查询条件为空',
+  ]
+  if (response?.total === 0) {
+    reasons.push('后端返回总匹配 0 条')
+  } else {
+    reasons.push('后端未返回日志明细，可能是 limit、时间窗口、标签值或 Trace ID 不匹配')
+  }
+  return reasons.join('；')
+}
+
+function friendlyLogError(error) {
+  const message = error.response?.data?.error || error.response?.data?.detail || error.message || '日志查询失败'
+  if (String(message).includes('empty-compatible value')) {
+    return 'Loki 查询条件无效：标签过滤必须至少有一个非空匹配条件，例如 app=~".+"；不能只用 app=~".*" 或 job!="" 这类可能匹配空值的条件。'
+  }
+  return message
+}
+
 function buildPayload(tab) {
   const datasource = dataSources.value.find((item) => item.id === tab.datasourceId)
   const payload = {
@@ -1103,11 +1336,7 @@ function buildPayload(tab) {
   }
 
   if (datasource?.provider === 'loki') {
-    const selector = tab.labelFilters
-      .filter((item) => item.key && item.value)
-      .map((item) => `${item.key}${item.operator}"${escapeLogValue(item.value)}"`)
-    const base = selector.length ? `{${selector.join(',')}}` : '{job!=""}'
-    payload.query = tab.lokiManualQuery.trim() || (tab.lokiContentQuery.trim() ? `${base} |= "${escapeLogValue(tab.lokiContentQuery.trim())}"` : base)
+    payload.query = tab.lokiManualQuery.trim()
   } else if (datasource?.provider === 'elk') {
     payload.query = tab.queryText.trim()
     payload.source = tab.sourceName || datasource.config?.index_pattern
@@ -1125,11 +1354,13 @@ function buildPayload(tab) {
 
 async function runQuery(tab) {
   if (!tab?.datasourceId) return ElMessage.warning('请先选择日志数据源')
+  const payload = buildPayload(tab)
+  if (!String(payload.query || '').trim()) return ElMessage.warning('请先【设置标签过滤】或【填写查询语句】')
   tab.queryLoading = true
   tab.errorMessage = ''
   tab.expandedRows = []
   try {
-    const response = await queryLogs(buildPayload(tab))
+    const response = await queryLogs(payload)
     tab.results = {
       provider: response.provider,
       source: response.source,
@@ -1139,11 +1370,18 @@ async function runQuery(tab) {
       logs: response.logs || [],
     }
     updateHistory(createSnapshot(tab))
+    if (!tab.results.logs.length) {
+      ElMessage.warning({
+        message: `未查询到日志：${emptyResultReason(tab, response)}`,
+        duration: 7000,
+        showClose: true,
+      })
+    }
     await nextTick()
     renderChart()
   } catch (error) {
     tab.results = emptyResults()
-    tab.errorMessage = error.response?.data?.error || error.message || '日志查询失败'
+    tab.errorMessage = friendlyLogError(error)
   } finally {
     tab.queryLoading = false
   }
@@ -1283,7 +1521,9 @@ onMounted(async () => {
   await fetchDataSources()
   await initializeTabs()
   if (!(await applyTraceRoutePreset())) {
-    await applyKeywordRoutePreset()
+    if (!(await applyLokiRoutePreset())) {
+      await applyKeywordRoutePreset()
+    }
   }
   await nextTick()
   renderChart()
@@ -1291,11 +1531,24 @@ onMounted(async () => {
 })
 
 watch(
-  () => [route.query.traceId, route.query.keyword, route.query.provider, route.query.source, route.query.title, route.query.window, route.query.autoRun].join('|'),
+  () => [
+    route.query.traceId,
+    route.query.keyword,
+    route.query.provider,
+    route.query.logProvider,
+    route.query.logDatasourceId,
+    route.query.lokiQuery,
+    route.query.source,
+    route.query.title,
+    route.query.window,
+    route.query.autoRun,
+  ].join('|'),
   async () => {
     if (route.path === '/logs/query') {
       if (!(await applyTraceRoutePreset())) {
-        await applyKeywordRoutePreset()
+        if (!(await applyLokiRoutePreset())) {
+          await applyKeywordRoutePreset()
+        }
       }
     }
   }
@@ -2202,7 +2455,36 @@ onUnmounted(() => {
 }
 
 .detail-actions {
-  margin-bottom: 5px;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(226, 232, 240, 0.86);
+  border-radius: 9px;
+  display: inline-flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 3px 7px;
+}
+
+.detail-actions__label {
+  align-items: center;
+  color: #94a3b8;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 600;
+  height: 22px;
+  line-height: 22px;
+}
+
+.detail-actions__buttons {
+  align-items: center;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.detail-actions__buttons :deep(.el-button) {
+  height: 22px;
+  margin-left: 0;
+  padding: 0 4px;
 }
 
 .compact-grid {

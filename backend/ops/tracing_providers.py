@@ -589,6 +589,8 @@ def _trace_detail_from_spans(trace_id, spans):
             'is_error': bool(item.get('is_error') if item.get('is_error') is not None else item.get('isError')),
             'layer': item.get('layer') or '',
             'tags': _normalize_tags(item.get('tags') or []),
+            'resource_tags': _normalize_tags(item.get('resource_tags') or item.get('resourceTags') or []),
+            'scope_tags': _normalize_tags(item.get('scope_tags') or item.get('scopeTags') or []),
             'logs': _normalize_logs(item.get('logs') or []),
         })
 
@@ -1139,9 +1141,15 @@ def _load_jaeger_trace_detail(config, trace_id):
     for item in trace.get('spans') or []:
         tags = _normalize_tags(item.get('tags') or [])
         tag_map = _tags_to_map(tags)
+        process = (trace.get('processes') or {}).get(item.get('processID') or '') or {}
+        process_tags = _normalize_tags(process.get('tags') or [])
         references = item.get('references') or []
         parent_ref = next((entry for entry in references if entry.get('refType') == 'CHILD_OF'), None)
-        service_name = _jaeger_process_service(trace, item)
+        service_name = process.get('serviceName') or _jaeger_process_service(trace, item)
+        resource_tags = _merge_tags(
+            [{'key': 'service.name', 'value': service_name}] if service_name else [],
+            process_tags,
+        )
         peer = tag_map.get('peer.address') or tag_map.get('http.url') or tag_map.get('db.instance') or ''
         layer = 'HTTP'
         if tag_map.get('db.system'):
@@ -1165,6 +1173,7 @@ def _load_jaeger_trace_detail(config, trace_id):
             'is_error': _jaeger_span_error(item),
             'layer': layer,
             'tags': tags,
+            'resource_tags': resource_tags,
             'logs': [
                 {
                     'time': _to_iso_from_micros(log.get('timestamp')),
@@ -1319,25 +1328,34 @@ def _tempo_base(config, path=''):
 def _otlp_value(value):
     if not isinstance(value, dict):
         return value
-    for key in ('stringValue', 'intValue', 'doubleValue', 'boolValue', 'bytesValue'):
+    if 'value' in value:
+        return _otlp_value(value.get('value'))
+    for key in ('stringValue', 'intValue', 'doubleValue', 'boolValue', 'bytesValue', 'string_value', 'int_value', 'double_value', 'bool_value', 'bytes_value'):
         if key in value:
             return value[key]
-    if 'arrayValue' in value:
-        values = value['arrayValue'].get('values') or []
+    array_value = value.get('arrayValue') or value.get('array_value')
+    if array_value:
+        values = array_value.get('values') or []
         return ','.join(str(_otlp_value(item)) for item in values)
-    if 'kvlistValue' in value:
-        values = value['kvlistValue'].get('values') or []
+    kvlist_value = value.get('kvlistValue') or value.get('kvlist_value')
+    if kvlist_value:
+        values = kvlist_value.get('values') or []
         return ','.join(f"{item.get('key')}={_otlp_value(item.get('value') or {})}" for item in values)
     return ''
 
 
 def _otlp_attributes(items):
     normalized = []
+    if isinstance(items, dict):
+        items = [{'key': key, 'value': value} for key, value in items.items()]
     for item in items or []:
+        if not isinstance(item, dict):
+            continue
         key = item.get('key')
         if not key:
             continue
-        normalized.append({'key': str(key), 'value': str(_otlp_value(item.get('value') or {}))})
+        raw_value = item.get('value') if 'value' in item else {}
+        normalized.append({'key': str(key), 'value': str(_otlp_value(raw_value))})
     return normalized
 
 
@@ -1346,6 +1364,19 @@ def _otlp_attribute_map(items):
     for item in _otlp_attributes(items):
         result[item['key']] = item['value']
     return result
+
+
+def _merge_tags(*tag_groups):
+    merged = []
+    seen = set()
+    for group in tag_groups:
+        for item in _normalize_tags(group or []):
+            key = item.get('key')
+            if not key or key in seen:
+                continue
+            merged.append(item)
+            seen.add(key)
+    return merged
 
 
 def _tempo_parse_search_traces(payload):
@@ -1426,13 +1457,29 @@ def _tempo_flatten_trace(raw):
     batches = raw.get('batches') or raw.get('resourceSpans') or raw.get('data') or []
     spans = []
     for resource_span in batches:
-        resource_attrs = _otlp_attribute_map((resource_span.get('resource') or {}).get('attributes') or [])
+        resource = resource_span.get('resource') or {}
+        resource_attr_items = _merge_tags(
+            _otlp_attributes(resource.get('attributes') or {}),
+            _normalize_tags(resource.get('tags') or []),
+            _normalize_tags(resource_span.get('tags') or []),
+        )
+        resource_attrs = {item['key']: item['value'] for item in resource_attr_items}
         scope_spans = resource_span.get('scopeSpans') or resource_span.get('instrumentationLibrarySpans') or []
         for scope in scope_spans:
+            scope_meta = scope.get('scope') or scope.get('instrumentationLibrary') or {}
+            scope_tags = []
+            if scope_meta.get('name'):
+                scope_tags.append({'key': 'telemetry.scope.name', 'value': scope_meta.get('name')})
+            if scope_meta.get('version'):
+                scope_tags.append({'key': 'telemetry.scope.version', 'value': scope_meta.get('version')})
+            scope_tags.extend(_otlp_attributes(scope_meta.get('attributes') or []))
             for span in scope.get('spans') or []:
                 span_attrs = _otlp_attributes(span.get('attributes') or [])
                 span_attr_map = _otlp_attribute_map(span.get('attributes') or [])
                 service_name = resource_attrs.get('service.name') or span_attr_map.get('service.name') or ''
+                effective_resource_tags = resource_attr_items
+                if service_name and 'service.name' not in resource_attrs:
+                    effective_resource_tags = _merge_tags([{'key': 'service.name', 'value': service_name}], resource_attr_items)
                 logs = []
                 for event in span.get('events') or []:
                     logs.append({
@@ -1455,6 +1502,8 @@ def _tempo_flatten_trace(raw):
                     'is_error': is_error,
                     'layer': _tempo_layer_from_attrs(span_attr_map),
                     'tags': span_attrs,
+                    'resource_tags': effective_resource_tags,
+                    'scope_tags': scope_tags,
                     'logs': logs,
                 })
     return spans

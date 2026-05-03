@@ -685,6 +685,51 @@ class TracingDataSource(models.Model):
         return f'{self.get_provider_display()} - {self.name}'
 
 
+class ObservabilityDataSourceLink(models.Model):
+    name = models.CharField('关联名称', max_length=128, unique=True)
+    log_datasource = models.ForeignKey(
+        LogDataSource,
+        on_delete=models.CASCADE,
+        related_name='trace_links',
+        verbose_name='日志数据源',
+    )
+    tracing_datasource = models.ForeignKey(
+        TracingDataSource,
+        on_delete=models.CASCADE,
+        related_name='log_links',
+        verbose_name='链路数据源',
+    )
+    description = models.CharField('描述', max_length=255, blank=True, default='')
+    is_enabled = models.BooleanField('启用', default=True)
+    is_default = models.BooleanField('默认关联', default=False)
+    log_to_trace_enabled = models.BooleanField('日志跳链路', default=True)
+    trace_to_log_enabled = models.BooleanField('链路跳日志', default=True)
+    log_to_grafana_enabled = models.BooleanField('日志跳看板', default=True)
+    trace_to_grafana_enabled = models.BooleanField('链路跳看板', default=True)
+    grafana_to_log_enabled = models.BooleanField('看板跳日志', default=True)
+    grafana_to_trace_enabled = models.BooleanField('看板跳链路', default=True)
+    trace_id_fields = models.JSONField('Trace ID 字段', default=list, blank=True)
+    trace_id_regex = models.CharField('Trace ID 正则', max_length=255, blank=True, default='')
+    log_query_template = models.TextField('日志查询模板', blank=True, default='')
+    log_label_mappings = models.JSONField('日志标签映射', default=list, blank=True)
+    grafana_dashboard_key = models.CharField('Grafana 看板 Key', max_length=128, blank=True, default='')
+    grafana_variable_mappings = models.JSONField('Grafana 变量映射', default=list, blank=True)
+    span_start_shift = models.CharField('Span 开始偏移', max_length=16, blank=True, default='-5m')
+    span_end_shift = models.CharField('Span 结束偏移', max_length=16, blank=True, default='5m')
+    window_minutes = models.PositiveIntegerField('默认查询窗口分钟', default=10)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '可观测数据源关联'
+        verbose_name_plural = '可观测数据源关联'
+        ordering = ['-is_default', 'name']
+        unique_together = ('log_datasource', 'tracing_datasource')
+
+    def __str__(self):
+        return f'{self.log_datasource.name} -> {self.tracing_datasource.name}'
+
+
 class GrafanaSetting(models.Model):
     name = models.CharField('配置名称', max_length=64, default='default', unique=True)
     enabled = models.BooleanField('启用', default=True)
