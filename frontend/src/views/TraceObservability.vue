@@ -461,38 +461,52 @@
                 <span>Service & Operation</span>
                 <div class="timeline-axis">
                   <span>0 ms</span>
-                  <span>{{ formatDuration(traceDetail?.duration_ms) }}</span>
+                  <span class="timeline-axis-total">{{ formatDuration(traceDetail?.duration_ms) }}</span>
                 </div>
-                <span>Duration</span>
+                <span class="timeline-axis-duration-label">Duration</span>
+                <span class="timeline-axis-action-placeholder"></span>
               </div>
 
               <div class="timeline-body">
                 <template v-for="row in filteredTimelineRows" :key="`timeline-${row.span_id}`">
-                  <button
-                    :id="`span-${selectedTraceId}-${row.span_id}`"
-                    type="button"
-                    class="timeline-row"
+                  <div
+                    class="timeline-row-shell"
                     :class="{
                       'is-error': row.is_error,
                       'is-slow': row.duration_ms >= slowThreshold,
                       'is-selected': String(row.span_id) === selectedSpanId,
                       'is-critical': criticalSpanIds.has(String(row.span_id)),
                     }"
-                    @click="toggleSpanDetails(row)"
                   >
-                    <div class="timeline-label" :style="{ paddingLeft: `${row.depth * 16}px` }">
-                      <span class="expand-mark">{{ isSpanExpanded(row.span_id) ? '▾' : '▸' }}</span>
-                      <span class="service-dot" :style="{ background: row.serviceColor }"></span>
-                      <div class="operation-cell">
-                        <strong>{{ row.endpoint_name || row.service_code || 'Span' }}</strong>
-                        <span>{{ row.service_code || '--' }} · {{ formatSpanKind(row.type) }} · {{ row.layer || 'UNSET' }}</span>
+                    <button
+                      :id="`span-${selectedTraceId}-${row.span_id}`"
+                      type="button"
+                      class="timeline-row"
+                      @click="toggleSpanDetails(row)"
+                    >
+                      <div class="timeline-label" :style="{ paddingLeft: `${row.depth * 16}px` }">
+                        <span class="expand-mark">{{ isSpanExpanded(row.span_id) ? '▾' : '▸' }}</span>
+                        <span class="service-dot" :style="{ background: row.serviceColor }"></span>
+                        <div class="operation-cell">
+                          <strong>{{ row.endpoint_name || row.service_code || 'Span' }}</strong>
+                          <span>{{ row.service_code || '--' }} · {{ formatSpanKind(row.type) }} · {{ row.layer || 'UNSET' }}</span>
+                        </div>
                       </div>
-                    </div>
-                    <div class="timeline-track">
-                      <div class="timeline-bar" :style="row.barStyle"></div>
-                    </div>
-                    <span class="timeline-duration">{{ formatDuration(row.duration_ms) }}</span>
-                  </button>
+                      <div class="timeline-track">
+                        <div class="timeline-bar" :style="row.barStyle"></div>
+                      </div>
+                      <span class="timeline-duration">{{ formatDuration(row.duration_ms) }}</span>
+                    </button>
+                    <el-tooltip v-if="canQueryLogs && selectedTraceId" content="查看当前 span 日志" placement="top">
+                      <button type="button" class="timeline-log-action" @click.stop="openLogsForSpan(row)">
+                        <svg viewBox="0 0 24 24" aria-hidden="true" class="timeline-log-icon">
+                          <path d="M7.25 3.75h7.3l4.2 4.2v9.8a2 2 0 0 1-2 2h-9.5a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" />
+                          <path d="M14.55 3.75v4.2h4.2" />
+                          <text x="6.45" y="16.15">LOG</text>
+                        </svg>
+                      </button>
+                    </el-tooltip>
+                  </div>
 
                   <div v-if="isSpanExpanded(row.span_id)" class="timeline-detail">
                     <div class="span-attribute-summary">
@@ -1587,9 +1601,11 @@ async function changeDataSource(datasourceId) {
 }
 
 function traceTagsForLogJump(row) {
+  const service = spanTraceService(row)
+  const namespace = spanTraceNamespace(row)
   return {
-    'service.name': row?.service_name || row?.service_id || traceContextService.value || '',
-    'service.namespace': row?.service_namespace || row?.namespace || '',
+    'service.name': service || '',
+    'service.namespace': namespace || '',
   }
 }
 
@@ -1605,9 +1621,85 @@ function traceLogTimeRange(row) {
   return [from?.getTime(), to?.getTime()]
 }
 
+function spanTraceContextValue(row, keys = []) {
+  const directSources = [
+    row || {},
+    rootSpan.value || {},
+  ]
+  for (const source of directSources) {
+    for (const key of keys) {
+      const value = source?.[key] ?? source?.[key.replace('.', '_')]
+      if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+  }
+
+  const attributeRows = normalizeAttributes([
+    ...(row?.resource_tags || []),
+    ...(row?.resourceTags || []),
+    ...(row?.resource_attributes || []),
+    ...(row?.resourceAttributes || []),
+    ...(row?.scope_tags || []),
+    ...(row?.scopeTags || []),
+    ...(row?.scope_attributes || []),
+    ...(row?.scopeAttributes || []),
+    ...(row?.tags || []),
+    ...(rootSpan.value?.resource_tags || []),
+    ...(rootSpan.value?.resourceTags || []),
+    ...(rootSpan.value?.resource_attributes || []),
+    ...(rootSpan.value?.resourceAttributes || []),
+  ])
+  for (const key of keys) {
+    const rowItem = attributeRows.find((item) => item.key === key || item.key === key.replace('.', '_'))
+    if (rowItem && String(rowItem.value).trim()) return String(rowItem.value).trim()
+  }
+  for (const key of keys) {
+    const value = traceDetail.value?.[key] ?? traceDetail.value?.[key.replace('.', '_')]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+function spanTraceService(row) {
+  return row?.service_code
+    || spanTraceContextValue(row, [
+    'service.name',
+    'service',
+    'service_name',
+    'serviceName',
+    'service_code',
+    'workload',
+    'app',
+    'application',
+    'container',
+    'container_name',
+    'k8s.container.name',
+  ]) || traceContextService.value || ''
+}
+
+function spanTraceNamespace(row) {
+  return spanTraceContextValue(row, [
+    'service.namespace',
+    'namespace',
+    'service_namespace',
+    'serviceNamespace',
+    'k8s.namespace.name',
+    'kubernetes_namespace_name',
+  ])
+}
+
+function spanTraceLogTitle(row) {
+  const service = spanTraceService(row)
+  const endpoint = row?.endpoint_name || ''
+  if (service && endpoint) return `${service} / ${endpoint}`
+  return service || endpoint || `Span ${row?.span_id || ''}`
+}
+
 async function openLogsForTrace(row) {
   if (!canQueryLogs.value || !row?.trace_id) return
   const [from, to] = traceLogTimeRange(row)
+  const service = row.service_name || row.service_id || row.service || spanTraceService(row) || ''
+  const namespace = row.service_namespace || row.namespace || spanTraceNamespace(row) || ''
+  const title = row.title || ''
   try {
     const resolved = await resolveTraceToLogs({
       trace_id: row.trace_id,
@@ -1618,7 +1710,9 @@ async function openLogsForTrace(row) {
       path: '/logs/query',
       query: {
         traceId: row.trace_id,
-        service: row.service_name || row.service_id || '',
+        service: service || undefined,
+        namespace: namespace || undefined,
+        title: title || undefined,
         logProvider: resolved.log_datasource?.provider,
         logDatasourceId: resolved.log_datasource?.id ? String(resolved.log_datasource.id) : undefined,
         lokiQuery: resolved.query || undefined,
@@ -1633,7 +1727,9 @@ async function openLogsForTrace(row) {
       path: '/logs/query',
       query: {
         traceId: row.trace_id,
-        service: row.service_name || row.service_id || '',
+        service: service || undefined,
+        namespace: namespace || undefined,
+        title: title || undefined,
         window: String(filters.durationMinutes || 60),
         from,
         to,
@@ -1647,8 +1743,22 @@ function openLogsForCurrentTrace() {
   openLogsForTrace({
     trace_id: selectedTraceId.value,
     service_name: traceContextService.value,
+    service_namespace: firstTraceContextValue(['service.namespace', 'namespace', 'k8s.namespace.name', 'kubernetes_namespace_name']),
     start_time: rootSpan.value?.start_time,
     duration_ms: traceDetail.value?.duration_ms,
+  })
+}
+
+function openLogsForSpan(row) {
+  if (!row || !selectedTraceId.value) return
+  openLogsForTrace({
+    trace_id: selectedTraceId.value,
+    service_name: spanTraceService(row),
+    service_namespace: spanTraceNamespace(row),
+    start_time: row.start_time,
+    duration_ms: row.duration_ms,
+    tags: traceTagsForLogJump(row),
+    title: spanTraceLogTitle(row),
   })
 }
 
@@ -3203,13 +3313,30 @@ onUnmounted(() => {
   display: grid;
   font-size: 10px;
   gap: 8px;
-  grid-template-columns: 220px minmax(0, 1fr) 64px;
+  grid-template-columns: 236px minmax(0, 1fr) 64px 34px;
   padding: 5px 8px;
+}
+
+.timeline-axis-action-placeholder {
+  display: block;
 }
 
 .timeline-axis {
   display: flex;
   justify-content: space-between;
+  padding-left: 6px;
+}
+
+.timeline-axis-total {
+  padding-right: 0;
+  transform: translateX(6px);
+}
+
+.timeline-axis-duration-label {
+  justify-self: end;
+  padding-right: 0;
+  text-align: right;
+  transform: translateX(3px);
 }
 
 .timeline-body {
@@ -3218,47 +3345,105 @@ onUnmounted(() => {
   position: relative;
 }
 
-.timeline-row {
+.timeline-row-shell {
   align-items: center;
   background: #fff;
-  border: 0;
   border-bottom: 1px solid #f1f5f9;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  padding: 0 8px;
+  position: relative;
+}
+
+.timeline-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
   cursor: default;
   display: grid;
   gap: 6px;
-  grid-template-columns: 220px minmax(0, 1fr) 64px;
-  padding: 5px 8px;
+  grid-template-columns: 236px minmax(0, 1fr) 64px;
+  padding: 5px 0;
   position: relative;
   text-align: left;
   width: 100%;
 }
 
-.timeline-row:hover {
+.timeline-row-shell:hover {
   background: #f8fafc;
 }
 
-.timeline-row.is-error {
+.timeline-row-shell.is-error {
   background: rgba(254, 242, 242, 0.52);
 }
 
-.timeline-row.is-slow .timeline-duration {
+.timeline-row-shell.is-slow .timeline-duration {
   color: #d97706;
 }
 
-.timeline-row.is-selected {
+.timeline-row-shell.is-selected {
   background: rgba(239, 246, 255, 0.95);
 }
 
-.timeline-row.is-critical .operation-cell strong::after {
+.timeline-row-shell.is-critical .operation-cell strong::after {
   color: #2563eb;
   content: '  critical';
   font-size: 10px;
   font-weight: 600;
 }
 
-.timeline-row:hover,
-.timeline-row:focus-visible {
+.timeline-row-shell:hover,
+.timeline-row-shell:focus-within {
   z-index: 8;
+}
+
+.timeline-log-action {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.72);
+  border: 0;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+  color: #8b95a7;
+  cursor: pointer;
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  padding: 0;
+  justify-self: end;
+  transition: all 0.2s ease;
+  transform: translateX(4px);
+  width: 30px;
+}
+
+.timeline-log-action:hover {
+  background: rgba(37, 99, 235, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.18);
+  color: #2563eb;
+}
+
+.timeline-log-action:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.22);
+  outline-offset: 1px;
+}
+
+.timeline-log-icon {
+  fill: none;
+  height: 20px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.65;
+  width: 20px;
+}
+
+.timeline-log-icon text {
+  fill: currentColor;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-size: 6.8px;
+  font-weight: 900;
+  letter-spacing: 0;
+  stroke: none;
 }
 
 .timeline-label {
@@ -3310,6 +3495,7 @@ onUnmounted(() => {
   background: repeating-linear-gradient(90deg, rgba(226, 232, 240, 0.72) 0, rgba(226, 232, 240, 0.72) 1px, transparent 1px, transparent 20%);
   border-radius: 999px;
   height: 8px;
+  margin-left: 6px;
   position: relative;
 }
 
@@ -3322,6 +3508,7 @@ onUnmounted(() => {
 
 .timeline-duration {
   font-size: 10px;
+  padding-left: 4px;
   text-align: right;
 }
 
@@ -3557,7 +3744,7 @@ onUnmounted(() => {
 
   .timeline-axis-row,
   .timeline-row {
-    grid-template-columns: 190px minmax(0, 1fr) 68px;
+    grid-template-columns: 204px minmax(0, 1fr) 68px;
   }
 
   .traces-panel,

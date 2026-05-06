@@ -566,6 +566,44 @@ class ObservabilityViewsTests(TestCase):
             '{container="api-gateway"} | json | trace_id="08e3554cc72d7f903d71408b205ab5a2"',
         )
 
+    def test_datasource_link_resolves_trace_to_loki_query_with_multi_zero_padding(self):
+        log_source = LogDataSource.objects.create(
+            name='电商-k3s-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example:3100'},
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='电商-k3s-tempo',
+            provider='tempo',
+            config={'query_url': 'http://tempo.example:3200'},
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='电商 k3s Loki ↔ Tempo',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            is_default=True,
+            trace_id_fields=['trace_id', 'traceId'],
+            log_query_template='${__tags} | json | trace_id="${__trace.traceId}"',
+            log_label_mappings=[{'trace_tag': 'service.name', 'log_label': 'container'}],
+        )
+
+        response = self.client.post(
+            '/api/observability/datasource-links/resolve_trace_to_logs/',
+            {
+                'trace_id': '1234567890abcdef1234567890abcd',
+                'tracing_datasource_id': trace_source.id,
+                'tags': {'service.name': 'order-service'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(
+            payload['query'],
+            '{container="order-service"} | json | trace_id="001234567890abcdef1234567890abcd"',
+        )
+
     def test_datasource_link_resolves_trace_to_grafana_dashboard(self):
         log_source = LogDataSource.objects.create(
             name='电商-k3s-loki',

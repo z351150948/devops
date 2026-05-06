@@ -847,6 +847,29 @@ function routeTraceId() {
   return typeof raw === 'string' ? raw.trim() : ''
 }
 
+function normalizeTraceIdForLogQuery(traceId) {
+  const value = String(traceId || '').trim()
+  if (/^[0-9a-fA-F]{1,31}$/.test(value)) {
+    return value.padStart(32, '0')
+  }
+  return value
+}
+
+function routeTraceService() {
+  const raw = route.query.service
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeTraceNamespace() {
+  const raw = route.query.namespace
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+function routeTraceTitle() {
+  const raw = route.query.title
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
 function routeTraceProvider() {
   const raw = route.query.logProvider || route.query.provider
   return typeof raw === 'string' ? raw.trim() : ''
@@ -921,6 +944,8 @@ function routeLogTitle() {
 }
 
 function buildTraceLogTitle(traceId) {
+  if (routeTraceTitle()) return routeTraceTitle()
+  if (routeTraceService()) return `Trace 日志 ${routeTraceService().slice(0, 18)}`
   return `Trace ${traceId.slice(0, 8)}`
 }
 
@@ -929,10 +954,58 @@ function buildKeywordLogTitle(keyword) {
 }
 
 function buildLokiRouteTitle(query) {
-  const service = typeof route.query.service === 'string' ? route.query.service.trim() : ''
+  const service = routeTraceService()
   if (routeLogTitle()) return routeLogTitle()
   if (service) return `看板日志 ${service.slice(0, 10)}`
   return `看板日志 ${query.slice(0, 10)}`
+}
+
+function buildTraceRouteQuery(datasource, traceId) {
+  const provider = datasource?.provider || ''
+  const service = routeTraceService()
+  const namespace = routeTraceNamespace()
+  const normalizedTraceId = normalizeTraceIdForLogQuery(traceId)
+  const escapedTraceId = escapeLogValue(normalizedTraceId)
+  const escapedService = escapeLogValue(service)
+  const escapedNamespace = escapeLogValue(namespace)
+
+  if (provider === 'loki') {
+    const explicitQuery = routeLokiQuery()
+    if (explicitQuery) return explicitQuery
+    const selector = []
+    if (namespace) selector.push(`namespace="${escapedNamespace}"`)
+    if (service) selector.push(`container="${escapedService}"`)
+    if (!selector.length && service) {
+      selector.push(`service_name="${escapedService}"`)
+    }
+    if (!selector.length) return ''
+    return `{${selector.join(',')}} |= "${escapedTraceId}"`
+  }
+
+  if (provider === 'elk') {
+    const traceClause = `(trace_id:"${escapedTraceId}" OR traceId:"${escapedTraceId}" OR trace.id:"${escapedTraceId}" OR otelTraceID:"${escapedTraceId}")`
+    const filters = [traceClause]
+    if (service) {
+      filters.push(`(service.name:"${escapedService}" OR service_name:"${escapedService}" OR service:"${escapedService}" OR container:"${escapedService}" OR app:"${escapedService}")`)
+    }
+    if (namespace) {
+      filters.push(`(service.namespace:"${escapedNamespace}" OR service_namespace:"${escapedNamespace}" OR namespace:"${escapedNamespace}")`)
+    }
+    return filters.join(' AND ')
+  }
+
+  if (provider === 'sls') {
+    const filters = [`trace_id:"${escapedTraceId}"`]
+    if (service) {
+      filters.push(`(service:"${escapedService}" OR service_name:"${escapedService}" OR container:"${escapedService}" OR app:"${escapedService}")`)
+    }
+    if (namespace) {
+      filters.push(`(service_namespace:"${escapedNamespace}" OR namespace:"${escapedNamespace}")`)
+    }
+    return filters.join(' AND ')
+  }
+
+  return normalizedTraceId
 }
 
 function traceServiceFromLog(item) {
@@ -1020,6 +1093,9 @@ async function applyTraceRoutePreset(force = false) {
   if (!traceId || !dataSources.value.length) return false
   const currentFingerprint = JSON.stringify({
     traceId,
+    service: routeTraceService(),
+    namespace: routeTraceNamespace(),
+    title: routeTraceTitle(),
     provider: routeTraceProvider(),
     logDatasourceId: routeLogDatasourceId(),
     lokiQuery: routeLokiQuery(),
@@ -1048,9 +1124,9 @@ async function applyTraceRoutePreset(force = false) {
   await prepareTab(tab)
 
   if (datasource.provider === 'loki') {
-    applyLokiQueryToControls(tab, routeLokiQuery(), traceId)
+    applyLokiQueryToControls(tab, buildTraceRouteQuery(datasource, traceId), traceId)
   } else {
-    tab.queryText = traceId
+    tab.queryText = buildTraceRouteQuery(datasource, traceId)
   }
 
   if (typeof route.query.source === 'string' && route.query.source.trim()) {
@@ -1712,6 +1788,8 @@ watch(
     route.query.logProvider,
     route.query.logDatasourceId,
     route.query.lokiQuery,
+    route.query.service,
+    route.query.namespace,
     route.query.source,
     route.query.title,
     route.query.window,

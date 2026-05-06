@@ -242,8 +242,8 @@ def _render_log_selector(tags, mappings):
 
 def _normalize_trace_id_for_log(trace_id):
     value = str(trace_id or '').strip()
-    if re.fullmatch(r'[0-9a-fA-F]{31}', value):
-        return f'0{value}'
+    if re.fullmatch(r'[0-9a-fA-F]{1,31}', value):
+        return value.zfill(32)
     return value
 
 
