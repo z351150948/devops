@@ -43,19 +43,6 @@
     <template v-if="activeTab === 'events' && canViewAlerts">
       <section class="panel">
         <div class="toolbar">
-          <el-input
-            v-model="filters.search"
-            size="small"
-            clearable
-            placeholder="&#x641C;&#x7D22;&#x6807;&#x9898; / &#x6765;&#x6E90; / &#x670D;&#x52A1; / &#x8D44;&#x6E90;"
-            :prefix-icon="Search"
-            @input="handleFilterChange"
-          />
-          <el-select v-model="filters.level" size="small" clearable placeholder="&#x7EA7;&#x522B;" @change="handleFilterChange">
-            <el-option label="&#x4E25;&#x91CD;" value="critical" />
-            <el-option label="&#x8B66;&#x544A;" value="warning" />
-            <el-option label="&#x4FE1;&#x606F;" value="info" />
-          </el-select>
           <el-select v-model="filters.status" size="small" clearable placeholder="&#x72B6;&#x6001;" @change="handleFilterChange">
             <el-option label="&#x6D3B;&#x8DC3;" value="active" />
             <el-option label="&#x5DF2;&#x6062;&#x590D;" value="resolved" />
@@ -65,7 +52,33 @@
           <el-select v-model="filters.source_type" size="small" clearable placeholder="&#x6765;&#x6E90;" @change="handleFilterChange">
             <el-option v-for="item in providerOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
+          <el-select v-model="filters.environment" size="small" clearable filterable allow-create default-first-option placeholder="&#x73AF;&#x5883;" @change="handleFilterChange">
+            <el-option v-for="item in environmentOptions" :key="item" :label="item" :value="item" />
+          </el-select>
+          <el-select v-model="filters.level" size="small" clearable placeholder="&#x7EA7;&#x522B;" @change="handleFilterChange">
+            <el-option label="&#x4E25;&#x91CD;" value="critical" />
+            <el-option label="&#x8B66;&#x544A;" value="warning" />
+            <el-option label="&#x4FE1;&#x606F;" value="info" />
+          </el-select>
+          <el-input
+            v-model="filters.search"
+            size="small"
+            clearable
+            placeholder="&#x641C;&#x7D22;&#x6807;&#x9898; / &#x6765;&#x6E90; / &#x670D;&#x52A1; / &#x8D44;&#x6E90;"
+            :prefix-icon="Search"
+            @input="handleFilterChange"
+          />
           <el-segmented v-model="eventMode" size="small" :options="eventModeOptions" @change="refreshEvents" />
+          <div class="toolbar-spacer" />
+          <el-button
+            v-if="canManageAlerts && eventMode === 'list'"
+            size="small"
+            type="danger"
+            :disabled="!selectedAlerts.length"
+            @click="handleBatchDelete"
+          >
+            &#x6279;&#x91CF;&#x5220;&#x9664;
+          </el-button>
         </div>
 
         <div v-if="eventMode === 'group'" class="group-toolbar">
@@ -75,19 +88,20 @@
           </el-select>
         </div>
 
-        <el-table v-if="eventMode === 'list'" :data="alerts" stripe size="small" v-loading="loading" class="data-table">
+        <el-table v-if="eventMode === 'list'" :data="alerts" stripe size="small" v-loading="loading" class="data-table" @selection-change="handleSelectionChange">
+          <el-table-column type="selection" width="42" />
           <el-table-column prop="title" label="&#x544A;&#x8B66;&#x6807;&#x9898;" min-width="240">
             <template #default="{ row }">
               <button class="link-title" type="button" @click="openDetail(row)">{{ row.title }}</button>
               <div class="sub-line">{{ row.service || row.resource || row.source }}</div>
             </template>
           </el-table-column>
-          <el-table-column prop="level" label="&#x7EA7;&#x522B;" width="100">
+          <el-table-column prop="level" label="&#x7EA7;&#x522B;" width="80">
             <template #default="{ row }">
               <el-tag :type="levelType(row.level)" size="small">{{ row.level_display || levelText(row.level) }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="status" label="&#x72B6;&#x6001;" width="110">
+          <el-table-column prop="status" label="&#x72B6;&#x6001;" width="80">
             <template #default="{ row }">
               <el-tag :type="statusType(row.status)" size="small">{{ row.status_display || statusText(row.status) }}</el-tag>
             </template>
@@ -95,11 +109,8 @@
           <el-table-column prop="source_type" label="&#x63A5;&#x5165;" width="120">
             <template #default="{ row }">{{ providerText(row.source_type) }}</template>
           </el-table-column>
-          <el-table-column prop="resource" label="&#x8D44;&#x6E90;" min-width="150">
-            <template #default="{ row }">{{ row.resource || row.host_name || '-' }}</template>
-          </el-table-column>
           <el-table-column prop="environment" label="&#x73AF;&#x5883;" width="100" />
-          <el-table-column prop="claimed_by" label="&#x8BA4;&#x9886;&#x4EBA;" min-width="220">
+          <el-table-column prop="claimed_by" label="&#x8BA4;&#x9886;&#x4EBA;" min-width="140">
             <template #default="{ row }">
               <div class="claimant-cell" v-if="row.claimants?.length">
                 <el-tag v-for="item in row.claimants" :key="item.id" size="small" class="mini-tag claimant-tag">{{ item.claimant }}</el-tag>
@@ -107,27 +118,16 @@
               <span v-else>-</span>
             </template>
           </el-table-column>
-          <el-table-column prop="occurrence_count" label="&#x6B21;&#x6570;" width="80" />
+          <el-table-column prop="occurrence_count" label="&#x6B21;&#x6570;" width="60" />
           <el-table-column prop="last_received_at" label="&#x6700;&#x8FD1;&#x63A5;&#x6536;" width="180">
             <template #default="{ row }">{{ formatTime(row.last_received_at || row.created_at) }}</template>
           </el-table-column>
-          <el-table-column label="&#x64CD;&#x4F5C;" width="280" fixed="right">
+          <el-table-column label="&#x64CD;&#x4F5C;" width="145" fixed="right">
             <template #default="{ row }">
               <div class="row-actions">
                 <el-button v-if="canManageAlerts && !row.current_user_claimed" link type="success" size="small" @click="runAlertAction(row, 'claim')">&#x8BA4;&#x9886;</el-button>
-                <el-dropdown v-if="canManageAlerts" trigger="click" @command="(cmd) => handleRowCommand(cmd, row)">
-                  <el-button link size="small">&#x66F4;&#x591A;</el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item command="mute">&#x5C4F;&#x853D; 1 &#x5C0F;&#x65F6;</el-dropdown-item>
-                      <el-dropdown-item command="resolve">&#x6062;&#x590D;</el-dropdown-item>
-                      <el-dropdown-item command="close">&#x5173;&#x95ED;</el-dropdown-item>
-                      <el-dropdown-item v-if="row.current_user_claimed" command="unclaim">&#x53D6;&#x6D88;&#x8BA4;&#x9886;</el-dropdown-item>
-                      <el-dropdown-item v-if="canNotifyAlerts" command="notify">&#x53D1;&#x9001;&#x901A;&#x77E5;</el-dropdown-item>
-                      <el-dropdown-item divided command="delete">&#x5220;&#x9664;</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-button v-if="canManageAlerts" link type="warning" size="small" @click="openMuteDialog(row)">&#x5C4F;&#x853D;</el-button>
+                <el-button link size="small" type="primary" @click="openDetail(row)">&#x8BE6;&#x60C5;</el-button>
               </div>
             </template>
           </el-table-column>
@@ -389,7 +389,7 @@
           <el-descriptions-item label="&#x8D44;&#x6E90;">{{ selectedAlert.resource || selectedAlert.host_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="&#x670D;&#x52A1;">{{ selectedAlert.service || '-' }}</el-descriptions-item>
           <el-descriptions-item label="&#x73AF;&#x5883;">{{ selectedAlert.environment || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="&#x8BA4;&#x9886;&#x4EBA;">
+          <el-descriptions-item label="&#x8BA4;&#x9886;">
             <div class="claimant-cell" v-if="selectedAlert.claimants?.length">
               <el-tag v-for="item in selectedAlert.claimants" :key="item.id" size="small" class="mini-tag claimant-tag">{{ item.claimant }}</el-tag>
             </div>
@@ -398,10 +398,12 @@
           <el-descriptions-item label="&#x805A;&#x5408;&#x952E;">{{ selectedAlert.group_key || '-' }}</el-descriptions-item>
           <el-descriptions-item label="&#x63CF;&#x8FF0;">{{ selectedAlert.message }}</el-descriptions-item>
         </el-descriptions>
-        <div v-if="canManageAlerts" class="detail-actions">
+        <div v-if="canManageAlerts || canNotifyAlerts" class="detail-actions">
           <el-button v-if="!selectedAlert.current_user_claimed" size="small" type="success" @click="runAlertAction(selectedAlert, 'claim')">&#x8BA4;&#x9886;</el-button>
           <el-button v-if="selectedAlert.current_user_claimed" size="small" @click="runAlertAction(selectedAlert, 'unclaim')">&#x53D6;&#x6D88;&#x8BA4;&#x9886;</el-button>
-          <el-button size="small" type="warning" @click="runAlertAction(selectedAlert, 'mute')">&#x5C4F;&#x853D;</el-button>
+          <el-button v-if="canManageAlerts" size="small" type="warning" @click="openMuteDialog(selectedAlert)">&#x5C4F;&#x853D;</el-button>
+          <el-button v-if="canNotifyAlerts" size="small" type="primary" @click="runAlertAction(selectedAlert, 'notify')">&#x53D1;&#x9001;&#x901A;&#x77E5;</el-button>
+          <el-button v-if="canManageAlerts" size="small" @click="runAlertAction(selectedAlert, 'close')">&#x5173;&#x95ED;&#x544A;&#x8B66;</el-button>
         </div>
         <h4>&#x6807;&#x7B7E;</h4>
         <div class="kv-list">
@@ -610,6 +612,28 @@
         <el-button type="primary" @click="savePolicy">&#x4FDD;&#x5B58;</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="muteDialog.visible" title="&#x5C4F;&#x853D;&#x544A;&#x8B66;" width="420px">
+      <el-form :model="muteDialog.form" label-width="96px">
+        <el-form-item label="&#x5C4F;&#x853D;&#x65F6;&#x957F;">
+          <el-input-number v-model="muteDialog.form.minutes" :min="1" :max="10080" />
+          <span class="field-suffix">&#x5206;&#x949F;</span>
+        </el-form-item>
+        <el-form-item label="&#x5FEB;&#x6377;&#x9009;&#x62E9;">
+          <div class="mute-presets">
+            <el-button size="small" @click="muteDialog.form.minutes = 30">30m</el-button>
+            <el-button size="small" @click="muteDialog.form.minutes = 60">1h</el-button>
+            <el-button size="small" @click="muteDialog.form.minutes = 180">3h</el-button>
+            <el-button size="small" @click="muteDialog.form.minutes = 1440">1d</el-button>
+            <el-button size="small" @click="muteDialog.form.minutes = 10080">7d</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="muteDialog.visible = false">&#x53D6;&#x6D88;</el-button>
+        <el-button type="primary" @click="submitMuteDialog">&#x786E;&#x8BA4;&#x5C4F;&#x853D;</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -617,7 +641,7 @@
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Bell, Connection, Delete, Document, Operation, Plus, Refresh, Search, Setting } from '@element-plus/icons-vue'
-import { ElButton, ElInput, ElMessage, ElOption, ElPopconfirm, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElButton, ElInput, ElMessage, ElMessageBox, ElOption, ElPopconfirm, ElSelect, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import {
   claimAlert,
   closeAlert,
@@ -658,7 +682,6 @@ import {
   muteAlert,
   notifyAlert,
   reopenAlert,
-  resolveAlert,
   testAlertNotificationChannel,
   unclaimAlert,
   updateAlertAggregationRule,
@@ -848,11 +871,13 @@ const filters = reactive({
   level: '',
   status: 'active',
   source_type: '',
+  environment: '',
 })
 
 const loading = ref(false)
 const configLoading = ref(false)
 const alerts = ref([])
+const selectedAlerts = ref([])
 const groups = ref([])
 const summary = ref({})
 const total = ref(0)
@@ -885,7 +910,19 @@ const statCards = computed(() => [
   { label: '\u5DF2\u8BA4\u9886\u544A\u8B66', value: summary.value.claimed || 0, tone: 'success-card' },
 ])
 
+const environmentOptions = computed(() => {
+  const values = new Set()
+  for (const item of alerts.value || []) {
+    const env = String(item?.environment || '').trim()
+    if (env) values.add(env)
+  }
+  const selected = String(filters.environment || '').trim()
+  if (selected) values.add(selected)
+  return Array.from(values).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
 const integrationDialog = reactive({ visible: false, form: emptyIntegration() })
+const muteDialog = reactive({ visible: false, target: null, form: { minutes: 60 } })
 const channelDialog = reactive({ visible: false, form: emptyChannel() })
 const recipientDialog = reactive({ visible: false, form: emptyRecipient() })
 const recipientGroupDialog = reactive({ visible: false, form: emptyRecipientGroup() })
@@ -966,6 +1003,7 @@ function buildAlertParams() {
   if (filters.level) params.level = filters.level
   if (filters.status) params.status = filters.status
   if (filters.source_type) params.source_type = filters.source_type
+  if (filters.environment) params.environment = filters.environment
   if (route.query.claimed === '0' || route.query.ack === '0') params.claimed = '0'
   else if (route.query.claimed === '1' || route.query.ack === '1') params.claimed = '1'
   return params
@@ -976,6 +1014,7 @@ async function fetchAlerts() {
   try {
     const response = await getAlerts(buildAlertParams())
     alerts.value = listOf(response)
+    selectedAlerts.value = []
     total.value = response?.count || alerts.value.length
   } finally {
     loading.value = false
@@ -1020,18 +1059,36 @@ function openDetail(row) {
   detailVisible.value = true
 }
 
+function handleSelectionChange(rows) {
+  selectedAlerts.value = rows || []
+}
+
 async function runAlertAction(row, action) {
   const actionMap = {
     claim: () => claimAlert(row.id),
     unclaim: () => unclaimAlert(row.id),
     mute: () => muteAlert(row.id, { minutes: 60 }),
     escalate: () => escalateAlert(row.id),
-    resolve: () => resolveAlert(row.id),
     close: () => closeAlert(row.id),
     reopen: () => reopenAlert(row.id),
     notify: () => notifyAlert(row.id, { action: row.status === 'resolved' ? 'resolved' : 'fire' }),
   }
   await actionMap[action]?.()
+  ElMessage.success('\u64CD\u4F5C\u5DF2\u63D0\u4EA4')
+  detailVisible.value = false
+  await refreshAll()
+}
+
+function openMuteDialog(row) {
+  muteDialog.target = row
+  muteDialog.form.minutes = 60
+  muteDialog.visible = true
+}
+
+async function submitMuteDialog() {
+  if (!muteDialog.target?.id) return
+  await muteAlert(muteDialog.target.id, { minutes: Number(muteDialog.form.minutes || 60) })
+  muteDialog.visible = false
   ElMessage.success('\u64CD\u4F5C\u5DF2\u63D0\u4EA4')
   detailVisible.value = false
   await refreshAll()
@@ -1045,6 +1102,19 @@ async function handleRowCommand(command, row) {
     return
   }
   await runAlertAction(row, command)
+}
+
+async function handleBatchDelete() {
+  if (!selectedAlerts.value.length) return
+  await ElMessageBox.confirm(`确认删除已选中的 ${selectedAlerts.value.length} 条告警？`, '批量删除', {
+    type: 'warning',
+    confirmButtonText: '删除',
+    cancelButtonText: '取消',
+  })
+  await Promise.all(selectedAlerts.value.map((item) => deleteAlert(item.id)))
+  selectedAlerts.value = []
+  ElMessage.success('\u5DF2\u5220\u9664\u9009\u4E2D\u544A\u8B66')
+  await refreshAll()
 }
 
 function ensureTabAccess() {
@@ -1471,7 +1541,7 @@ onMounted(async () => {
 .claimant-cell {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 4px;
 }
 
 .claimant-cell {
@@ -1614,6 +1684,10 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
+.toolbar-spacer {
+  flex: 1 1 auto;
+}
+
 .toolbar .el-input {
   width: 280px;
 }
@@ -1733,7 +1807,7 @@ onMounted(async () => {
   border-radius: 12px;
   display: flex;
   gap: 8px;
-  margin-bottom: 8px;
+  margin: -6px 0 8px;
   padding: 10px 12px;
 }
 
@@ -1744,6 +1818,17 @@ onMounted(async () => {
 
 .detail-actions {
   margin: 8px 0;
+}
+
+.field-suffix {
+  color: var(--alert-muted);
+  margin-left: 8px;
+}
+
+.mute-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .kv-list {
@@ -1795,6 +1880,14 @@ onMounted(async () => {
   background: #fff;
   border-radius: 10px;
   box-shadow: 0 0 0 1px var(--alert-border-soft) inset;
+}
+
+.alerts-page :deep(.el-drawer__header) {
+  margin-bottom: 8px;
+}
+
+.alerts-page :deep(.el-drawer__body) {
+  padding-top: 8px;
 }
 
 .alerts-page :deep(.el-button--primary) {
