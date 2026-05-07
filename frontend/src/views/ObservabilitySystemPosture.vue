@@ -1,5 +1,5 @@
 <template>
-  <div class="system-posture-page">
+  <div class="system-posture-page" :class="{ 'system-posture-page--embedded': embedded }">
     <section v-if="!embedded" class="hero panel">
       <div class="release-hero-copy">
         <div class="release-hero-title-row release-hero-title-inline">
@@ -25,7 +25,7 @@
       <div class="overview-toolbar">
         <div>
           <div class="drill-breadcrumb">
-            <button type="button" :class="{ active: !drillPath.length }" @click="resetDrill">业务系统</button>
+            <button type="button" :class="{ active: !drillPath.length }" @click="resetDrill">系统视角</button>
             <template v-for="item in drillPath" :key="item.id">
               <span>/</span>
               <button type="button" :class="{ active: currentDrillParent?.id === item.id }" @click="jumpDrill(item)">
@@ -264,7 +264,7 @@
 
     <el-dialog
       v-model="drillDialogVisible"
-      :title="`${selectedSystem.name || '业务系统'} · 层级下钻`"
+      :title="`${selectedSystem.name || '系统视角'} · 层级下钻`"
       width="1040px"
       destroy-on-close
       class="system-posture-detail-dialog"
@@ -330,7 +330,7 @@
 
     <el-dialog
       v-model="topologyDialogVisible"
-      :title="`${selectedSystem.name || '业务系统'} · 依赖拓扑`"
+      :title="`${selectedSystem.name || '系统视角'} · 依赖拓扑`"
       width="1080px"
       destroy-on-close
       class="system-posture-detail-dialog"
@@ -1088,9 +1088,86 @@ function systemExists(systemId = '') {
   return Boolean(systemId && systems.value.some(item => item.id === systemId))
 }
 
+function buildRuleConfigStructureFromSystem(system = {}, ruleConfig = {}) {
+  const nextConfig = {
+    ...(ruleConfig && typeof ruleConfig === 'object' && !Array.isArray(ruleConfig) ? ruleConfig : {}),
+  }
+  const services = Array.isArray(system.children) ? system.children : []
+  const dependencies = Array.isArray(system.dependencies) ? system.dependencies : []
+
+  if (!nextConfig.drilldown || typeof nextConfig.drilldown !== 'object' || Array.isArray(nextConfig.drilldown)) {
+    nextConfig.drilldown = {}
+  }
+  if (!Array.isArray(nextConfig.drilldown.levels) || !nextConfig.drilldown.levels.length) {
+    nextConfig.drilldown.levels = [
+      { level: 'L1', kind: 'system', label: system.name || '业务系统', source: 'system' },
+      { level: 'L2', kind: 'service', label: '子系统 / 服务', source: 'children' },
+      { level: 'L3', kind: 'interface', label: '模块 / 接口', source: 'children.interfaces' },
+      { level: 'L2', kind: 'dependency', label: '依赖项', source: 'dependencies' },
+    ]
+  }
+  if (!Array.isArray(nextConfig.drilldown.services) || !nextConfig.drilldown.services.length) {
+    nextConfig.drilldown.services = services.map(service => ({
+      id: service.id,
+      name: service.name,
+      role: service.role || service.hint || '',
+      interfaces: (service.children || []).map(item => item.id).filter(Boolean),
+    })).filter(item => item.id)
+  }
+  if (!Array.isArray(nextConfig.drilldown.dependencies) || !nextConfig.drilldown.dependencies.length) {
+    nextConfig.drilldown.dependencies = dependencies.map(dep => ({
+      id: dep.id,
+      role: dep.role || 'dependency',
+      reason: dep.impact || dep.hint || dep.kind || '',
+    })).filter(item => item.id)
+  }
+
+  if (!nextConfig.topology || typeof nextConfig.topology !== 'object' || Array.isArray(nextConfig.topology)) {
+    nextConfig.topology = {}
+  }
+  if (!nextConfig.topology.root) {
+    nextConfig.topology.root = system.id || ''
+  }
+  if (!Array.isArray(nextConfig.topology.nodes) || !nextConfig.topology.nodes.length) {
+    const nodes = [
+      { id: system.id, kind: 'system', label: system.name },
+    ]
+    services.forEach((service) => {
+      if (service.id) nodes.push({ id: service.id, kind: service.kind || 'service', label: service.name, role: service.role || '' })
+      ;(service.children || []).forEach((item) => {
+        if (item.id) nodes.push({ id: item.id, kind: item.kind || 'interface', label: item.name })
+      })
+    })
+    dependencies.forEach((dep) => {
+      if (dep.id) nodes.push({ id: dep.id, kind: dep.kind || 'dependency', label: dep.name, role: dep.role || 'dependency' })
+    })
+    nextConfig.topology.nodes = nodes.filter(item => item.id)
+  }
+  if (!Array.isArray(nextConfig.topology.links) || !nextConfig.topology.links.length) {
+    const links = []
+    services.forEach((service) => {
+      if (system.id && service.id) links.push({ source: system.id, target: service.id, type: 'drilldown' })
+      ;(service.children || []).forEach((item) => {
+        if (service.id && item.id) links.push({ source: service.id, target: item.id, type: 'interface' })
+      })
+    })
+    dependencies.forEach((dep) => {
+      if (!system.id || !dep.id) return
+      if (dep.role === 'upstream') {
+        links.push({ source: dep.id, target: system.id, type: 'upstream' })
+      } else {
+        links.push({ source: system.id, target: dep.id, type: dep.role || 'dependency' })
+      }
+    })
+    nextConfig.topology.links = links
+  }
+  return nextConfig
+}
+
 function systemToForm(system = {}) {
   const form = system.form || {}
-  const ruleConfig = form.rule_config || system.rule_config || {}
+  const sourceRuleConfig = form.rule_config || system.rule_config || {}
+  const ruleConfig = buildRuleConfigStructureFromSystem(system, sourceRuleConfig)
   const northStar = ruleConfig?.north_star && typeof ruleConfig.north_star === 'object'
     ? ruleConfig.north_star
     : form.north_star || system.north_star || {}
@@ -1666,11 +1743,20 @@ onUnmounted(() => {
   padding: 8px;
 }
 
+.system-posture-page--embedded .overview-shell {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  min-height: auto;
+  padding: 0;
+}
+
 .overview-layout,
 .drill-layout {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 1.62fr) minmax(340px, 0.86fr);
+  grid-template-columns: minmax(0, 2.05fr) minmax(280px, 0.7fr);
 }
 
 .overview-layout.is-root {
@@ -1680,7 +1766,7 @@ onUnmounted(() => {
 .system-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .environment-groups {

@@ -1074,6 +1074,14 @@ class ObservabilityViewsTests(TestCase):
         self.assertTrue(payload['selected_system']['dependencies'])
         self.assertGreaterEqual(payload['topology']['node_count'], 1)
         self.assertTrue(any(item['id'] == 'system-posture' for item in payload['data_sources']))
+        selected_rule_config = payload['selected_system']['form']['rule_config']
+        self.assertEqual(selected_rule_config['drilldown']['levels'][0]['kind'], 'system')
+        self.assertIn('grafana', [item['id'] for item in selected_rule_config['drilldown']['services']])
+        self.assertTrue(any(link['type'] == 'upstream' for link in selected_rule_config['topology']['links']))
+        edge = next(item for item in payload['systems'] if item['id'] == 'platform-edge')
+        edge_rule_config = edge['form']['rule_config']
+        self.assertIn('nginx-ingress', [item['id'] for item in edge_rule_config['drilldown']['services']])
+        self.assertTrue(any(link['source'] == 'waf-rule' and link['target'] == 'platform-edge' for link in edge_rule_config['topology']['links']))
 
     @override_settings(OBSERVABILITY_CONFIG={
         **TEST_OBSERVABILITY_CONFIG,
@@ -1329,6 +1337,38 @@ class ObservabilityViewsTests(TestCase):
         override.save(update_fields=['is_enabled'])
         hidden_response = self.client.get('/api/observability/system-posture/')
         self.assertFalse(any(item['name'] == '电商交易核心' for item in hidden_response.json()['systems']))
+
+    def test_builtin_system_posture_override_inherits_rule_json_structure(self):
+        SystemPostureSystem.objects.create(
+            name='平台入口与网络',
+            domain='基础设施域',
+            tier='P1',
+            owner='edge-owner',
+            summary='只覆盖入口成功率目标',
+            base_status='warning',
+            north_star={'label': '入口成功率', 'value': 99.1, 'target': 99, 'unit': '%', 'direction': 'higher'},
+            rule_config={
+                'north_star': {
+                    'label': '入口成功率',
+                    'target': 99,
+                    'unit': '%',
+                    'direction': 'higher',
+                },
+            },
+            created_by='observer-admin',
+            updated_by='observer-admin',
+        )
+
+        response = self.client.get('/api/observability/system-posture/?system=平台入口与网络')
+
+        self.assertEqual(response.status_code, 200)
+        selected = response.json()['selected_system']
+        rule_config = selected['form']['rule_config']
+        self.assertEqual(rule_config['north_star']['target'], 99)
+        self.assertIn('drilldown', rule_config)
+        self.assertIn('topology', rule_config)
+        self.assertIn('nginx-ingress', [item['id'] for item in rule_config['drilldown']['services']])
+        self.assertTrue(any(link['source'] == 'waf-rule' and link['target'] == 'platform-edge' for link in rule_config['topology']['links']))
 
     def test_system_posture_manage_requires_manage_permission(self):
         limited_user = get_user_model().objects.create_user('system-posture-readonly', password='Admin@123456')

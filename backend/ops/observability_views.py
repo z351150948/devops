@@ -765,6 +765,90 @@ FIREMAP_SYSTEM_TEMPLATES = [
             {'id': 'link-rules', 'name': '可观测关联规则', 'role': 'downstream', 'kind': '配置', 'base_status': 'healthy', 'metrics': [{'label': '关联命中率', 'value': 99.1, 'target': 99.0, 'unit': '%', 'direction': 'higher'}, {'label': '规则数', 'value': 4, 'target': 3, 'unit': '组', 'direction': 'higher'}], 'impact': '日志、链路、看板之间的跳转规则保持稳定。'},
             {'id': 'query-proxy', 'name': '查询代理', 'role': 'downstream', 'kind': '入口', 'base_status': 'warning', 'metrics': [{'label': 'P95', 'value': 290, 'target': 180, 'unit': 'ms', 'direction': 'lower'}, {'label': '错误率', 'value': 0.5, 'target': 0.2, 'unit': '%', 'direction': 'lower'}], 'impact': '统一查询入口略有抖动。'},
         ],
+        'rule_config': {
+            'enabled': True,
+            'scenario': 'observability_stack',
+            'environment': 'prod',
+            'owners': ['platform-observability', 'sre-observer'],
+            'focus': {
+                'service_id': 'grafana',
+                'interface_id': 'grafana-dashboards',
+                'dependency_ids': ['alertmanager', 'query-proxy'],
+            },
+            'drilldown': {
+                'levels': [
+                    {'level': 'L1', 'kind': 'system', 'label': '观测基础设施', 'source': 'system'},
+                    {'level': 'L2', 'kind': 'service', 'label': '观测组件', 'source': 'services'},
+                    {'level': 'L3', 'kind': 'interface', 'label': '查询与跳转能力', 'source': 'interfaces'},
+                    {'level': 'L2', 'kind': 'dependency', 'label': '外部依赖', 'source': 'dependencies'},
+                ],
+                'services': [
+                    {
+                        'id': 'grafana',
+                        'name': 'Grafana',
+                        'role': '可视化入口',
+                        'interfaces': ['grafana-dashboards', 'grafana-link'],
+                    },
+                    {
+                        'id': 'loki',
+                        'name': 'Loki',
+                        'role': '日志存储',
+                        'interfaces': ['loki-query', 'loki-ingest'],
+                    },
+                    {
+                        'id': 'tempo',
+                        'name': 'Tempo',
+                        'role': '链路存储',
+                        'interfaces': ['tempo-query', 'tempo-detail'],
+                    },
+                ],
+                'dependencies': [
+                    {'id': 'alertmanager', 'role': 'upstream', 'reason': '告警聚合延迟会影响故障发现'},
+                    {'id': 'link-rules', 'role': 'downstream', 'reason': '关联规则决定日志、链路、看板跳转是否命中'},
+                    {'id': 'query-proxy', 'role': 'downstream', 'reason': '统一查询代理抖动会放大入口延迟'},
+                ],
+            },
+            'topology': {
+                'root': 'observability-stack',
+                'nodes': [
+                    {'id': 'observability-stack', 'kind': 'system', 'label': '观测基础设施'},
+                    {'id': 'grafana', 'kind': 'service', 'label': 'Grafana'},
+                    {'id': 'loki', 'kind': 'service', 'label': 'Loki'},
+                    {'id': 'tempo', 'kind': 'service', 'label': 'Tempo'},
+                    {'id': 'alertmanager', 'kind': 'dependency', 'role': 'upstream'},
+                    {'id': 'link-rules', 'kind': 'dependency', 'role': 'downstream'},
+                    {'id': 'query-proxy', 'kind': 'dependency', 'role': 'downstream'},
+                ],
+                'links': [
+                    {'source': 'observability-stack', 'target': 'grafana', 'type': 'drilldown'},
+                    {'source': 'observability-stack', 'target': 'loki', 'type': 'drilldown'},
+                    {'source': 'observability-stack', 'target': 'tempo', 'type': 'drilldown'},
+                    {'source': 'grafana', 'target': 'grafana-dashboards', 'type': 'interface'},
+                    {'source': 'grafana', 'target': 'grafana-link', 'type': 'interface'},
+                    {'source': 'loki', 'target': 'loki-query', 'type': 'interface'},
+                    {'source': 'loki', 'target': 'loki-ingest', 'type': 'interface'},
+                    {'source': 'tempo', 'target': 'tempo-query', 'type': 'interface'},
+                    {'source': 'tempo', 'target': 'tempo-detail', 'type': 'interface'},
+                    {'source': 'alertmanager', 'target': 'observability-stack', 'type': 'upstream'},
+                    {'source': 'observability-stack', 'target': 'link-rules', 'type': 'downstream'},
+                    {'source': 'observability-stack', 'target': 'query-proxy', 'type': 'downstream'},
+                ],
+            },
+            'thresholds': {
+                'ingest_success_rate': {'warning': 99.5, 'critical': 99.0, 'operator': '<'},
+                'query_p95_ms': {'warning': 500, 'critical': 900, 'operator': '>'},
+                'jump_success_rate': {'warning': 98.0, 'critical': 96.0, 'operator': '<'},
+            },
+            'routing': {
+                'grafana_uid': 'infra-overview',
+                'log_datasource': 'loki-prod',
+                'trace_datasource': 'tempo-prod',
+            },
+            'alerts': {
+                'watch_labels': ['job', 'cluster', 'namespace'],
+                'keywords': ['loki timeout', 'tempo query', 'grafana jump'],
+            },
+        },
         'playbook': [
             '先确认 Grafana、Loki、Tempo 三者的查询入口是否都能通。',
             '若日志跳转失效，优先看关联规则和数据源映射。',
@@ -836,6 +920,90 @@ FIREMAP_SYSTEM_TEMPLATES = [
             {'id': 'waf-rule', 'name': 'WAF 规则', 'role': 'upstream', 'kind': '安全', 'base_status': 'warning', 'metrics': [{'label': '拦截率', 'value': 9, 'target': 5, 'unit': '%', 'direction': 'lower'}, {'label': '误杀率', 'value': 0.3, 'target': 0.1, 'unit': '%', 'direction': 'lower'}], 'impact': '误杀会直接表现为入口 4xx 上升。'},
             {'id': 'origin-hosts', 'name': '源站主机', 'role': 'downstream', 'kind': '主机池', 'base_status': 'warning', 'metrics': [{'label': '在线率', 'value': 98.9, 'target': 99.5, 'unit': '%', 'direction': 'higher'}, {'label': '连接池', 'value': 84, 'target': 70, 'unit': '%', 'direction': 'lower'}], 'impact': '源站主机繁忙会拖慢整体入口。'},
         ],
+        'rule_config': {
+            'enabled': True,
+            'scenario': 'platform_edge',
+            'environment': 'prod',
+            'owners': ['infra-sre', 'gateway-oncall'],
+            'focus': {
+                'service_id': 'nginx-ingress',
+                'interface_id': 'ingress-api',
+                'dependency_ids': ['dns-resolver', 'waf-rule', 'origin-hosts'],
+            },
+            'drilldown': {
+                'levels': [
+                    {'level': 'L1', 'kind': 'system', 'label': '平台入口与网络', 'source': 'system'},
+                    {'level': 'L2', 'kind': 'service', 'label': '入口与边界服务', 'source': 'services'},
+                    {'level': 'L3', 'kind': 'interface', 'label': '域名、TLS、回源能力', 'source': 'interfaces'},
+                    {'level': 'L2', 'kind': 'dependency', 'label': '网络依赖', 'source': 'dependencies'},
+                ],
+                'services': [
+                    {
+                        'id': 'nginx-ingress',
+                        'name': 'Nginx Ingress',
+                        'role': '入口层',
+                        'interfaces': ['ingress-api', 'ingress-ssl'],
+                    },
+                    {
+                        'id': 'dns-service',
+                        'name': 'DNS 服务',
+                        'role': '边界依赖',
+                        'interfaces': ['dns-public', 'dns-private'],
+                    },
+                    {
+                        'id': 'cdn-service',
+                        'name': 'CDN 回源',
+                        'role': '边界依赖',
+                        'interfaces': ['cdn-static', 'cdn-origin'],
+                    },
+                ],
+                'dependencies': [
+                    {'id': 'dns-resolver', 'role': 'upstream', 'reason': '解析质量决定入口请求是否能抵达'},
+                    {'id': 'waf-rule', 'role': 'upstream', 'reason': '规则误杀会直接拉高 4xx'},
+                    {'id': 'origin-hosts', 'role': 'downstream', 'reason': '源站繁忙会放大入口 P95 与 5xx'},
+                ],
+            },
+            'topology': {
+                'root': 'platform-edge',
+                'nodes': [
+                    {'id': 'platform-edge', 'kind': 'system', 'label': '平台入口与网络'},
+                    {'id': 'nginx-ingress', 'kind': 'service', 'label': 'Nginx Ingress'},
+                    {'id': 'dns-service', 'kind': 'service', 'label': 'DNS 服务'},
+                    {'id': 'cdn-service', 'kind': 'service', 'label': 'CDN 回源'},
+                    {'id': 'dns-resolver', 'kind': 'dependency', 'role': 'upstream'},
+                    {'id': 'waf-rule', 'kind': 'dependency', 'role': 'upstream'},
+                    {'id': 'origin-hosts', 'kind': 'dependency', 'role': 'downstream'},
+                ],
+                'links': [
+                    {'source': 'platform-edge', 'target': 'nginx-ingress', 'type': 'drilldown'},
+                    {'source': 'platform-edge', 'target': 'dns-service', 'type': 'drilldown'},
+                    {'source': 'platform-edge', 'target': 'cdn-service', 'type': 'drilldown'},
+                    {'source': 'nginx-ingress', 'target': 'ingress-api', 'type': 'interface'},
+                    {'source': 'nginx-ingress', 'target': 'ingress-ssl', 'type': 'interface'},
+                    {'source': 'dns-service', 'target': 'dns-public', 'type': 'interface'},
+                    {'source': 'dns-service', 'target': 'dns-private', 'type': 'interface'},
+                    {'source': 'cdn-service', 'target': 'cdn-static', 'type': 'interface'},
+                    {'source': 'cdn-service', 'target': 'cdn-origin', 'type': 'interface'},
+                    {'source': 'dns-resolver', 'target': 'platform-edge', 'type': 'upstream'},
+                    {'source': 'waf-rule', 'target': 'platform-edge', 'type': 'upstream'},
+                    {'source': 'platform-edge', 'target': 'origin-hosts', 'type': 'downstream'},
+                ],
+            },
+            'thresholds': {
+                'edge_success_rate': {'warning': 99.5, 'critical': 99.0, 'operator': '<'},
+                'edge_p95_ms': {'warning': 220, 'critical': 320, 'operator': '>'},
+                'waf_false_positive_rate': {'warning': 0.1, 'critical': 0.3, 'operator': '>'},
+            },
+            'routing': {
+                'ingress_class': 'nginx',
+                'primary_domains': ['www.sxdevops.top', 'api.sxdevops.top'],
+                'cdn_provider': 'edge-cdn',
+            },
+            'alerts': {
+                'watch_labels': ['host', 'ingress', 'status_code'],
+                'keywords': ['4xx spike', '5xx spike', 'ssl handshake', 'dns latency'],
+            },
+        },
         'playbook': [
             '先区分是 DNS、WAF 还是源站的问题。',
             '入口侧异常往往会同时放大多个业务系统的健康波动。',
@@ -940,14 +1108,16 @@ def _system_posture_builtin_form(template):
     }
 
 
-def _system_posture_system_to_template(system, builtin_backed=False):
+def _system_posture_system_to_template(system, builtin_backed=False, builtin_template=None):
     system_id = f'custom-{system.id}'
     slug = _system_posture_slug(system.name, f'custom-{system.id}')
     north_star = _system_posture_default_metric(system)
     service_specs = system.service_specs if isinstance(system.service_specs, list) else []
     dependencies = system.dependencies if isinstance(system.dependencies, list) else []
     metrics = system.metrics if isinstance(system.metrics, list) else []
-    rule_config = system.rule_config if isinstance(system.rule_config, dict) else {}
+    configured_rule_config = system.rule_config if isinstance(system.rule_config, dict) else {}
+    builtin_rule_config = builtin_template.get('rule_config') if isinstance(builtin_template, dict) and isinstance(builtin_template.get('rule_config'), dict) else {}
+    rule_config = _deep_merge_dict(builtin_rule_config, configured_rule_config) if builtin_backed else configured_rule_config
     keywords = system.keywords if isinstance(system.keywords, list) else []
     playbook = system.playbook if isinstance(system.playbook, list) else []
 
@@ -1013,7 +1183,7 @@ def _system_posture_templates():
         override = custom_by_name.get(item['name'])
         if override:
             if override.is_enabled:
-                templates.append(_system_posture_system_to_template(override, builtin_backed=True))
+                templates.append(_system_posture_system_to_template(override, builtin_backed=True, builtin_template=item))
             continue
         templates.append({
             **item,
@@ -3289,7 +3459,12 @@ def observability_overview(request):
 
     return Response({
         'modules': {
-            'tracing': catalog['tracing'] if catalog else None,
+            'tracing': ({
+                **(catalog['tracing'] if catalog else {}),
+                'datasource_count': TracingDataSource.objects.count() if access['trace'] or access['trace_datasource'] else 0,
+            } if catalog else ({
+                'datasource_count': TracingDataSource.objects.count() if access['trace'] or access['trace_datasource'] else 0,
+            } if access['trace'] or access['trace_datasource'] else None)),
             'grafana': grafana,
             'logs': logs,
             'alerts': alerts,

@@ -684,6 +684,8 @@ function formatTimeRangeSummary(range) {
 }
 
 function getPreferredDatasourceId() {
+  const defaultSource = dataSources.value.find((item) => item.is_default)
+  if (defaultSource) return defaultSource.id
   const saved = Number(localStorage.getItem(LAST_DATASOURCE_KEY))
   if (saved && dataSources.value.some((item) => item.id === saved)) return saved
   const shanghai = dataSources.value.find((item) => item.name === DEFAULT_DATASOURCE_NAME)

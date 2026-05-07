@@ -271,7 +271,7 @@ class AIOpsChatSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
 
 class AIOpsAuditSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     serializer_class = AIOpsAuditSessionSerializer
-    http_method_names = ['get', 'delete', 'head', 'options']
+    http_method_names = ['get', 'post', 'delete', 'head', 'options']
     rbac_permissions = {
         'list': ['aiops.audit.view'],
         'retrieve': ['aiops.audit.view'],
@@ -303,6 +303,45 @@ class AIOpsAuditSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             metadata={'session_user': session_user},
         )
         return response
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        session_ids = request.data.get('session_ids')
+        if not isinstance(session_ids, list):
+            return Response({'detail': 'session_ids 必须为数组'}, status=status.HTTP_400_BAD_REQUEST)
+        normalized_ids = [int(item) for item in session_ids if str(item).isdigit()]
+        if not normalized_ids:
+            return Response({'detail': '请至少选择一个会话'}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = self.get_queryset().filter(id__in=normalized_ids)
+        sessions = list(queryset)
+        if not sessions:
+            return Response({'detail': '未找到可删除的会话'}, status=status.HTTP_404_NOT_FOUND)
+
+        deleted_count = len(sessions)
+        deleted_titles = [item.title for item in sessions[:5]]
+        admin_deleted = any(getattr(item.user, 'username', '') == 'admin' for item in sessions)
+        session_meta = [
+            {'id': item.id, 'title': item.title, 'username': getattr(item.user, 'username', '')}
+            for item in sessions
+        ]
+        queryset.delete()
+        if admin_deleted:
+            sync_admin_sessions_to_demo()
+        record_event(
+            request=request,
+            module='aiops',
+            category='audit',
+            action='bulk_delete_sessions',
+            title='批量删除 AIOps 审计会话',
+            summary=f'已批量删除 {deleted_count} 个会话',
+            resource_type='aiops_session',
+            resource_id=deleted_count,
+            resource_name='、'.join(deleted_titles),
+            correlation_id=f'aiops-session-bulk:{deleted_count}',
+            metadata={'sessions': session_meta},
+        )
+        return Response({'deleted': deleted_count}, status=status.HTTP_200_OK)
 
 
 class AIOpsToolInvocationViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):

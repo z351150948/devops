@@ -245,9 +245,22 @@
         <div class="audit-section">
           <div class="section-toolbar audit-toolbar">
             <div class="section-title" style="margin-bottom:0;">最近会话</div>
-            <span class="audit-hint">展示全部历史，可翻页查看</span>
+            <div class="audit-toolbar-actions">
+              <span class="audit-hint">展示全部历史，可翻页查看</span>
+              <el-button
+                v-if="canManageAudit"
+                size="small"
+                type="danger"
+                plain
+                :disabled="!selectedAuditSessionIds.length"
+                @click="handleBatchDeleteAuditSessions"
+              >
+                批量删除
+              </el-button>
+            </div>
           </div>
-          <el-table :data="auditSessions" stripe size="small">
+          <el-table :data="auditSessions" stripe size="small" @selection-change="handleAuditSessionSelectionChange">
+            <el-table-column v-if="canManageAudit" type="selection" width="42" />
             <el-table-column prop="title" label="会话标题" min-width="220" show-overflow-tooltip />
             <el-table-column prop="username" label="用户" width="120" />
             <el-table-column prop="message_count" label="消息数" width="90" />
@@ -401,6 +414,7 @@ import {
   createAIOpsMcpServer,
   createAIOpsProvider,
   createAIOpsSkill,
+  bulkDeleteAIOpsAuditSessions,
   deleteAIOpsAuditSession,
   deleteAIOpsMcpServer,
   deleteAIOpsProvider,
@@ -435,6 +449,7 @@ const auditOverview = ref({})
 const auditSessions = ref([])
 const auditTools = ref([])
 const auditActions = ref([])
+const selectedAuditSessionIds = ref([])
 const auditSessionPagination = reactive({
   page: 1,
   pageSize: 20,
@@ -613,6 +628,7 @@ async function loadAuditSessions(page = 1) {
     auditSessionPagination.page = page
     auditSessionPagination.total = sessionData.count || 0
     auditSessions.value = sessionData.results || sessionData || []
+    selectedAuditSessionIds.value = []
   } catch (error) {
     const message = String(error?.response?.data?.detail || '')
     if (page > 1 && message.includes('无效页面')) {
@@ -796,6 +812,25 @@ async function handleDeleteAuditSession(row) {
   ])
 }
 
+function handleAuditSessionSelectionChange(rows) {
+  selectedAuditSessionIds.value = rows.map((item) => item.id)
+}
+
+async function handleBatchDeleteAuditSessions() {
+  if (!selectedAuditSessionIds.value.length) return
+  await ElMessageBox.confirm(`确认批量删除已选中的 ${selectedAuditSessionIds.value.length} 个会话吗？该操作不可恢复。`, '批量删除确认', { type: 'warning' })
+  const shouldFallbackPage = selectedAuditSessionIds.value.length === auditSessions.value.length && auditSessionPagination.page > 1
+  const deletedCount = selectedAuditSessionIds.value.length
+  await bulkDeleteAIOpsAuditSessions(selectedAuditSessionIds.value)
+  ElMessage.success(`已删除 ${deletedCount} 个会话`)
+  await Promise.all([
+    getAIOpsAuditOverview().then((data) => {
+      auditOverview.value = data || {}
+    }),
+    loadAuditSessions(shouldFallbackPage ? auditSessionPagination.page - 1 : auditSessionPagination.page),
+  ])
+}
+
 onMounted(async () => {
   resetProviderForm()
   resetMcpForm()
@@ -824,6 +859,7 @@ onMounted(async () => {
 .model-discovery-hint{display:inline-flex;align-items:center;gap:6px;color:#64748b;font-size:12px;line-height:1.4}
 .audit-section{margin-top:8px}
 .audit-toolbar{justify-content:space-between;align-items:center}
+.audit-toolbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .audit-hint{color:#64748b;font-size:12px}
 .pagination-row{display:flex;justify-content:flex-end;margin-top:10px}
 .empty-panel{padding:18px 4px 8px}

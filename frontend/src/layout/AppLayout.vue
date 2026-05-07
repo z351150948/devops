@@ -379,13 +379,28 @@ function canAccess(item) {
   return true
 }
 
-const visibleMenuItems = computed(() => menuItems
-  .map((item) => {
-    if (!item.children) return item
-    const children = item.children.filter(canAccess)
-    return { ...item, children }
-  })
-  .filter((item) => item.children ? item.children.length > 0 : canAccess(item)))
+const visibleMenuItems = computed(() => {
+  const mapped = menuItems
+    .map((item) => {
+      if (!item.children) return item
+      const children = item.children.filter(canAccess)
+      return { ...item, children }
+    })
+    .filter((item) => item.children ? item.children.length > 0 : canAccess(item))
+
+  const marketplaceIndex = mapped.findIndex((item) => item.path === '/marketplace')
+  const containerIndex = mapped.findIndex((item) => Array.isArray(item.children) && item.children.some((child) => child.path === '/containers/k8s'))
+
+  if (marketplaceIndex === -1 || containerIndex === -1) return mapped
+
+  const marketplaceItem = mapped[marketplaceIndex]
+  const nextItems = mapped.filter((_, index) => index !== marketplaceIndex)
+  const target = nextItems[containerIndex > marketplaceIndex ? containerIndex - 1 : containerIndex]
+  if (!target?.children?.some((child) => child.path === '/marketplace')) {
+    target.children = [...target.children, marketplaceItem]
+  }
+  return nextItems
+})
 
 const normalizedMenuPath = computed(() => {
   if (route.path.startsWith('/sql')) {

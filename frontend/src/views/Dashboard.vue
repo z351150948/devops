@@ -6,7 +6,6 @@
           <span class="stat-icon-shell">
             <el-icon><component :is="card.icon" /></el-icon>
           </span>
-          <span class="metric-badge">{{ card.badge }}</span>
         </div>
         <div class="stat-value">{{ card.value }}</div>
         <div class="stat-label">{{ card.label }}</div>
@@ -221,7 +220,6 @@ const summaryCards = computed(() => [
     label: '主机总量',
     value: stats.value.hosts?.total || 0,
     meta: `在线 ${stats.value.hosts?.online || 0} / 离线 ${stats.value.hosts?.offline || 0}`,
-    badge: '资源池',
     tone: 'context-card',
     icon: Monitor,
   },
@@ -229,7 +227,6 @@ const summaryCards = computed(() => [
     label: '可用率',
     value: `${hostAvailability.value}%`,
     meta: `告警态主机 ${stats.value.hosts?.warning || 0} 台`,
-    badge: '健康度',
     tone: 'success-card',
     icon: CircleCheck,
   },
@@ -237,7 +234,6 @@ const summaryCards = computed(() => [
     label: '运行中发布',
     value: stats.value.deployments?.running || 0,
     meta: `失败 ${stats.value.deployments?.failed || 0} / 总计 ${stats.value.deployments?.total || 0}`,
-    badge: '交付中',
     tone: 'warning-card',
     icon: Promotion,
   },
@@ -245,7 +241,6 @@ const summaryCards = computed(() => [
     label: '未认领告警',
     value: stats.value.alerts?.unacknowledged || 0,
     meta: `严重 ${stats.value.alerts?.critical || 0} / 警告 ${stats.value.alerts?.warning || 0}`,
-    badge: '风险面',
     tone: 'danger-card',
     icon: Bell,
   },
@@ -604,25 +599,6 @@ onUnmounted(() => {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.94);
 }
 
-.metric-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: auto;
-  height: auto;
-  padding: 0;
-  border-radius: 0;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #8a94a6;
-  background: transparent;
-  border: none;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  white-space: nowrap;
-  line-height: 1.05;
-}
 
 .stat-value,
 .stat-label,
@@ -670,18 +646,6 @@ onUnmounted(() => {
   background: #fff5f5;
   color: #ef4444;
   border-color: rgba(254, 202, 202, 0.96);
-}
-
-.success-card .metric-badge {
-  color: #10b981;
-}
-
-.warning-card .metric-badge {
-  color: #f59e0b;
-}
-
-.danger-card .metric-badge {
-  color: #ef4444;
 }
 
 .dashboard-alert-strip {

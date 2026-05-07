@@ -18,92 +18,13 @@
     </section>
 
     <section class="capability-section">
-      <div class="section-head">
-        <h3>核心能力</h3>
-      </div>
-
-      <div class="module-grid">
-        <article v-if="overview.modules?.grafana" class="module-card">
-          <div class="module-head">
-            <div class="module-title">
-              <el-icon><Histogram /></el-icon>
-              <strong>监控看板</strong>
-            </div>
-            <el-tag size="small" :type="overview.modules.grafana.configured ? 'success' : 'warning'">
-              {{ overview.modules.grafana.configured ? '已配置' : '待接入' }}
-            </el-tag>
+      <div class="stats-grid release-stats dashboard-stats capability-card-grid">
+        <div v-for="card in capabilityCards" :key="card.label" class="stat-card release-stat-card" :class="card.tone">
+          <div class="stat-inline">
+            <span class="stat-label">{{ card.label }}</span>
+            <span class="stat-value">{{ card.value }}</span>
           </div>
-          <div class="module-meta">
-            <span>看板 {{ overview.modules.grafana.dashboard_count }}</span>
-            <span>面板 {{ overview.modules.grafana.panel_count }}</span>
-            <span>数据源 {{ overview.modules.grafana.datasource_count }}</span>
-          </div>
-          <div class="module-actions">
-            <el-button size="small" link type="primary" @click="go('/observability/grafana')">查看看板</el-button>
-            <el-button size="small" v-if="overview.modules.grafana.url" link @click="openExternal(overview.modules.grafana.url)">外部打开</el-button>
-          </div>
-        </article>
-
-        <article v-if="overview.modules?.logs" class="module-card">
-          <div class="module-head">
-            <div class="module-title">
-              <el-icon><Search /></el-icon>
-              <strong>日志中心</strong>
-            </div>
-            <el-tag size="small" type="success">已接入</el-tag>
-          </div>
-          <div class="module-meta">
-            <span>数据源 {{ overview.modules.logs.datasource_count }}</span>
-            <span>启用 {{ overview.modules.logs.enabled_count }}</span>
-            <span>默认 {{ overview.modules.logs.default_count }}</span>
-          </div>
-          <div class="module-actions">
-            <el-button size="small" link type="primary" @click="go('/logs')">查看日志</el-button>
-            <el-button size="small" v-if="canViewLogDatasources" link @click="go('/logs/datasources')">数据源</el-button>
-          </div>
-        </article>
-
-        <article v-if="overview.modules?.tracing" class="module-card">
-          <div class="module-head">
-            <div class="module-title">
-              <el-icon><Connection /></el-icon>
-              <strong>链路追踪</strong>
-            </div>
-            <el-tag size="small" :type="overview.modules.tracing.source === 'demo' ? 'warning' : 'success'">
-              {{ overview.modules.tracing.provider_name || (overview.modules.tracing.source === 'demo' ? '演示模式' : '实时数据') }}
-            </el-tag>
-          </div>
-          <div class="module-meta">
-            <span>服务 {{ overview.summary?.service_count || 0 }}</span>
-            <span>Trace {{ overview.summary?.trace_count || 0 }}</span>
-            <span>错误 {{ overview.summary?.error_count || 0 }}</span>
-          </div>
-          <div class="module-actions">
-            <el-button size="small" link type="primary" @click="openTracingProvider(overview.modules.tracing)">查看链路</el-button>
-            <el-button size="small" v-if="canViewTraceDatasources" link @click="go('/observability/tracing/datasources')">数据源</el-button>
-            <el-button size="small" v-if="overview.modules.tracing.ui_url" link @click="openExternal(overview.modules.tracing.ui_url)">外部打开</el-button>
-          </div>
-        </article>
-
-        <article v-if="overview.modules?.alerts" class="module-card">
-          <div class="module-head">
-            <div class="module-title">
-              <el-icon><Bell /></el-icon>
-              <strong>告警中心</strong>
-            </div>
-            <el-tag size="small" :type="overview.modules.alerts.unacknowledged ? 'danger' : 'success'">
-              {{ overview.modules.alerts.unacknowledged ? '待处理' : '稳定' }}
-            </el-tag>
-          </div>
-          <div class="module-meta">
-            <span>未认领 {{ overview.modules.alerts.unacknowledged }}</span>
-            <span>严重 {{ overview.modules.alerts.critical }}</span>
-            <span>警告 {{ overview.modules.alerts.warning }}</span>
-          </div>
-          <div class="module-actions">
-            <el-button size="small" link type="primary" @click="go('/alerts')">查看告警</el-button>
-          </div>
-        </article>
+        </div>
       </div>
     </section>
 
@@ -140,22 +61,41 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-import { Aim, Bell, Connection, DataLine, Histogram, RefreshRight, Search, Share } from '@element-plus/icons-vue'
+import { Aim, DataLine, RefreshRight, Share } from '@element-plus/icons-vue'
 import { getObservabilityOverview } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 import ObservabilityDataSourceLinks from './ObservabilityDataSourceLinks.vue'
 import ObservabilitySystemPosture from './ObservabilitySystemPosture.vue'
 
-const router = useRouter()
 const authStore = useAuthStore()
 const loading = ref(false)
 const overview = ref({ modules: {}, summary: {} })
-const canViewLogDatasources = computed(() => authStore.hasPermission('ops.log.datasource.view'))
-const canViewTraceDatasources = computed(() => authStore.hasPermission('ops.trace.datasource.view'))
 const canViewLinks = computed(() => authStore.hasPermission('ops.observability.link.view'))
 const canViewSystemPosture = computed(() => authStore.hasPermission('ops.observability.system_posture.view'))
 const activeOverviewTab = ref(canViewSystemPosture.value ? 'system-posture' : 'capabilities')
+
+const capabilityCards = computed(() => [
+  {
+    label: '监控看板',
+    value: `看板数 ${overview.value.modules?.grafana?.dashboard_count || 0}`,
+    tone: '',
+  },
+  {
+    label: '日志中心',
+    value: `数据源 ${overview.value.modules?.logs?.datasource_count || 0}`,
+    tone: 'success-card',
+  },
+  {
+    label: '链路追踪',
+    value: `数据源 ${overview.value.modules?.tracing?.datasource_count || 0}`,
+    tone: 'warning-card',
+  },
+  {
+    label: '告警中心',
+    value: `活跃告警 ${overview.value.modules?.alerts?.unacknowledged || 0}`,
+    tone: 'danger-card',
+  },
+])
 
 watch(canViewSystemPosture, (canView) => {
   if (!canView && activeOverviewTab.value === 'system-posture') {
@@ -170,24 +110,6 @@ async function loadOverview() {
   } finally {
     loading.value = false
   }
-}
-
-function go(path) {
-  if (path) router.push(path)
-}
-
-function openTracingProvider(provider) {
-  router.push({
-    path: '/observability/tracing',
-    query: {
-      ...(provider?.provider ? { provider: provider.provider } : {}),
-      ...(provider?.datasource_id ? { datasourceId: String(provider.datasource_id) } : {}),
-    },
-  })
-}
-
-function openExternal(url) {
-  if (url) window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 onMounted(loadOverview)
@@ -212,11 +134,7 @@ onMounted(loadOverview)
 .hero-copy,
 .hero-title-row,
 .hero-actions,
-.section-head,
-.module-head,
-.module-title,
-.module-actions,
-.module-meta {
+.section-head {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -265,8 +183,7 @@ onMounted(loadOverview)
 }
 
 .capability-section {
-  display: grid;
-  gap: 8px;
+  display: block;
 }
 
 .overview-center-tabs {
@@ -296,48 +213,61 @@ onMounted(loadOverview)
   margin: 0;
 }
 
-.module-grid {
+.capability-card-grid {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 0;
 }
 
-.module-card {
+.release-stat-card {
+  background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 10px;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(31, 35, 41, 0.04);
+  min-height: 68px;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
 }
 
-.module-title strong {
+.success-card {
+  background: linear-gradient(135deg, #dcfce7, #86efac);
+}
+
+.info-card {
+  background: linear-gradient(135deg, #dbeafe, #93c5fd);
+}
+
+.warning-card {
+  background: linear-gradient(135deg, #fef3c7, #fdba74);
+}
+
+.danger-card {
+  background: linear-gradient(135deg, #fee2e2, #fca5a5);
+}
+
+.stat-inline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stat-label {
+  color: #0f172a;
   font-size: 14px;
+  font-weight: 700;
 }
 
-.module-meta span {
-  color: var(--text-secondary);
-  line-height: 1.45;
-  margin: 0;
-}
-
-.module-card {
-  background: linear-gradient(180deg, #fff, #f8fafc);
-}
-
-.module-head {
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.module-title {
-  align-items: center;
-}
-
-.module-meta {
-  margin-bottom: 6px;
+.stat-value {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 @media (max-width: 1200px) {
-  .module-grid {
+  .capability-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -349,12 +279,12 @@ onMounted(loadOverview)
     flex-direction: column;
   }
 
-  .module-grid {
+  .capability-card-grid {
     grid-template-columns: 1fr;
   }
 }
-.hero.panel { border-radius: 20px; }
+
+.hero.panel {
+  border-radius: 20px;
+}
 </style>
-
-
-
