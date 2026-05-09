@@ -40,6 +40,7 @@ class EventSourceTests(TestCase):
                 'summary': '自研系统推送变更事件',
                 'result': EventRecord.RESULT_SUCCESS,
                 'severity': EventRecord.SEVERITY_INFO,
+                'system_name': '交易',
                 'application': 'payment-api',
             },
             format='json',
@@ -50,6 +51,7 @@ class EventSourceTests(TestCase):
         event = EventRecord.objects.get(metadata__event_source_code='custom', metadata__external_event_id='unit-001')
         self.assertEqual(event.title, '自研系统变更事件')
         self.assertEqual(event.source_type, EventRecord.SOURCE_EXTERNAL)
+        self.assertEqual(event.business_line, '交易')
         self.assertEqual(event.application, 'payment-api')
 
     def test_external_ingest_deduplicates_by_event_id_per_source(self):
@@ -161,6 +163,37 @@ class EventSourceTests(TestCase):
         self.assertEqual(event.action, 'pipeline')
         self.assertEqual(event.metadata['event_category'], 'application_release')
         self.assertEqual(event.metadata['event_category_source'], 'traits')
+
+    def test_jenkins_events_preserve_environment_and_service(self):
+        _ensure_default_event_sources()
+        source = EventSource.objects.get(code='jenkins')
+        token = source.issue_token()
+        source.enabled = True
+        source.status = EventSource.STATUS_HEALTHY
+        source.save(update_fields=['token_hash', 'token_preview', 'enabled', 'status', 'updated_at'])
+
+        response = APIClient().post(
+            '/api/event-sources/jenkins/ingest/',
+            {
+                'job_name': 'gateway-release',
+                'build_number': '42',
+                'phase': 'deploy',
+                'status': 'success',
+                'message': 'gateway release succeeded',
+                'user': 'jenkins',
+                'service': 'gateway',
+                'system_name': '交易',
+                'environment': '电商测试环境-k3s',
+            },
+            format='json',
+            HTTP_AUTHORIZATION=f'Bearer {token}',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        event = EventRecord.objects.get(metadata__event_source_code='jenkins', metadata__external_event_id='gateway-release#42')
+        self.assertEqual(event.environment, '电商测试环境-k3s')
+        self.assertEqual(event.business_line, '交易')
+        self.assertEqual(event.application, 'gateway')
 
     def test_deployment_approval_flow_is_classified_as_application_release(self):
         user = get_user_model().objects.create_superuser(username='flow-admin', password='pass')
@@ -338,3 +371,31 @@ class EventSourceTests(TestCase):
         self.assertFalse(EventRecord.objects.filter(id=old_event.id).exists())
         self.assertTrue(EventRecord.objects.filter(id=recent_event.id).exists())
         self.assertTrue(EventRecord.objects.filter(id=external_event.id).exists())
+
+    def test_event_api_exposes_system_name_and_filter_options(self):
+        user = get_user_model().objects.create_superuser(username='system-name-admin', password='pass')
+        EventRecord.objects.create(
+            module='eventwall',
+            category='external_event',
+            action='deploy',
+            result=EventRecord.RESULT_SUCCESS,
+            severity=EventRecord.SEVERITY_INFO,
+            title='system-name-check',
+            summary='system-name-check',
+            business_line='trade',
+            environment='prod',
+            application='payment-api',
+        )
+
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        list_response = client.get('/api/events/', {'system_name': 'trade'})
+        self.assertEqual(list_response.status_code, 200)
+        first = list_response.data['results'][0]
+        self.assertEqual(first['system_name'], 'trade')
+
+        filter_response = client.get('/api/events/filter_options/', {'system_name': 'trade'})
+        self.assertEqual(filter_response.status_code, 200)
+        self.assertIn('system_names', filter_response.data)
+        self.assertIn('trade', filter_response.data['system_names'])

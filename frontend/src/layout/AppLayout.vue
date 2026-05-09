@@ -343,10 +343,10 @@ const menuItems = [
     ],
   },
   {
-    title: '事件墙',
+    title: '事件中心',
     icon: 'Tickets',
     children: [
-      { path: '/events/wall', title: '事件墙', icon: 'Aim', permission: 'eventwall.view' },
+      { path: '/events/wall', title: '事件中心', icon: 'Aim', permission: 'eventwall.view' },
       { path: '/events/sources', title: '事件源', icon: 'Share', permission: 'eventwall.source.view' },
     ],
   },
@@ -578,8 +578,8 @@ function buildEventNotificationItem(item) {
   return {
     key: `event-${item.id}`,
     section: 'event',
-    title: item.title || '事件墙动态',
-    description: item.summary || item.detail || item.resource_name || '请进入事件墙查看详情',
+    title: item.title || '事件中心动态',
+    description: item.summary || item.detail || item.resource_name || '请进入事件中心查看详情',
     time: item.occurred_at,
     route: '/events/wall',
     tag: meta.tag,
@@ -591,7 +591,7 @@ function buildEventNotificationItem(item) {
 
 function formatScopeText(item) {
   const parts = []
-  if (item?.business_line) parts.push(item.business_line)
+  if (item?.system_name || item?.business_line) parts.push(item.system_name || item.business_line)
   if (item?.environment_display) {
     parts.push(item.environment_display)
   } else if (item?.environment) {

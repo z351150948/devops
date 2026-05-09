@@ -7,7 +7,7 @@
             <el-icon><Share /></el-icon>
           </span>
           <h2>事件源</h2>
-          <span class="hero-tagline">沉淀事件线索辅助问题溯源，支持通过 Webhook 接入 Jira、Jenkins、GitLab 等外部系统</span>
+          <span class="hero-tagline">汇聚发布、变更、任务与 Webhook 外部事件，按时间线沉淀排障线索，辅助故障定位与 AIOps 分析。</span>
         </div>
       </div>
       <div class="hero-actions">
@@ -15,21 +15,6 @@
           <el-icon><RefreshRight /></el-icon>
           刷新
         </el-button>
-        <el-button v-if="canManageSources" size="small" type="primary" @click="openCreateDialog">
-          <el-icon><Plus /></el-icon>
-          新建接入
-        </el-button>
-      </div>
-    </section>
-
-    <section class="capability-section">
-      <div class="stats-grid release-stats dashboard-stats capability-card-grid">
-        <div v-for="item in statCards" :key="item.label" class="stat-card release-stat-card" :class="item.tone">
-          <div class="stat-inline">
-            <span class="stat-label">{{ item.label }}</span>
-            <span class="stat-value">{{ item.value }}</span>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -38,40 +23,17 @@
     <section class="source-board">
       <div class="panel source-map-panel" v-loading="loading">
         <div class="section-head">
-          <h3>接入概览</h3>
-          <span>{{ filteredSources.length }} 个事件源</span>
+          <h3>平台内置事件源</h3>
+          <div class="section-head-actions">
+            <span>{{ builtinSources.length }} 个事件源</span>
+          </div>
         </div>
-        <div class="source-filter-bar">
-          <button
-            v-for="item in kindSummary"
-            :key="item.kind"
-            type="button"
-            class="source-filter-pill"
-            :class="{ active: sourceKindFilter === item.kind }"
-            @click="sourceKindFilter = sourceKindFilter === item.kind ? '' : item.kind"
-          >
-            {{ item.label }} <b>{{ item.count }}</b>
-          </button>
-          <i></i>
-          <button
-            v-for="item in statusSummary"
-            :key="item.status"
-            type="button"
-            class="source-filter-pill"
-            :class="{ active: statusFilter === item.status }"
-            @click="statusFilter = statusFilter === item.status ? '' : item.status"
-          >
-            <em :class="`is-${item.status}`"></em>
-            {{ item.label }} <b>{{ item.count }}</b>
-          </button>
-          <button v-if="sourceKindFilter || statusFilter" type="button" class="source-filter-pill clear" @click="clearAllFilters">清空</button>
-        </div>
-        <div class="source-card-grid">
+        <div class="source-card-grid source-card-grid--builtin">
           <article
-            v-for="item in featuredSources"
+            v-for="item in builtinSources"
             :key="item.code"
             class="source-card"
-            :class="[`is-${item.status}`, { disabled: !item.enabled }]"
+            :class="{ disabled: !item.enabled }"
           >
             <header>
               <div class="source-avatar" :class="`is-${item.source_kind}`">{{ sourceInitial(item) }}</div>
@@ -79,14 +41,78 @@
                 <strong>{{ item.name }}</strong>
                 <em>{{ item.code }}</em>
               </span>
-              <i class="status-dot" :class="`is-${item.status}`"></i>
+              <i class="status-dot" :class="item.enabled ? 'is-enabled' : 'is-disabled'"></i>
             </header>
             <p>{{ item.description || `${typeLabel(item.source_type)} 事件进入故障分析时间线` }}</p>
             <div class="source-meta">
-              <span>{{ kindLabel(item.source_kind) }}</span>
               <span>{{ typeLabel(item.source_type) }}</span>
               <span>{{ sourceEventCategoryLabel(item) }}</span>
-              <span>{{ statusLabel(item.status) }}</span>
+              <span>{{ enabledLabel(item) }}</span>
+            </div>
+            <footer>
+              <span>
+                <b>{{ item.recent_event_count || 0 }}</b>
+                <em>7 天事件</em>
+              </span>
+              <span>
+                <b>{{ formatShortTime(item.last_event_at || item.last_sync_at) }}</b>
+                <em>最近写入</em>
+              </span>
+            </footer>
+            <div class="card-actions">
+              <el-button size="small" text type="primary" @click="openEvents(item)">看事件</el-button>
+            </div>
+          </article>
+        </div>
+        <el-empty v-if="!loading && !builtinSources.length" description="暂无平台内置事件源" />
+      </div>
+
+      <div class="panel source-map-panel" v-loading="loading">
+        <div class="section-head">
+          <h3>外部接入事件源</h3>
+          <div class="section-head-actions section-head-actions--external">
+            <span>{{ externalSources.length }} 个事件源</span>
+            <el-button size="small" text type="primary" @click="helpDialogVisible = true">接入帮助</el-button>
+            <el-button v-if="canManageSources" size="small" type="primary" @click="openCreateDialog">
+              <el-icon><Plus /></el-icon>
+              新建接入
+            </el-button>
+          </div>
+        </div>
+        <div class="source-filter-bar">
+          <button
+            v-for="item in enabledSummary"
+            :key="item.value"
+            type="button"
+            class="source-filter-pill"
+            :class="{ active: enabledFilter === item.value }"
+            @click="enabledFilter = enabledFilter === item.value ? '' : item.value"
+          >
+            <em :class="item.value === 'enabled' ? 'is-enabled' : 'is-disabled'"></em>
+            {{ item.label }} <b>{{ item.count }}</b>
+          </button>
+          <button v-if="enabledFilter" type="button" class="source-filter-pill clear" @click="clearAllFilters">清空</button>
+        </div>
+        <div class="source-card-grid">
+          <article
+            v-for="item in externalSources"
+            :key="item.code"
+            class="source-card"
+            :class="{ disabled: !item.enabled }"
+          >
+            <header>
+              <div class="source-avatar" :class="`is-${item.source_kind}`">{{ sourceInitial(item) }}</div>
+              <span>
+                <strong>{{ item.name }}</strong>
+                <em>{{ item.code }}</em>
+              </span>
+              <i class="status-dot" :class="item.enabled ? 'is-enabled' : 'is-disabled'"></i>
+            </header>
+            <p>{{ item.description || `${typeLabel(item.source_type)} 事件进入故障分析时间线` }}</p>
+            <div class="source-meta">
+              <span>{{ typeLabel(item.source_type) }}</span>
+              <span>{{ sourceEventCategoryLabel(item) }}</span>
+              <span>{{ enabledLabel(item) }}</span>
             </div>
             <footer>
               <span>
@@ -102,13 +128,73 @@
               <el-button size="small" text type="primary" @click="openEvents(item)">看事件</el-button>
               <el-button v-if="canManageSources && item.source_kind === 'external'" size="small" text @click="openEditAccess(item)">编辑</el-button>
               <el-button v-if="item.source_kind === 'external'" size="small" text @click="openSpec(item)">接入规范</el-button>
-              <el-button v-if="item.source_kind === 'external'" size="small" text @click="copyEndpoint(item)">复制地址</el-button>
             </div>
           </article>
         </div>
-        <el-empty v-if="!loading && !featuredSources.length" description="当前筛选条件下没有事件源" />
+        <el-empty v-if="!loading && !externalSources.length" description="当前筛选条件下没有外部接入事件源" />
       </div>
     </section>
+
+    <el-dialog v-model="helpDialogVisible" title="Webhook 接入帮助" width="760px" append-to-body destroy-on-close>
+      <div class="help-doc">
+        <section>
+          <h4>接入入口</h4>
+          <p>外部系统通过统一 Webhook 写入事件中心，平台按事件源编码区分来源。</p>
+          <pre>POST /api/event-sources/{code}/ingest/
+Authorization: Bearer &lt;token&gt;
+Content-Type: application/json</pre>
+          <p>也可以使用请求头 <code>X-Event-Token: &lt;token&gt;</code> 传递令牌。</p>
+        </section>
+
+        <section>
+          <h4>配置步骤</h4>
+          <div class="help-step-grid">
+            <span><b>1</b> 在事件源中创建或编辑外部接入，选择默认事件分类。</span>
+            <span><b>2</b> 复制平台生成的 Webhook 地址和令牌。</span>
+            <span><b>3</b> 在 ArgoCD、GitLab、Jenkins、Jira 中配置 Webhook URL 和请求头。</span>
+            <span><b>4</b> 推送后在事件中心按环境、系统、事件源过滤验证入库结果。</span>
+          </div>
+        </section>
+
+        <section>
+          <h4>系统配置要点</h4>
+          <div class="help-source-grid">
+            <article>
+              <strong>ArgoCD</strong>
+              <span>推荐接入 Application 同步和健康状态事件；Degraded、Missing、Unknown 会被标记为失败。</span>
+            </article>
+            <article>
+              <strong>GitLab</strong>
+              <span>推荐接入 Pipeline、Deployment、Merge Request 事件；pipeline 会归入应用发布。</span>
+            </article>
+            <article>
+              <strong>Jenkins</strong>
+              <span>推荐推送 job_name、build_number、status；failure、failed、aborted 会被标记为失败。</span>
+            </article>
+            <article>
+              <strong>Jira</strong>
+              <span>推荐接入 Issue 创建、流转和故障工单事件；issue key 会作为资源 ID。</span>
+            </article>
+          </div>
+        </section>
+
+        <section>
+          <h4>标准载荷示例</h4>
+          <pre>{
+  "event_id": "deploy-20260509-001",
+  "event_category": "application_release",
+  "title": "payment-api 发布失败",
+  "result": "failed",
+  "severity": "danger",
+  "system_name": "交易",
+  "environment": "prod",
+  "application": "payment-api",
+  "resource_type": "jenkins_build",
+  "resource_id": "payment-api#184"
+}</pre>
+        </section>
+      </div>
+    </el-dialog>
 
     <el-dialog v-model="sourceDialogVisible" title="新建自定义 Webhook 接入" width="620px" append-to-body destroy-on-close>
       <div class="access-create-tip">
@@ -145,12 +231,23 @@
       </template>
     </el-dialog>
 
-    <el-drawer v-model="specDrawerVisible" title="事件源接入规范" size="660px" append-to-body destroy-on-close>
+    <el-drawer v-model="specDrawerVisible" title="事件源接入规范" size="660px" append-to-body destroy-on-close class="event-source-spec-drawer">
       <div class="drawer-stack">
         <section class="detail-section detail-section--main">
           <strong>{{ activeSource?.name || '自定义事件源' }}</strong>
-          <p>{{ activeSource?.description || '外部系统按统一载荷写入事件墙，进入故障分析时间线。' }}</p>
-          <div class="endpoint-line">{{ endpointFor(activeSource) }}</div>
+          <p>{{ activeSource?.description || '外部系统按统一载荷写入事件中心，进入故障分析时间线。' }}</p>
+          <div class="spec-connection-box">
+            <div class="connection-line">
+              <span>接入地址</span>
+              <b>http://&lt;sxdevops地址&gt;{{ endpointFor(activeSource) }}</b>
+            </div>
+            <div class="connection-line">
+              <span>接入令牌</span>
+              <b>{{ activeSource?.token_preview || '未签发' }}</b>
+              <em>完整令牌仅在签发时展示，规范中显示令牌预览。</em>
+              <el-button v-if="canManageSources && activeSource?.source_kind === 'external'" size="small" text type="primary" @click="reissueActiveToken">重新签发</el-button>
+            </div>
+          </div>
         </section>
         <section class="detail-section">
           <h4>必填字段</h4>
@@ -226,7 +323,7 @@
 
     <el-dialog v-model="tokenDialogVisible" title="接入令牌" width="560px" append-to-body>
       <div class="token-box">
-        <span>令牌只在本次签发后展示，请配置到外部系统的请求头。</span>
+        <span>完整令牌只在本次签发后展示，请配置到外部系统的请求头；后续可在接入规范查看令牌预览。</span>
         <pre>{{ issuedToken }}</pre>
       </div>
       <template #footer>
@@ -260,12 +357,12 @@ const saving = ref(false)
 const sources = ref([])
 const summary = ref({})
 const ingestSpec = ref({})
-const statusFilter = ref('')
-const sourceKindFilter = ref('')
+const enabledFilter = ref('')
 const specDrawerVisible = ref(false)
 const sourceDialogVisible = ref(false)
 const editDialogVisible = ref(false)
 const tokenDialogVisible = ref(false)
+const helpDialogVisible = ref(false)
 const activeSource = ref(null)
 const editingSource = ref(null)
 const issuedToken = ref('')
@@ -280,48 +377,25 @@ const eventCategoryOptions = [
   { key: 'ops_transaction', label: '运维事务', description: '权限开通、网络配置、机器申请释放和通用运维处理类事件。' },
   { key: 'task_center', label: '任务调度', description: '平台内任务中心与外部自动化任务平台推送的任务执行、定时编排和批量处理事件。' },
 ]
-const statCards = computed(() => [
-  { value: `来源 ${summary.value.total_sources || 0}`, label: '事件源总数', tone: '' },
-  { value: `内置 ${summary.value.builtin_sources || 0}`, label: '平台内置源', tone: 'success-card' },
-  { value: `启用 ${summary.value.external_enabled || 0}`, label: '外部启用源', tone: 'warning-card' },
-  { value: `入库 ${summary.value.recent_events_7d || 0}`, label: '7 天入库事件', tone: 'danger-card' },
-])
-const filteredSources = computed(() => {
-  return sources.value.filter((item) => {
-    if (sourceKindFilter.value && item.source_kind !== sourceKindFilter.value) return false
-    if (statusFilter.value && item.status !== statusFilter.value) return false
-    return true
-  })
+const builtinSources = computed(() => sortSources(sources.value.filter(source => source.source_kind === 'builtin')))
+const externalSources = computed(() => {
+  const external = sources.value.filter(source => source.source_kind === 'external')
+  const filtered = enabledFilter.value
+    ? external.filter(source => (enabledFilter.value === 'enabled' ? source.enabled : !source.enabled))
+    : external
+  return sortSources(filtered)
 })
-const featuredSources = computed(() => {
-  return [...filteredSources.value]
-    .sort((a, b) => {
-      const statusWeight = { warning: 0, not_configured: 1, disabled: 2, healthy: 3 }
-      const statusDelta = (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9)
-      if (statusDelta !== 0) return statusDelta
-      return (b.recent_event_count || 0) - (a.recent_event_count || 0)
-    })
-})
-const kindSummary = computed(() => [
-  { kind: 'builtin', label: '平台内置', count: sources.value.filter(source => source.source_kind === 'builtin').length },
-  { kind: 'external', label: '外部接入', count: sources.value.filter(source => source.source_kind === 'external').length },
-])
-const statusSummary = computed(() => {
+const enabledSummary = computed(() => {
+  const external = sources.value.filter(source => source.source_kind === 'external')
   return [
-    { status: 'healthy', label: '健康' },
-    { status: 'warning', label: '待关注' },
-    { status: 'not_configured', label: '未配置' },
-    { status: 'disabled', label: '已停用' },
+    { value: 'enabled', label: '启用' },
+    { value: 'disabled', label: '停用' },
   ].map((item) => {
-    const count = sources.value.filter(source => source.status === item.status).length
+    const count = external.filter(source => (item.value === 'enabled' ? source.enabled : !source.enabled)).length
     return { ...item, count }
   })
 })
 const endpointPreview = computed(() => endpointFor({ code: sourceForm.code.trim() || '{code}' }))
-
-function kindLabel(kind) {
-  return kind === 'external' ? '外部接入' : '平台内置'
-}
 
 function typeLabel(type) {
   return {
@@ -345,17 +419,19 @@ function sourceEventCategoryLabel(item) {
   return eventCategoryOptions.find(option => option.key === key)?.label || '-'
 }
 
-function statusLabel(status) {
-  return {
-    healthy: '健康',
-    warning: '待关注',
-    disabled: '已停用',
-    not_configured: '未配置',
-  }[status] || status || '-'
+function enabledLabel(item) {
+  return item?.enabled ? '启用' : '停用'
 }
 
 function sourceInitial(item) {
   return String(item?.name || item?.code || '?').trim().slice(0, 1).toUpperCase()
+}
+
+function sortSources(list) {
+  return [...list].sort((a, b) => {
+    if (a.enabled !== b.enabled) return a.enabled ? -1 : 1
+    return (b.recent_event_count || 0) - (a.recent_event_count || 0)
+  })
 }
 
 function formatShortTime(value) {
@@ -427,8 +503,7 @@ function openEditAccess(item) {
 }
 
 function clearAllFilters() {
-  statusFilter.value = ''
-  sourceKindFilter.value = ''
+  enabledFilter.value = ''
 }
 
 async function saveSource() {
@@ -496,6 +571,26 @@ async function copyToken() {
 async function copyEndpoint(item) {
   await navigator.clipboard.writeText(endpointFor(item))
   ElMessage.success('接入地址已复制')
+}
+
+async function reissueActiveToken() {
+  if (!activeSource.value?.code) return
+  saving.value = true
+  try {
+    const tokenResponse = await issueEventSourceToken(activeSource.value.code)
+    issuedToken.value = tokenResponse.token
+    activeSource.value = {
+      ...activeSource.value,
+      token_preview: tokenResponse.token_preview,
+      enabled: true,
+      status: 'healthy',
+    }
+    tokenDialogVisible.value = true
+    ElMessage.success('接入令牌已重新签发')
+    await loadAll()
+  } finally {
+    saving.value = false
+  }
 }
 
 onMounted(loadAll)
@@ -585,59 +680,6 @@ onMounted(loadAll)
   border-radius: 20px;
 }
 
-.capability-section {
-  display: block;
-}
-
-.capability-card-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 0;
-}
-
-.release-stat-card {
-  min-height: 68px;
-  padding: 9px 11px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 6px 18px rgba(31, 35, 41, 0.04);
-  display: flex;
-  align-items: center;
-}
-
-.success-card {
-  background: linear-gradient(135deg, #dcfce7, #86efac);
-}
-
-.warning-card {
-  background: linear-gradient(135deg, #fef3c7, #fdba74);
-}
-
-.danger-card {
-  background: linear-gradient(135deg, #fee2e2, #fca5a5);
-}
-
-.stat-inline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.stat-label {
-  color: #0f172a;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.stat-value {
-  color: #475569;
-  font-size: 13px;
-  font-weight: 500;
-}
-
 .access-create-tip {
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -703,7 +745,9 @@ onMounted(loadAll)
 
 .source-board {
   margin-top: -6px;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .source-map-panel {
@@ -720,13 +764,6 @@ onMounted(loadAll)
   align-items: center;
   gap: 4px;
   flex-wrap: wrap;
-}
-
-.source-filter-bar > i {
-  width: 1px;
-  height: 18px;
-  margin: 0 4px;
-  background: #e5e7eb;
 }
 
 .source-filter-pill {
@@ -792,12 +829,6 @@ onMounted(loadAll)
   background: #f7faff;
 }
 
-.source-card.is-warning,
-.source-card.is-not_configured {
-  border-color: #ffd8a8;
-}
-
-.source-card.is-disabled,
 .source-card.disabled {
   background: #fbfbfc;
   color: #646a73;
@@ -866,19 +897,9 @@ onMounted(loadAll)
   flex: 0 0 auto;
 }
 
-.status-dot.is-healthy,
-.source-filter-pill em.is-healthy {
+.status-dot.is-enabled,
+.source-filter-pill em.is-enabled {
   background: #34c759;
-}
-
-.status-dot.is-warning,
-.source-filter-pill em.is-warning {
-  background: #ffb11a;
-}
-
-.status-dot.is-not_configured,
-.source-filter-pill em.is-not_configured {
-  background: #f54a45;
 }
 
 .status-dot.is-disabled,
@@ -951,6 +972,35 @@ onMounted(loadAll)
   font-weight: 700;
 }
 
+.section-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8f959e;
+  font-size: 12px;
+}
+
+.section-head-actions :deep(.el-button) {
+  padding: 0 4px;
+  font-weight: 700;
+}
+
+.section-head-actions--external > span {
+  margin-right: 12px;
+}
+
+.section-head-actions :deep(.el-button--primary) {
+  padding: 5px 11px;
+}
+
+:deep(.event-source-spec-drawer .el-drawer__body) {
+  padding-top: 0;
+}
+
+:deep(.event-source-spec-drawer .el-drawer__header) {
+  margin-bottom: 4px;
+}
+
 .drawer-stack {
   display: flex;
   flex-direction: column;
@@ -980,14 +1030,40 @@ onMounted(loadAll)
   font-size: 14px;
 }
 
-.endpoint-line {
+.spec-connection-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connection-line {
   padding: 8px 10px;
   border-radius: 8px;
   background: #fff;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.connection-line span {
+  color: #1f2329;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.connection-line b {
   color: #245bdb;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+  font-weight: 700;
+}
+
+.connection-line em {
+  color: #8f959e;
+  font-size: 12px;
+  font-style: normal;
 }
 
 .chip-wrap,
@@ -1037,6 +1113,76 @@ onMounted(loadAll)
   font-size: 12px;
 }
 
+.help-doc {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-doc section {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.help-doc h4 {
+  margin: 0 0 8px;
+  color: #1f2329;
+  font-size: 14px;
+}
+
+.help-doc p {
+  margin: 0 0 8px;
+  color: #646a73;
+  line-height: 1.6;
+}
+
+.help-doc code {
+  color: #245bdb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.help-step-grid,
+.help-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.help-step-grid span,
+.help-source-grid article {
+  min-width: 0;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f7f8fa;
+  color: #4e5969;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.help-step-grid b {
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: #e8f0ff;
+  color: #245bdb;
+  display: inline-grid;
+  place-items: center;
+  font-size: 11px;
+}
+
+.help-source-grid article {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.help-source-grid strong {
+  color: #1f2329;
+}
+
 .token-box {
   display: flex;
   flex-direction: column;
@@ -1056,10 +1202,6 @@ pre {
 }
 
 @media (max-width: 980px) {
-  .capability-card-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
   .source-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1077,9 +1219,10 @@ pre {
     max-width: none;
   }
 
-  .capability-card-grid,
   .access-create-form,
   .access-edit-form,
+  .help-step-grid,
+  .help-source-grid,
   .source-board,
   .source-card-grid {
     grid-template-columns: 1fr;

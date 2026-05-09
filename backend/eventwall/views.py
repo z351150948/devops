@@ -45,7 +45,7 @@ EVENT_CATEGORY_DEFINITIONS = [
         'key': 'ops_transaction',
         'label': '运维事务',
         'description': '权限开通、网络配置、机器申请释放和通用运维处理类事件。',
-        'required_fields': ['event_id', 'event_category', 'title', 'environment', 'business_line', 'result'],
+        'required_fields': ['event_id', 'event_category', 'title', 'environment', 'system_name', 'result'],
         'recommended_fields': ['ticket_type', 'owner', 'applicant', 'resource_type', 'resource_id'],
     },
     {
@@ -145,7 +145,7 @@ INGEST_SPEC = {
     'content_type': 'application/json',
     'endpoint_template': '/api/event-sources/{code}/ingest/',
     'required_fields': ['title', 'event_category'],
-    'recommended_fields': ['event_id', 'occurred_at', 'summary', 'event_type', 'action', 'result', 'severity', 'actor', 'business_line', 'environment', 'application', 'resource_type', 'resource_id', 'resource_name', 'correlation_id', 'tags', 'related_resources', 'changes', 'metadata'],
+    'recommended_fields': ['event_id', 'occurred_at', 'summary', 'event_type', 'action', 'result', 'severity', 'actor', 'system_name', 'environment', 'application', 'resource_type', 'resource_id', 'resource_name', 'correlation_id', 'tags', 'related_resources', 'changes', 'metadata'],
     'event_categories': EVENT_CATEGORY_DEFINITIONS,
     'idempotency': '同一事件源下 event_id 会作为幂等键，重复推送不会生成第二条事件。',
     'scope': '平台内置事件源只接收工单系统和任务中心；外部系统可通过 Webhook 推送 application_release、db_change、config_change、ops_transaction、task_center 事件；平台配置、资源管理、告警配置等内部操作请查看操作审计。',
@@ -162,7 +162,7 @@ INGEST_SPEC = {
         'result': 'failed',
         'severity': 'danger',
         'actor': 'jenkins',
-        'business_line': '交易',
+        'system_name': '交易',
         'environment': 'prod',
         'application': 'payment-api',
         'resource_type': 'jenkins_build',
@@ -229,7 +229,10 @@ def _normalize_provider_payload(source, payload):
         result = EventRecord.RESULT_FAILED if status_value in {'failed', 'failure', 'aborted'} else EventRecord.RESULT_SUCCESS
         job_name = payload.get('job_name') or payload.get('name') or _safe_get(payload, 'build.full_url')
         build_number = payload.get('build_number') or _safe_get(payload, 'build.number')
-        return {'event_id': f'{job_name}#{build_number}' if job_name and build_number else '', 'title': f'Jenkins {job_name or "构建事件"}', 'summary': payload.get('message') or status_value or 'Jenkins 构建事件', 'event_type': 'jenkins_build', 'action': payload.get('phase') or 'build', 'result': result, 'severity': EventRecord.SEVERITY_DANGER if result == EventRecord.RESULT_FAILED else EventRecord.SEVERITY_INFO, 'actor': payload.get('user') or 'jenkins', 'application': job_name or '', 'resource_type': 'jenkins_build', 'resource_id': str(build_number or ''), 'resource_name': str(job_name or ''), 'metadata': payload}
+        application = payload.get('application') or payload.get('service') or job_name or ''
+        environment = payload.get('environment') or _safe_get(payload, 'build.environment') or ''
+        system_name = payload.get('system_name') or payload.get('business_line') or payload.get('team') or ''
+        return {'event_id': f'{job_name}#{build_number}' if job_name and build_number else '', 'title': f'Jenkins {job_name or "构建事件"}', 'summary': payload.get('message') or status_value or 'Jenkins 构建事件', 'event_type': 'jenkins_build', 'action': payload.get('phase') or 'build', 'result': result, 'severity': EventRecord.SEVERITY_DANGER if result == EventRecord.RESULT_FAILED else EventRecord.SEVERITY_INFO, 'actor': payload.get('user') or 'jenkins', 'system_name': system_name, 'environment': environment, 'application': application, 'resource_type': 'jenkins_build', 'resource_id': str(build_number or ''), 'resource_name': str(job_name or ''), 'metadata': payload}
     if source.source_type == EventSource.TYPE_ARGOCD:
         app = payload.get('app') or payload.get('application') or {}
         app_name = _safe_get(app, 'metadata.name') or payload.get('app_name') or payload.get('application')
@@ -500,7 +503,6 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             'resource_type': 'resource_type',
             'resource_id': 'resource_id',
             'environment': 'environment',
-            'business_line': 'business_line',
             'application': 'application',
             'correlation_id': 'correlation_id',
         }
@@ -508,6 +510,9 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             value = params.get(key, '').strip()
             if value:
                 queryset = queryset.filter(**{field: value})
+        system_name = params.get('system_name', '').strip() or params.get('business_line', '').strip()
+        if system_name:
+            queryset = queryset.filter(business_line=system_name)
         event_source_code = params.get('event_source_code', '').strip()
         if event_source_code:
             source_def = next((item for item in DEFAULT_EVENT_SOURCES if item['code'] == event_source_code), None)
@@ -550,8 +555,10 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             }
             for environment, systems in applications_by_environment_system.items()
         }
+        system_names = list(queryset.exclude(business_line='').values_list('business_line', flat=True).distinct().order_by('business_line')[:50])
         return Response({
-            'business_lines': list(queryset.exclude(business_line='').values_list('business_line', flat=True).distinct().order_by('business_line')[:50]),
+            'system_names': system_names,
+            'business_lines': system_names,
             'environments': list(queryset.exclude(environment='').values_list('environment', flat=True).distinct().order_by('environment')[:50]),
             'applications': list(queryset.exclude(application='').values_list('application', flat=True).distinct().order_by('application')[:100]),
             'systems_by_environment': {key: sorted(value) for key, value in systems_by_environment.items()},
@@ -570,7 +577,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             .annotate(count=Count('id'))
             .order_by('-count')[:8]
         )
-        business_lines = list(
+        system_names = list(
             recent.exclude(business_line='')
             .values('business_line')
             .annotate(count=Count('id'))
@@ -584,6 +591,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
         )
         scopes = [
             {
+                'system_name': item['business_line'],
                 'business_line': item['business_line'],
                 'environment': item['environment'],
                 'count': item['count'],
@@ -624,7 +632,8 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             'actions': action_counts,
             'top_actors': actors,
             'top_applications': applications,
-            'top_business_lines': business_lines,
+            'top_system_names': system_names,
+            'top_business_lines': system_names,
             'top_environments': environments,
             'top_scopes': scopes,
             'recent': recent_items,
@@ -635,7 +644,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             'execution_watchlist': priority_events,
             'tips': [
                 '事件墙只展示故障定位线索：外部事件源、工单系统和任务中心；平台内部操作请查看操作审计。',
-                '排查问题时优先按业务线、环境、应用缩小范围，再结合执行人、失败结果和关联链路快速定位。',
+                '排查问题时优先按系统、环境、应用缩小范围，再结合执行人、失败结果和关联链路快速定位。',
             ],
         })
 
@@ -828,11 +837,12 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
         correlation_map = {}
         for item in events:
             scope_key = (
-                item.get('business_line') or '未标注业务线',
+                item.get('system_name') or item.get('business_line') or '未标注系统',
                 item.get('environment') or '未标注环境',
                 item.get('application') or item.get('resource_name') or '未标注应用',
             )
             impact = impact_map.setdefault(scope_key, {
+                'system_name': scope_key[0],
                 'business_line': scope_key[0],
                 'environment': scope_key[1],
                 'application': scope_key[2],
@@ -901,7 +911,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             recommendations.append(f"先核查「{first.get('title')}」，它的风险分最高且{'; '.join(first.get('suspicion_reasons') or ['靠近故障窗口'])}。")
         if affected_scopes:
             scope = affected_scopes[0]
-            recommendations.append(f"优先收敛到 {scope['business_line']} / {scope['environment']} / {scope['application']}，该范围内有 {scope['failed']} 个失败事件、{scope['suspects']} 个疑似事件。")
+            recommendations.append(f"优先收敛到 {scope['system_name']} / {scope['environment']} / {scope['application']}，该范围内有 {scope['failed']} 个失败事件、{scope['suspects']} 个疑似事件。")
         if correlation_chains:
             chain = correlation_chains[0]
             recommendations.append(f"检查关联链路 {chain['correlation_id']}，它串起 {chain['count']} 个事件和 {len(chain['source_names'])} 个来源。")
@@ -1100,7 +1110,7 @@ class ExternalEventIngestView(APIView):
             resource_type=data.get('resource_type') or source.source_type,
             resource_id=data.get('resource_id') or data.get('event_id', ''),
             resource_name=data.get('resource_name') or data['title'],
-            business_line=data.get('business_line', ''),
+            business_line=data.get('system_name') or data.get('business_line', ''),
             environment=data.get('environment', ''),
             application=data.get('application', ''),
             tags=data.get('tags') or [],

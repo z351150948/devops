@@ -25,7 +25,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const tabs = computed(() => [
-  { path: '/events/wall', title: '事件墙', icon: Aim, permission: 'eventwall.view' },
+  { path: '/events/wall', title: '事件中心', icon: Aim, permission: 'eventwall.view' },
   { path: '/events/sources', title: '事件源', icon: Share, permission: 'eventwall.source.view' },
 ].filter(item => authStore.hasPermission(item.permission)))
 

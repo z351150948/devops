@@ -331,7 +331,7 @@ const routes = [
         path: 'events/wall',
         name: 'EventWall',
         component: () => import('@/views/EventWall.vue'),
-        meta: { title: '事件墙', icon: 'Aim', permission: 'eventwall.view' },
+        meta: { title: '事件中心', icon: 'Aim', permission: 'eventwall.view' },
       },
       {
         path: 'events/overview',

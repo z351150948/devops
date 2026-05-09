@@ -6,8 +6,8 @@
           <span class="hero-icon">
             <el-icon><Aim /></el-icon>
           </span>
-          <h2>事件墙</h2>
-          <span class="hero-tagline">沉淀事件线索辅助问题溯源，支持通过 Webhook 接入 Jira、Jenkins、GitLab 等外部系统</span>
+          <h2>事件中心</h2>
+          <span class="hero-tagline">汇聚发布、变更、任务与 Webhook 外部事件，按时间线沉淀排障线索，辅助故障定位与 AIOps 分析。</span>
         </div>
       </div>
       <div class="hero-actions">
@@ -15,17 +15,6 @@
           <el-icon><RefreshRight /></el-icon>
           刷新
         </el-button>
-      </div>
-    </section>
-
-    <section class="capability-section">
-      <div class="stats-grid release-stats dashboard-stats capability-card-grid">
-        <div v-for="item in statCards" :key="item.label" class="stat-card release-stat-card" :class="item.tone">
-          <div class="stat-inline">
-            <span class="stat-label">{{ item.label }}</span>
-            <span class="stat-value">{{ item.value }}</span>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -53,7 +42,7 @@
           </label>
           <label class="inline-filter">
             <span>系统</span>
-            <el-select v-model="scope.business_line" size="small" placeholder="选择系统" clearable filterable :disabled="!scope.environment" @change="handleSystemChange">
+            <el-select v-model="scope.system_name" size="small" placeholder="选择系统" clearable filterable :disabled="!scope.environment" @change="handleSystemChange">
               <el-option v-for="item in systemOptions" :key="item" :label="item" :value="item" />
             </el-select>
           </label>
@@ -126,9 +115,20 @@
       </div>
       <div class="axis-row">
         <div class="axis-label">事件窗口</div>
-        <div class="axis-track">
+        <div
+          class="axis-track"
+          :class="{ selecting: timelineSelection.active }"
+          @mousedown="startTimelineSelection"
+        >
           <span>{{ formatShortTime(transactionTimelineWindow.start_at) }}</span>
-          <strong></strong>
+          <strong ref="axisRailRef">
+            <i
+              v-if="timelineSelection.active"
+              class="axis-selection"
+              :style="timelineSelectionStyle"
+            ></i>
+            <em v-if="timelineSelection.active">{{ timelineSelection.label }}</em>
+          </strong>
           <span>{{ formatShortTime(transactionTimelineWindow.end_at) }}</span>
         </div>
       </div>
@@ -144,14 +144,14 @@
             <span>{{ lane.count }} 条 · 失败 {{ lane.failed }}</span>
             <em>{{ timelineCategoryFilter === lane.key ? '再次点击显示全部' : '点击聚焦' }}</em>
           </button>
-          <div class="lane-track">
+          <div class="lane-track" :style="laneTrackStyle(lane)">
             <button
               v-for="event in lane.events"
               :key="event.id"
               type="button"
               class="event-dot"
               :class="[`is-${event.result}`, { 'is-suspect': event.suspicion_score >= 35 }]"
-              :style="{ left: transactionEventPosition(event) }"
+              :style="eventDotStyle(event)"
               :title="event.title"
               @click="openDetail(event)"
             >
@@ -241,11 +241,11 @@
           <strong>{{ activeEvent.title }}</strong>
           <p>{{ activeEvent.summary || activeEvent.detail || '-' }}</p>
           <div class="reason-tags">
-            <span v-for="reason in activeEvent.suspicion_reasons || []" :key="reason">{{ reason }}</span>
+            <span v-for="reason in visibleSuspicionReasons(activeEvent)" :key="reason">{{ reason }}</span>
           </div>
         </section>
         <section class="detail-section">
-          <div class="detail-row"><span>时间</span><b>{{ formatTime(activeEvent.occurred_at) }} · {{ relativeFaultTime(activeEvent.minutes_from_fault) }}</b></div>
+          <div class="detail-row"><span>时间</span><b>{{ formatTime(activeEvent.occurred_at) }}</b></div>
           <div class="detail-row"><span>事件源</span><b>{{ activeEvent.event_source?.name || moduleLabel(activeEvent.module) }}</b></div>
           <div class="detail-row"><span>事件分类</span><b>{{ eventCategoryLabel(activeEvent) }}</b></div>
           <div class="detail-row"><span>结果</span><b>{{ resultLabel(activeEvent) }}</b></div>
@@ -253,17 +253,6 @@
           <div class="detail-row"><span>资源</span><b>{{ activeEvent.resource_type || '-' }} / {{ activeEvent.resource_name || activeEvent.resource_id || '-' }}</b></div>
           <div class="detail-row"><span>操作人</span><b>{{ activeEvent.actor_username || activeEvent.actor_display || 'system' }}</b></div>
           <div class="detail-row"><span>关联 ID</span><b>{{ activeEvent.correlation_id || '-' }}</b></div>
-        </section>
-        <section class="detail-section">
-          <h4>关联资源</h4>
-          <div class="chip-wrap">
-            <span v-for="item in activeEvent.related_resources || []" :key="`${item.type}-${item.id}-${item.name}`">{{ item.name || item.id || item.type }}</span>
-            <em v-if="!(activeEvent.related_resources || []).length">暂无关联资源</em>
-          </div>
-        </section>
-        <section class="detail-section">
-          <h4>变更内容</h4>
-          <pre>{{ prettyJson(activeEvent.changes || {}) }}</pre>
         </section>
         <section class="detail-section">
           <h4>元数据</h4>
@@ -275,7 +264,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Aim, RefreshRight, Search } from '@element-plus/icons-vue'
 import { getEventSources, getEventWallAnalysis, getEventWallFilterOptions } from '@/api/modules/eventwall'
@@ -285,9 +274,10 @@ const route = useRoute()
 const router = useRouter()
 const loading = ref(false)
 const drawerVisible = ref(false)
+const axisRailRef = ref(null)
 const activeEvent = ref(null)
 const wall = ref({ summary: {}, window: {}, lanes: [], suspects: [], events: [], source_breakdown: [], tips: [] })
-const filterOptions = ref({ business_lines: [], environments: [], applications: [] })
+const filterOptions = ref({ system_names: [], environments: [], applications: [] })
 const sourceOptions = ref([])
 const eventCategoryOptions = [
   { key: 'application_release', label: '应用发布' },
@@ -309,7 +299,9 @@ const timelineCategoryFilter = ref('all')
 const eventSourceCode = ref('')
 const resultFilter = ref('')
 const keyword = ref('')
-const scope = reactive({ business_line: '', environment: '', application: '' })
+const scope = reactive({ system_name: '', environment: '', application: '' })
+const timelineSelection = reactive({ active: false, startPercent: 0, endPercent: 0, label: '' })
+const timelineDrag = reactive({ active: false, startX: 0, currentX: 0, moved: false })
 const rangeShortcuts = [
   { text: '最近 30 分钟', value: () => defaultAnalysisRange(30) },
   { text: '最近 1 小时', value: () => defaultAnalysisRange(60) },
@@ -319,21 +311,16 @@ const rangeShortcuts = [
   { text: '最近 24 小时', value: () => defaultAnalysisRange(1440) },
 ]
 
-const statCards = computed(() => [
-  { value: `事件 ${wall.value.summary?.total || 0}`, label: '窗口事件', tone: '' },
-  { value: `失败 ${wall.value.summary?.failed || 0}`, label: '失败事件', tone: 'danger-card' },
-  { value: `来源 ${wall.value.summary?.source_count || 0}`, label: '事件源', tone: 'success-card' },
-])
 const environmentOptions = computed(() => filterOptions.value.environments || [])
 const systemOptions = computed(() => {
   if (!scope.environment) return []
   const scoped = filterOptions.value.systems_by_environment?.[scope.environment]
-  return Array.isArray(scoped) ? scoped : (filterOptions.value.business_lines || [])
+  return Array.isArray(scoped) ? scoped : (filterOptions.value.system_names || [])
 })
 const applicationOptions = computed(() => {
   if (!scope.environment) return []
   const byEnvironmentSystem = filterOptions.value.applications_by_environment_system?.[scope.environment] || {}
-  if (scope.business_line && Array.isArray(byEnvironmentSystem[scope.business_line])) return byEnvironmentSystem[scope.business_line]
+  if (scope.system_name && Array.isArray(byEnvironmentSystem[scope.system_name])) return byEnvironmentSystem[scope.system_name]
   const scoped = filterOptions.value.applications_by_environment?.[scope.environment]
   return Array.isArray(scoped) ? scoped : (filterOptions.value.applications || [])
 })
@@ -378,7 +365,7 @@ const activeCategorySection = computed(() => {
 })
 const activeFilterChips = computed(() => {
   const chips = []
-  if (scope.business_line) chips.push({ key: 'business_line', label: `系统 ${scope.business_line}` })
+  if (scope.system_name) chips.push({ key: 'system_name', label: `系统 ${scope.system_name}` })
   if (scope.application) chips.push({ key: 'application', label: `应用 ${scope.application}` })
   if (eventSourceCode.value) {
     const source = sourceOptions.value.find(item => item.code === eventSourceCode.value)
@@ -394,7 +381,7 @@ const querySummaryItems = computed(() => {
     { key: 'time', label: '时间', value: `${formatTime(startAt)} - ${formatTime(endAt)}`, clearable: false },
   ]
   if (scope.environment) items.push({ key: 'environment', label: '环境', value: scope.environment, clearable: false })
-  if (scope.business_line) items.push({ key: 'business_line', label: '系统', value: scope.business_line, clearable: true })
+  if (scope.system_name) items.push({ key: 'system_name', label: '系统', value: scope.system_name, clearable: true })
   if (scope.application) items.push({ key: 'application', label: '应用', value: scope.application, clearable: true })
   if (eventSourceCode.value) {
     const source = sourceOptions.value.find(item => item.code === eventSourceCode.value)
@@ -405,12 +392,21 @@ const querySummaryItems = computed(() => {
   return items
 })
 const transactionTimelineWindow = computed(() => {
+  const [startAt, endAt] = normalizeAnalysisRange()
   return {
-    start_at: wall.value.window?.start_at,
-    end_at: wall.value.window?.end_at,
+    start_at: startAt,
+    end_at: endAt,
   }
 })
 const formatTransactionWindow = computed(() => formatWindow(transactionTimelineWindow.value))
+const timelineSelectionStyle = computed(() => {
+  const left = Math.min(timelineSelection.startPercent, timelineSelection.endPercent)
+  const right = Math.max(timelineSelection.startPercent, timelineSelection.endPercent)
+  return {
+    left: `${left}%`,
+    width: `${Math.max(0, right - left)}%`,
+  }
+})
 const timelineCategoryLabel = computed(() => {
   if (timelineCategoryFilter.value === 'all') return '全部事件'
   return eventCategoryOptions.find(item => item.key === timelineCategoryFilter.value)?.label || '全部事件'
@@ -431,12 +427,13 @@ const transactionTimelineLanes = computed(() => {
   return eventCategoryOptions
     .filter(category => timelineCategoryFilter.value === 'all' || category.key === timelineCategoryFilter.value)
     .map((category) => {
-      const events = transactionTimelineEvents.value.filter(item => eventCategoryKey(item) === category.key)
+      const events = layoutTimelineEvents(transactionTimelineEvents.value.filter(item => eventCategoryKey(item) === category.key))
       return {
         ...category,
         events,
         count: events.length,
         failed: events.filter(item => item.result === 'failed').length,
+        stackDepth: Math.max(1, ...events.map(item => (item._timelineStackIndex || 0) + 1)),
       }
     })
 })
@@ -462,7 +459,7 @@ function categorySearchFields(item) {
     item.actor_username,
     item.application,
     item.environment,
-    item.business_line,
+    item.system_name,
     item.correlation_id,
     releaseService(item),
     releaseVersion(item),
@@ -471,17 +468,11 @@ function categorySearchFields(item) {
 
 function restoreFromRoute() {
   const query = route.query
-  const queryFaultAt = query.fault_at ? new Date(String(query.fault_at)) : new Date()
-  const safeFaultAt = Number.isNaN(queryFaultAt.getTime()) ? new Date() : queryFaultAt
-  const lookbackMinutes = Number(query.lookback_minutes || 60)
-  const afterMinutes = Number(query.after_minutes || 0)
-  const startAt = new Date(safeFaultAt.getTime() - lookbackMinutes * 60 * 1000)
-  const endAt = new Date(safeFaultAt.getTime() + afterMinutes * 60 * 1000)
-  analysisRange.value = [startAt, endAt]
+  analysisRange.value = defaultAnalysisRange()
   eventSourceCode.value = String(query.event_source_code || '')
   resultFilter.value = String(query.result || '')
   keyword.value = String(query.search || '')
-  scope.business_line = String(query.business_line || '')
+  scope.system_name = String(query.system_name || query.business_line || '')
   scope.environment = String(query.environment || '')
   scope.application = String(query.application || '')
 }
@@ -495,7 +486,7 @@ function buildParams() {
     after_minutes: 0,
     limit: 240,
   }
-  if (scope.business_line) params.business_line = scope.business_line
+  if (scope.system_name) params.system_name = scope.system_name
   if (scope.environment) params.environment = scope.environment
   if (scope.application) params.application = scope.application
   if (eventSourceCode.value) params.event_source_code = eventSourceCode.value
@@ -535,7 +526,7 @@ async function applyQuery() {
 }
 
 async function clearFilter(key) {
-  if (key === 'business_line') scope.business_line = ''
+  if (key === 'system_name') scope.system_name = ''
   else if (key === 'application') scope.application = ''
   else if (key === 'event_source_code') eventSourceCode.value = ''
   else if (key === 'result') resultFilter.value = ''
@@ -544,7 +535,7 @@ async function clearFilter(key) {
 }
 
 async function clearAllFilters() {
-  scope.business_line = ''
+  scope.system_name = ''
   scope.application = ''
   eventSourceCode.value = ''
   resultFilter.value = ''
@@ -560,8 +551,8 @@ function ensureRequiredEnvironment() {
 }
 
 function reconcileScopeOptions() {
-  if (scope.business_line && !systemOptions.value.includes(scope.business_line)) {
-    scope.business_line = ''
+  if (scope.system_name && !systemOptions.value.includes(scope.system_name)) {
+    scope.system_name = ''
   }
   if (scope.application && !applicationOptions.value.includes(scope.application)) {
     scope.application = ''
@@ -569,7 +560,7 @@ function reconcileScopeOptions() {
 }
 
 function handleEnvironmentChange() {
-  scope.business_line = ''
+  scope.system_name = ''
   scope.application = ''
 }
 
@@ -611,6 +602,137 @@ function transactionEventPosition(event) {
   return datePosition(event.occurred_at, transactionTimelineWindow.value)
 }
 
+function timelineEventPercent(event) {
+  const start = new Date(transactionTimelineWindow.value.start_at).getTime()
+  const end = new Date(transactionTimelineWindow.value.end_at).getTime()
+  const current = new Date(event?.occurred_at).getTime()
+  if (![start, end, current].every(Number.isFinite) || end <= start) return 50
+  return Math.min(96, Math.max(2, ((current - start) / (end - start)) * 100))
+}
+
+function layoutTimelineEvents(events) {
+  const levels = []
+  const isFocusedLane = timelineCategoryFilter.value !== 'all'
+  const minGapPercent = isFocusedLane ? 4.5 : 8
+  const maxVisibleLevels = isFocusedLane ? 8 : 3
+  return events.map((event) => {
+    const percent = timelineEventPercent(event)
+    let stackIndex = levels.findIndex(lastPercent => Math.abs(percent - lastPercent) >= minGapPercent)
+    if (stackIndex === -1) {
+      stackIndex = levels.length
+      levels.push(percent)
+    } else {
+      levels[stackIndex] = percent
+    }
+    const compressedIndex = Math.min(stackIndex, maxVisibleLevels - 1)
+    const overflowIndex = Math.max(0, stackIndex - compressedIndex)
+    return {
+      ...event,
+      _timelinePercent: percent,
+      _timelineStackIndex: stackIndex,
+      _timelineCompressedIndex: compressedIndex,
+      _timelineOverflowIndex: overflowIndex,
+    }
+  })
+}
+
+function eventDotStyle(event) {
+  const compressedIndex = event?._timelineCompressedIndex || 0
+  const overflowIndex = event?._timelineOverflowIndex || 0
+  const overlapOffset = Math.min(overflowIndex, 8)
+  const isFocusedLane = timelineCategoryFilter.value !== 'all'
+  const topBase = isFocusedLane ? 14 : 9
+  const verticalStep = isFocusedLane ? 30 : 24
+  return {
+    left: `calc(${event?._timelinePercent ?? timelineEventPercent(event)}% + ${overlapOffset * (isFocusedLane ? 4 : 7)}px)`,
+    top: `${topBase + compressedIndex * verticalStep}px`,
+    zIndex: 60 - compressedIndex + Math.min(overlapOffset, 8),
+  }
+}
+
+function laneTrackStyle(lane) {
+  const depth = Math.max(1, lane?.stackDepth || 1)
+  const isFocusedLane = timelineCategoryFilter.value !== 'all'
+  const visibleDepth = Math.min(depth, isFocusedLane ? 8 : 3)
+  return {
+    minHeight: `${Math.max(isFocusedLane ? 118 : 52, 20 + visibleDepth * (isFocusedLane ? 38 : 30))}px`,
+  }
+}
+
+function startTimelineSelection(event) {
+  if (event.button !== 0 || loading.value || !axisRailRef.value) return
+  const start = new Date(transactionTimelineWindow.value.start_at).getTime()
+  const end = new Date(transactionTimelineWindow.value.end_at).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return
+  event.preventDefault()
+  timelineDrag.active = true
+  timelineDrag.startX = event.clientX
+  timelineDrag.currentX = event.clientX
+  timelineDrag.moved = false
+  timelineSelection.active = true
+  updateTimelineSelection(event.clientX)
+  window.addEventListener('mousemove', handleTimelineSelectionMove)
+  window.addEventListener('mouseup', finishTimelineSelection)
+}
+
+function handleTimelineSelectionMove(event) {
+  if (!timelineDrag.active) return
+  timelineDrag.currentX = event.clientX
+  timelineDrag.moved = timelineDrag.moved || Math.abs(timelineDrag.currentX - timelineDrag.startX) >= 4
+  updateTimelineSelection(event.clientX)
+}
+
+function finishTimelineSelection() {
+  if (!timelineDrag.active) return
+  window.removeEventListener('mousemove', handleTimelineSelectionMove)
+  window.removeEventListener('mouseup', finishTimelineSelection)
+  const shouldApply = timelineDrag.moved
+  timelineDrag.active = false
+  if (!shouldApply) {
+    timelineSelection.active = false
+    return
+  }
+  const range = timelineSelectionRange()
+  timelineSelection.active = false
+  if (!range) return
+  analysisRange.value = range
+  applyQuery()
+}
+
+function updateTimelineSelection(clientX) {
+  const startPercent = timelineClientXToPercent(timelineDrag.startX)
+  const endPercent = timelineClientXToPercent(clientX)
+  timelineSelection.startPercent = startPercent
+  timelineSelection.endPercent = endPercent
+  const range = timelineSelectionRange()
+  timelineSelection.label = range ? `${formatShortTime(range[0])} - ${formatShortTime(range[1])}` : '拖动选择时间'
+}
+
+function timelineClientXToPercent(clientX) {
+  const rect = axisRailRef.value?.getBoundingClientRect()
+  if (!rect?.width) return 0
+  return Math.min(100, Math.max(0, ((clientX - rect.left) / rect.width) * 100))
+}
+
+function timelineSelectionRange() {
+  const start = new Date(transactionTimelineWindow.value.start_at).getTime()
+  const end = new Date(transactionTimelineWindow.value.end_at).getTime()
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null
+  const left = Math.min(timelineSelection.startPercent, timelineSelection.endPercent) / 100
+  const right = Math.max(timelineSelection.startPercent, timelineSelection.endPercent) / 100
+  const selectedStart = new Date(start + (end - start) * left)
+  let selectedEnd = new Date(start + (end - start) * right)
+  if (selectedEnd.getTime() - selectedStart.getTime() < 60 * 1000) {
+    selectedEnd = new Date(selectedStart.getTime() + 60 * 1000)
+  }
+  return selectedEnd.getTime() <= end ? [selectedStart, selectedEnd] : [new Date(selectedEnd.getTime() - 60 * 1000), new Date(end)]
+}
+
+function cleanupTimelineSelection() {
+  window.removeEventListener('mousemove', handleTimelineSelectionMove)
+  window.removeEventListener('mouseup', finishTimelineSelection)
+}
+
 function toggleTimelineCategory(key) {
   timelineCategoryFilter.value = timelineCategoryFilter.value === key ? 'all' : key
 }
@@ -629,7 +751,7 @@ function moduleLabel(module) {
     cmdb: 'CMDB',
     sqlaudit: 'SQL 审计',
     marketplace: '工具市场',
-    eventwall: '事件墙',
+    eventwall: '事件中心',
   }[module] || module || '其他事件'
 }
 
@@ -657,7 +779,7 @@ function environmentLabel(row) {
 
 function systemLabel(row) {
   const system = row?.application || row?.resource_name || row?.resource_id || '未标注系统'
-  return row?.business_line ? `${system}（${row.business_line}）` : system
+  return row?.system_name ? `${system}（${row.system_name}）` : system
 }
 
 function releaseService(row) {
@@ -698,13 +820,9 @@ function scopeLabel(row) {
   return [environmentLabel(row), systemLabel(row)].filter(Boolean).join(' / ')
 }
 
-function relativeFaultTime(minutes) {
-  if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return '-'
-  const value = Number(minutes)
-  if (Math.abs(value) < 1) return '故障时刻'
-  const abs = Math.abs(value)
-  const text = abs >= 60 ? `${(abs / 60).toFixed(abs >= 120 ? 0 : 1)} 小时` : `${Math.round(abs)} 分钟`
-  return value < 0 ? `故障前 ${text}` : `故障后 ${text}`
+function visibleSuspicionReasons(row) {
+  const hiddenReasons = new Set(['靠近故障前窗口', '处于故障分析窗口'])
+  return (row?.suspicion_reasons || []).filter(reason => !hiddenReasons.has(reason))
 }
 
 function formatTime(value) {
@@ -742,6 +860,8 @@ onMounted(async () => {
   await loadFilterOptions()
   await loadWall()
 })
+
+onUnmounted(cleanupTimelineSelection)
 </script>
 
 <style scoped>
@@ -827,59 +947,6 @@ onMounted(async () => {
 
 .hero.panel {
   border-radius: 20px;
-}
-
-.capability-section {
-  display: block;
-}
-
-.capability-card-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 0;
-}
-
-.release-stat-card {
-  min-height: 68px;
-  padding: 9px 11px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 6px 18px rgba(31, 35, 41, 0.04);
-  display: flex;
-  align-items: center;
-}
-
-.success-card {
-  background: linear-gradient(135deg, #dcfce7, #86efac);
-}
-
-.warning-card {
-  background: linear-gradient(135deg, #fef3c7, #fdba74);
-}
-
-.danger-card {
-  background: linear-gradient(135deg, #fee2e2, #fca5a5);
-}
-
-.stat-inline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.stat-label {
-  color: #0f172a;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.stat-value {
-  color: #475569;
-  font-size: 13px;
-  font-weight: 500;
 }
 
 .suspect-row em,
@@ -1305,8 +1372,7 @@ onMounted(async () => {
 }
 
 .reason-stack i,
-.reason-tags span,
-.chip-wrap span {
+.reason-tags span {
   padding: 2px 7px;
   border-radius: 6px;
   background: #f2f3f5;
@@ -1340,20 +1406,55 @@ onMounted(async () => {
   padding: 0 12px;
   border-radius: 8px;
   background: #f7f8fa;
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+  cursor: crosshair;
+  user-select: none;
+}
+
+.axis-track.selecting {
+  background: #eef4ff;
 }
 
 .axis-track strong {
   height: 2px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(51, 112, 255, 0.2), rgba(51, 112, 255, 0.55), rgba(51, 112, 255, 0.2));
+  position: relative;
+  display: block;
 }
 
 .axis-track span {
   color: #646a73;
+}
+
+.axis-track strong > em {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: #1f2329;
+  color: #fff;
+  font-size: 11px;
+  font-style: normal;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.axis-selection {
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  min-width: 4px;
+  border-radius: 999px;
+  background: rgba(36, 91, 219, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(36, 91, 219, 0.3);
+  pointer-events: none;
 }
 
 .axis-row strong {
@@ -1383,7 +1484,6 @@ onMounted(async () => {
 }
 
 .lane-stack:has(.lane-row:only-child) .event-dot {
-  top: 18px;
   width: 156px;
   padding: 7px 10px;
 }
@@ -1469,6 +1569,15 @@ onMounted(async () => {
   background: #fff;
   text-align: left;
   overflow: hidden;
+  box-shadow: 0 5px 12px rgba(15, 23, 42, 0.05);
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.event-dot:hover {
+  z-index: 80 !important;
+  border-color: rgba(51, 112, 255, 0.45);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+  transform: translateX(-12px) translateY(-2px);
 }
 
 .event-dot span,
@@ -1599,16 +1708,10 @@ onMounted(async () => {
   overflow-wrap: anywhere;
 }
 
-.reason-tags,
-.chip-wrap {
+.reason-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.chip-wrap em {
-  color: #8f959e;
-  font-style: normal;
 }
 
 pre {
@@ -1623,7 +1726,6 @@ pre {
 }
 
 @media (max-width: 1100px) {
-  .capability-card-grid,
   .analysis-grid,
   .query-grid--primary,
   .query-grid--advanced {
@@ -1651,7 +1753,6 @@ pre {
     max-width: none;
   }
 
-  .capability-card-grid,
   .focus-grid,
   .analysis-grid,
   .query-grid--primary,

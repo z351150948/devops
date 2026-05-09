@@ -9,6 +9,7 @@ class EventRecordSerializer(serializers.ModelSerializer):
     source_type_display = serializers.CharField(source='get_source_type_display', read_only=True)
     resource_key = serializers.SerializerMethodField()
     related_count = serializers.SerializerMethodField()
+    system_name = serializers.CharField(source='business_line', read_only=True)
 
     class Meta:
         model = EventRecord
@@ -40,6 +41,7 @@ class EventRecordSerializer(serializers.ModelSerializer):
             'resource_id',
             'resource_name',
             'resource_key',
+            'system_name',
             'business_line',
             'environment',
             'application',
@@ -132,6 +134,7 @@ class EventSourceIngestSerializer(serializers.Serializer):
     result = serializers.ChoiceField(choices=EventRecord.RESULT_CHOICES, required=False, default=EventRecord.RESULT_SUCCESS)
     severity = serializers.ChoiceField(choices=EventRecord.SEVERITY_CHOICES, required=False, default=EventRecord.SEVERITY_INFO)
     actor = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    system_name = serializers.CharField(max_length=64, required=False, allow_blank=True)
     business_line = serializers.CharField(max_length=64, required=False, allow_blank=True)
     environment = serializers.CharField(max_length=32, required=False, allow_blank=True)
     application = serializers.CharField(max_length=128, required=False, allow_blank=True)
