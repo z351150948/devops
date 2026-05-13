@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.db import OperationalError
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 from ops.models import (
@@ -1111,6 +1112,19 @@ class ObservabilityViewsTests(TestCase):
         backfill_response = self.client.get('/api/observability/system-posture/history/?days=7&backfill=1')
         self.assertEqual(backfill_response.status_code, 200)
         self.assertGreaterEqual(SystemPostureSLAHistory.objects.count(), 8)
+
+    def test_observability_system_posture_history_skips_locked_writes(self):
+        self.client.get('/api/observability/system-posture/history/?days=7')
+        with patch(
+            'ops.observability_views.SystemPostureSLAHistory.objects.update_or_create',
+            side_effect=OperationalError('database is locked'),
+        ):
+            response = self.client.get('/api/observability/system-posture/history/?days=7&refresh=1')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['context']['source'], 'sla_history')
+        self.assertGreaterEqual(payload['summary']['system_count'], 4)
 
     @override_settings(OBSERVABILITY_CONFIG={
         **TEST_OBSERVABILITY_CONFIG,

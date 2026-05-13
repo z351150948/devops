@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 import requests as http_requests
 from django.conf import settings
+from django.db import OperationalError
 from django.db.models import Count
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -3171,27 +3172,31 @@ def _capture_system_posture_sla_history(request, access, day=None, time_context=
                 health_score = max(0, min(100, int(health_score)))
             except (TypeError, ValueError):
                 health_score = None
-        SystemPostureSLAHistory.objects.update_or_create(
-            day=day,
-            system_key=system.get('id') or system.get('name') or '',
-            defaults={
-                'system_name': system.get('name') or system.get('id') or '未命名系统',
-                'environment': system.get('environment') or system.get('env') or system.get('form', {}).get('environment') or 'prod',
-                'domain': system.get('domain') or '',
-                'status': _system_posture_history_status(system.get('status')),
-                'sla_value': sla['value'],
-                'sla_target': sla['target'],
-                'health_score': health_score,
-                'metric_label': str(sla['label'] or 'SLA')[:64],
-                'metric_unit': str(sla['unit'] or '%')[:16],
-                'snapshot': {
-                    'north_star': system.get('north_star') or {},
-                    'signals': system.get('signals') or {},
-                    'dependencies': len(system.get('dependencies') or []),
-                    'children': len(system.get('children') or []),
+        try:
+            SystemPostureSLAHistory.objects.update_or_create(
+                day=day,
+                system_key=system.get('id') or system.get('name') or '',
+                defaults={
+                    'system_name': system.get('name') or system.get('id') or '未命名系统',
+                    'environment': system.get('environment') or system.get('env') or system.get('form', {}).get('environment') or 'prod',
+                    'domain': system.get('domain') or '',
+                    'status': _system_posture_history_status(system.get('status')),
+                    'sla_value': sla['value'],
+                    'sla_target': sla['target'],
+                    'health_score': health_score,
+                    'metric_label': str(sla['label'] or 'SLA')[:64],
+                    'metric_unit': str(sla['unit'] or '%')[:16],
+                    'snapshot': {
+                        'north_star': system.get('north_star') or {},
+                        'signals': system.get('signals') or {},
+                        'dependencies': len(system.get('dependencies') or []),
+                        'children': len(system.get('children') or []),
+                    },
                 },
-            },
-        )
+            )
+        except OperationalError:
+            # SQLite 在并发写入时会短暂锁库，历史页优先返回已有数据而不是直接 500。
+            continue
         captured += 1
     return captured
 
