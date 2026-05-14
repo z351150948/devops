@@ -16,7 +16,7 @@
             end-placeholder="结束日期"
             :shortcuts="dateShortcuts"
             class="history-date-picker"
-            @change="loadHistory()"
+            @change="handleDateRangeChange"
           />
           <button type="button" @click="loadHistory()">刷新</button>
           <button type="button" @click="loadHistory(true)">重算今日</button>
@@ -163,19 +163,24 @@ import { CircleCheck, QuestionFilled, WarningFilled } from '@element-plus/icons-
 import { useRouter } from 'vue-router'
 import { getObservabilitySystemPostureHistory } from '@/api/modules/ops'
 
-defineProps({
+const props = defineProps({
   embedded: {
     type: Boolean,
     default: false,
   },
+  initialDateRange: {
+    type: Array,
+    default: () => [],
+  },
 })
+const emit = defineEmits(['range-change'])
 
 const historyDays = 90
 const historyUnknownBefore = '2026-04-07'
 const router = useRouter()
 const loading = ref(false)
 const history = ref({ days: [], systems: [], summary: {}, context: {} })
-const dateRange = ref(defaultDateRange())
+const dateRange = ref(normalizeDateRange(props.initialDateRange))
 const dateShortcuts = [
   {
     text: '最近 30 天',
@@ -364,12 +369,44 @@ function defaultDateRange() {
   return [daysAgo(historyDays - 1), new Date()]
 }
 
+function normalizeDateRange(range = []) {
+  if (Array.isArray(range) && range.length === 2) {
+    const [start, end] = range
+    const startDate = start instanceof Date ? new Date(start) : new Date(start)
+    const endDate = end instanceof Date ? new Date(end) : new Date(end)
+    if (!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
+      return [startDate, endDate]
+    }
+  }
+  return defaultDateRange()
+}
+
 function dateKey(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function rangeDays(range = []) {
+  const [start, end] = Array.isArray(range) ? range : []
+  if (!(start instanceof Date) || !(end instanceof Date)) return 0
+  const startTime = new Date(start)
+  const endTime = new Date(end)
+  startTime.setHours(0, 0, 0, 0)
+  endTime.setHours(0, 0, 0, 0)
+  const diff = Math.round((endTime.getTime() - startTime.getTime()) / 86400000)
+  return diff >= 0 ? diff + 1 : 0
+}
+
+function emitRangeChange() {
+  emit('range-change', {
+    range: normalizeDateRange(dateRange.value),
+    start: dateKey(dateRange.value?.[0]),
+    end: dateKey(dateRange.value?.[1]),
+    days: rangeDays(dateRange.value),
+  })
 }
 
 function dayRangeQuery(dayKey = '') {
@@ -406,6 +443,11 @@ function historyParams(refresh = false) {
   }
 }
 
+function handleDateRangeChange() {
+  emitRangeChange()
+  loadHistory()
+}
+
 async function loadHistory(refresh = false) {
   loading.value = true
   try {
@@ -415,7 +457,10 @@ async function loadHistory(refresh = false) {
   }
 }
 
-onMounted(() => loadHistory())
+onMounted(() => {
+  emitRangeChange()
+  loadHistory()
+})
 </script>
 
 <style scoped>

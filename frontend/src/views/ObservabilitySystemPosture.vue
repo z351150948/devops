@@ -648,7 +648,8 @@ const topology = computed(() => selectedSystem.value.topology || systemPosture.v
 const selectedSystem = computed(() => {
   const selected = systemPosture.value.selected_system || {}
   if (selectedSystemId.value && selected.id !== selectedSystemId.value) {
-    return systems.value.find(item => item.id === selectedSystemId.value) || selected
+    const matched = systems.value.find(item => item.id === selectedSystemId.value)
+    if (matched && !selected.id) return matched
   }
   return selected.id ? selected : systems.value[0] || {}
 })

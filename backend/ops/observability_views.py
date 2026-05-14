@@ -1266,7 +1266,8 @@ def _primary_slo_metric(metrics):
     normalized = [_normalize_metric(metric) for metric in metrics or [] if isinstance(metric, dict)]
     if not normalized:
         return {}
-    return next((metric for metric in normalized if _is_slo_metric(metric)), {})
+    slo_metrics = [metric for metric in normalized if _is_slo_metric(metric)]
+    return next((metric for metric in slo_metrics if _metric_float(metric, 'value') is not None), slo_metrics[0] if slo_metrics else {})
 
 
 def _aggregate_slo_metric(metrics=None, child_metrics=None, fallback_label='汇总 SLI'):
@@ -1998,23 +1999,53 @@ def _ecommerce_prometheus_snapshot(client, rule_config, time_context=None):
         scale = _safe_float(item.get('scale')) or 1
         snapshot[key] = {series_key: value * scale for series_key, value in values.items()} if scale != 1 else values
 
+    snapshot['runtime_availability'] = _ecommerce_runtime_availability(snapshot, rule_config)
     snapshot['ready'] = any(
         [
             snapshot.get('checkout_success_rate') is not None,
             snapshot.get('service_rps'),
             snapshot.get('up'),
             snapshot.get('deployment_available'),
+            snapshot.get('runtime_availability') is not None,
         ]
     )
     return snapshot
 
 
+def _ecommerce_availability_workloads(rule_config):
+    config = rule_config.get('health_score') if isinstance(rule_config.get('health_score'), dict) else {}
+    configured = config.get('availability_workloads') if isinstance(config.get('availability_workloads'), list) else []
+    workloads = [str(item or '').strip() for item in configured]
+    workloads = [item for item in workloads if item]
+    return workloads or ['api-gateway', 'cart', 'order', 'inventory', 'catalog', 'postgres', 'redis', 'kafka']
+
+
 def _deployment_availability(snapshot, deployment):
     available = snapshot.get('deployment_available', {}).get(deployment)
     desired = snapshot.get('deployment_desired', {}).get(deployment)
+    up = snapshot.get('up', {}).get(deployment)
     if desired is None or desired <= 0:
-        return None, available, desired
+        if up is None:
+            return None, available, desired
+        return (100 if up > 0 else 0), (1 if up > 0 else 0), 1
+    if available is None and up is not None and up <= 0:
+        available = 0
     return max(0, min(100, available / desired * 100 if available is not None else 0)), available, desired
+
+
+def _ecommerce_runtime_availability(snapshot, rule_config):
+    scores = []
+    for name in _ecommerce_availability_workloads(rule_config):
+        availability, _, _ = _deployment_availability(snapshot, name)
+        if availability is not None:
+            scores.append(availability)
+    if scores:
+        return sum(scores) / len(scores)
+    up_values = [_safe_float(value) for value in (snapshot.get('up') or {}).values()]
+    up_values = [value for value in up_values if value is not None]
+    if up_values:
+        return sum(100 if value > 0 else 0 for value in up_values) / len(up_values)
+    return None
 
 
 def _availability_status(availability):
@@ -2125,13 +2156,10 @@ def _ecommerce_health_score(snapshot, rule_config):
         low_traffic_rps = 0.001
     traffic_score = (defaults.get('traffic') or 100) if checkout_rps is None or checkout_rps > low_traffic_rps else (config.get('low_traffic_score') or 80)
 
-    availability_scores = []
-    availability_workloads = config.get('availability_workloads') if isinstance(config.get('availability_workloads'), list) else []
-    for name in availability_workloads or ['api-gateway', 'cart', 'order', 'inventory', 'catalog', 'postgres', 'redis', 'kafka']:
-        availability, _, _ = _deployment_availability(snapshot, name)
-        if availability is not None:
-            availability_scores.append(availability)
-    availability_score = sum(availability_scores) / len(availability_scores) if availability_scores else (defaults.get('availability') or 90)
+    runtime_availability = snapshot.get('runtime_availability')
+    if runtime_availability is None:
+        runtime_availability = _ecommerce_runtime_availability(snapshot, rule_config)
+    availability_score = runtime_availability if runtime_availability is not None else (defaults.get('availability') or 90)
 
     score = (
         success_score * (weights.get('success_rate') or 0.62)
@@ -2140,6 +2168,8 @@ def _ecommerce_health_score(snapshot, rule_config):
         + error_score * (weights.get('error_budget') or 0.08)
         + traffic_score * (weights.get('traffic') or 0.05)
     )
+    if runtime_availability is not None and runtime_availability < 100:
+        score = min(score, runtime_availability)
     threshold = _safe_float(extra_penalty.get('threshold'))
     if threshold is None:
         threshold = 95
@@ -2151,6 +2181,9 @@ def _ecommerce_health_score(snapshot, rule_config):
 def _ecommerce_status(snapshot, health_score, rule_config):
     north_star = rule_config.get('north_star') if isinstance(rule_config.get('north_star'), dict) else {}
     success_rate = snapshot.get('checkout_success_rate')
+    runtime_availability = snapshot.get('runtime_availability')
+    if runtime_availability is not None and runtime_availability < 100:
+        return 'critical'
     target = _safe_float(north_star.get('target')) or 99
     if success_rate is None:
         return 'unknown'
@@ -2197,12 +2230,16 @@ def _build_ecommerce_live_service_specs(snapshot, rule_config):
         success = snapshot.get('service_success_rate', {}).get(service_id)
         if service_id == 'api-gateway':
             success = snapshot.get('checkout_success_rate') or success
+        availability_metric = _metric('副本可用率', availability, 100, '%', 'higher')
         metrics = [
             _metric('成功率', success, success_target, '%', 'higher'),
             _metric('P95', snapshot.get('service_p95_ms', {}).get(service_id), item.get('target_ms') or 500, 'ms', 'lower', digits=0),
             _metric('RPS', snapshot.get('service_rps', {}).get(service_id), rps_target, '', 'higher', digits=3),
-            _metric('副本可用率', availability, 100, '%', 'higher'),
         ]
+        if availability is not None and availability < 100:
+            metrics.insert(0, availability_metric)
+        else:
+            metrics.append(availability_metric)
         if service_id == conflict_rule.get('target_service_id') and conflict_status:
             metrics.append(_ecommerce_conflict_metric(snapshot, rule_config, label=conflict_rule.get('metric_label') or '库存冲突率'))
         if available is not None and desired is not None:
@@ -2273,6 +2310,9 @@ def _build_ecommerce_live_dependencies(snapshot, rule_config):
 def _build_ecommerce_overview_metrics(snapshot, rule_config):
     metric_keys = rule_config.get('overview_metrics') if isinstance(rule_config.get('overview_metrics'), list) else []
     metrics = []
+    runtime_availability = snapshot.get('runtime_availability')
+    if runtime_availability is not None:
+        metrics.append(_metric('环境可用率', runtime_availability, 100, '%', 'higher'))
     for metric_key in metric_keys or ['checkout_conflict_rate', 'checkout_5xx_rate', 'checkout_p95_ms', 'checkout_rps']:
         metric_key = str(metric_key or '').strip()
         if not metric_key:
@@ -2326,6 +2366,76 @@ def _load_ecommerce_recent_tempo_traces(access, rule_config, time_context=None):
     return traces, context
 
 
+def _build_ecommerce_unavailable_service_specs(rule_config):
+    drilldown = rule_config.get('drilldown') if isinstance(rule_config.get('drilldown'), dict) else {}
+    configured_services = drilldown.get('services') if isinstance(drilldown.get('services'), list) else ECOMMERCE_SERVICE_SPECS
+    services = []
+    for item in configured_services:
+        if not isinstance(item, dict) or not item.get('id'):
+            continue
+        services.append({
+            **item,
+            'base_status': 'critical',
+            'metrics': [_metric('副本可用率', 0, 100, '%', 'higher')],
+            'hint': '未采集到该服务的 K8s 运行指标，按不可用处理。',
+            'interfaces': item.get('paths') or item.get('interfaces') or [],
+        })
+    return services
+
+
+def _build_ecommerce_unavailable_dependencies(rule_config):
+    drilldown = rule_config.get('drilldown') if isinstance(rule_config.get('drilldown'), dict) else {}
+    configured_dependencies = drilldown.get('dependencies') if isinstance(drilldown.get('dependencies'), list) else ECOMMERCE_DEPENDENCIES
+    dependencies = []
+    for item in configured_dependencies:
+        if not isinstance(item, dict) or not item.get('id'):
+            continue
+        dependencies.append({
+            **item,
+            'base_status': 'critical',
+            'metrics': [_metric('副本可用率', 0, 100, '%', 'higher')],
+        })
+    return dependencies
+
+
+def _ecommerce_unavailable_live_template(template, rule_config, client=None, warnings=None, reason=''):
+    warnings = [str(item) for item in (warnings or []) if item]
+    source_text = 'Grafana 代理 Prometheus' if (client or {}).get('source') == 'grafana' else 'Prometheus'
+    summary = reason or f'已配置 {source_text}，但未采集到电商 K8s 运行指标，按电商环境不可用处理。'
+    return {
+        **template,
+        'rule_config': rule_config,
+        'base_status': 'critical',
+        'health_score': 0,
+        'north_star': {
+            'label': '环境可用率',
+            'value': 0,
+            'target': 100,
+            'unit': '%',
+            'direction': 'higher',
+        },
+        'metrics': [
+            _metric('环境可用率', 0, 100, '%', 'higher'),
+            _metric('运行指标采集', 0, 1, '', 'higher', digits=0),
+        ],
+        'summary': summary,
+        'service_specs': _build_ecommerce_unavailable_service_specs(rule_config),
+        'dependencies': _build_ecommerce_unavailable_dependencies(rule_config),
+        'live': {
+            'enabled': True,
+            'source': (client or {}).get('source'),
+            'description': (client or {}).get('description'),
+            'window': _rule_window(rule_config),
+            'namespace': _rule_namespace(rule_config),
+            'rule_version': rule_config.get('version'),
+            'north_star_metric': 'runtime_availability',
+            'runtime_availability': 0,
+            'unavailable': True,
+            'warnings': warnings[:3],
+        },
+    }
+
+
 def _apply_ecommerce_live_template(template, access, time_context=None):
     if not _is_ecommerce_system_posture_template(template):
         return template
@@ -2334,13 +2444,19 @@ def _apply_ecommerce_live_template(template, access, time_context=None):
         return {**template, 'rule_config': rule_config}
     client = _resolve_prometheus_client()
     if not client.get('ready'):
-        return {**template, 'rule_config': rule_config}
+        return _ecommerce_unavailable_live_template(
+            template,
+            rule_config,
+            client=client,
+            warnings=[client.get('warning') or 'Prometheus 未就绪'],
+            reason='未连接到可用的 Prometheus/Grafana 实时数据源，电商交易核心不再使用内置演示成功率。',
+        )
     try:
         snapshot = _ecommerce_prometheus_snapshot(client, rule_config, time_context=time_context)
-    except Exception:
-        return {**template, 'rule_config': rule_config}
+    except Exception as exc:
+        return _ecommerce_unavailable_live_template(template, rule_config, client=client, warnings=[exc])
     if not snapshot.get('ready'):
-        return {**template, 'rule_config': rule_config}
+        return _ecommerce_unavailable_live_template(template, rule_config, client=client, warnings=snapshot.get('warnings'))
 
     health_score = _ecommerce_health_score(snapshot, rule_config)
     status_value = _ecommerce_status(snapshot, health_score, rule_config)
@@ -2415,6 +2531,7 @@ def _apply_ecommerce_live_template(template, access, time_context=None):
             'namespace': snapshot.get('namespace'),
             'rule_version': rule_config.get('version'),
             'north_star_metric': north_metric_key,
+            'runtime_availability': _round_system_posture_value(snapshot.get('runtime_availability')),
             'health_formula': (rule_config.get('health_score') or {}).get('formula') if isinstance(rule_config.get('health_score'), dict) else '',
             'warnings': snapshot.get('warnings')[:3],
         },
@@ -2810,6 +2927,16 @@ def _build_system_posture_system_payload(template, access, catalog=None, evidenc
         ],
         fallback_label='系统 SLI',
     )
+    runtime_slo = next(
+        (
+            metric for metric in selected_metrics
+            if metric.get('label') == '环境可用率'
+            and _metric_float(metric, 'value') is not None
+        ),
+        None,
+    )
+    if (template.get('live') or {}).get('enabled') and runtime_slo and _metric_status(runtime_slo) == 'critical':
+        north_star_payload = runtime_slo
     if north_star_payload:
         status = _metric_status(north_star_payload)
         health_score = _metric_health_score(north_star_payload)

@@ -453,7 +453,16 @@ class ObservabilityViewsTests(TestCase):
         self.user = get_user_model().objects.create_superuser('observer-admin', 'observer@example.com', 'Admin@123456')
         self.client.force_authenticate(user=self.user)
 
-    def _mock_ecommerce_prometheus_get(self, success_rate=96.5, conflict_rate=3.5, checkout_5xx_rate=0, checkout_rps=0.2, checkout_p95_seconds=0.42):
+    def _mock_ecommerce_prometheus_get(
+        self,
+        success_rate=96.5,
+        conflict_rate=3.5,
+        checkout_5xx_rate=0,
+        checkout_rps=0.2,
+        checkout_p95_seconds=0.42,
+        deployment_metrics=True,
+        up_values=None,
+    ):
         def vector(*items):
             return {
                 'status': 'success',
@@ -481,7 +490,16 @@ class ObservabilityViewsTests(TestCase):
                 return MockHttpResponse(scalar(checkout_rps))
             if 'sum by (le)' in query and 'path="/api/checkout"' in query:
                 return MockHttpResponse(scalar(checkout_p95_seconds))
+            if query.startswith('up{'):
+                if up_values is None:
+                    return MockHttpResponse(vector())
+                return MockHttpResponse(vector(*[
+                    series(service, value, label_name='service')
+                    for service, value in up_values.items()
+                ]))
             if 'kube_deployment_status_replicas_available' in query or 'kube_deployment_spec_replicas' in query:
+                if not deployment_metrics:
+                    return MockHttpResponse(vector())
                 return MockHttpResponse(vector(
                     series('api-gateway', 1),
                     series('cart', 1),
@@ -1163,6 +1181,85 @@ class ObservabilityViewsTests(TestCase):
         self.assertIn('库存', inventory_api['hint'])
         self.assertGreater(selected['health_score'], 80)
         self.assertLess(selected['health_score'], 100)
+
+    @override_settings(OBSERVABILITY_CONFIG={
+        **TEST_OBSERVABILITY_CONFIG,
+        'prometheus': {
+            'enabled': True,
+            'query_url': 'http://prometheus.example.com',
+            'timeout': 3,
+        },
+    })
+    @patch('ops.observability_views.http_requests.get')
+    def test_observability_system_posture_marks_ecommerce_down_when_runtime_targets_down(self, mock_get):
+        mock_get.side_effect = self._mock_ecommerce_prometheus_get(
+            success_rate=99.9,
+            conflict_rate=0,
+            checkout_5xx_rate=0,
+            deployment_metrics=False,
+            up_values={
+                'api-gateway': 0,
+                'cart': 0,
+                'order': 0,
+                'inventory': 0,
+                'catalog': 0,
+            },
+        )
+
+        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+
+        self.assertEqual(response.status_code, 200)
+        selected = response.json()['selected_system']
+        self.assertEqual(selected['status'], 'critical')
+        self.assertEqual(selected['health_score'], 0)
+        self.assertEqual(selected['north_star']['label'], '环境可用率')
+        self.assertEqual(selected['north_star']['value'], 0)
+        self.assertEqual(selected['live']['runtime_availability'], 0)
+        self.assertTrue(any(item['label'] == '环境可用率' and item['value'] == 0 for item in selected['metrics']))
+        self.assertTrue(all(item['status'] == 'critical' for item in selected['children']))
+
+    @override_settings(OBSERVABILITY_CONFIG={
+        **TEST_OBSERVABILITY_CONFIG,
+        'prometheus': {
+            'enabled': True,
+            'query_url': 'http://prometheus.example.com',
+            'timeout': 3,
+        },
+    })
+    @patch('ops.observability_views.http_requests.get')
+    def test_observability_system_posture_does_not_fallback_to_demo_rate_when_live_metrics_missing(self, mock_get):
+        mock_get.side_effect = self._mock_ecommerce_prometheus_get(
+            success_rate=None,
+            conflict_rate=None,
+            checkout_5xx_rate=None,
+            checkout_rps=None,
+            checkout_p95_seconds=None,
+            deployment_metrics=False,
+        )
+
+        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+
+        self.assertEqual(response.status_code, 200)
+        selected = response.json()['selected_system']
+        self.assertEqual(selected['status'], 'critical')
+        self.assertEqual(selected['health_score'], 0)
+        self.assertEqual(selected['north_star']['label'], '环境可用率')
+        self.assertEqual(selected['north_star']['value'], 0)
+        self.assertTrue(selected['live']['unavailable'])
+        self.assertNotEqual(selected['north_star']['value'], 93.8)
+
+    @override_settings(OBSERVABILITY_CONFIG=TEST_OBSERVABILITY_CONFIG)
+    def test_observability_system_posture_does_not_use_demo_success_rate_when_live_source_not_ready(self):
+        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+
+        self.assertEqual(response.status_code, 200)
+        selected = response.json()['selected_system']
+        self.assertEqual(selected['status'], 'critical')
+        self.assertEqual(selected['health_score'], 0)
+        self.assertEqual(selected['north_star']['label'], '环境可用率')
+        self.assertEqual(selected['north_star']['value'], 0)
+        self.assertTrue(selected['live']['unavailable'])
+        self.assertNotEqual(selected['north_star']['value'], 93.8)
 
     @override_settings(OBSERVABILITY_CONFIG={
         **TEST_OBSERVABILITY_CONFIG,

@@ -65,7 +65,12 @@
           </div>
         </div>
       </div>
-      <ObservabilityPostureHistory :key="historyPanelKey" embedded />
+      <ObservabilityPostureHistory
+        :key="historyPanelKey"
+        :initial-date-range="selectedDateRange"
+        embedded
+        @range-change="handleHistoryRangeChange"
+      />
     </section>
   </div>
 </template>
@@ -82,6 +87,7 @@ const router = useRouter()
 const loading = ref(false)
 const historyPanelKey = ref(0)
 const dashboardHistory = ref({ days: [], systems: [], summary: {}, context: {} })
+const selectedDateRange = ref(defaultHistoryDateRange())
 
 const historyUnknownBefore = '2026-04-07'
 
@@ -118,14 +124,13 @@ const focusIcon = computed(() => {
   return CircleCheck
 })
 
-const focusEnvironment = computed(() => {
-  const source = failureSystems.value.length ? failureSystems.value : unknownSystems.value
-  if (!source.length) return '全部环境'
-  const counts = new Map()
-  source.forEach((system) => {
-    counts.set(system.environment, (counts.get(system.environment) || 0) + 1)
-  })
-  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] || '全部环境'
+const selectedRangeDays = computed(() => inclusiveDays(selectedDateRange.value))
+const selectedRangeLabel = computed(() => {
+  const [start, end] = Array.isArray(selectedDateRange.value) ? selectedDateRange.value : []
+  const startText = formatRangeDay(start)
+  const endText = formatRangeDay(end)
+  if (!startText || !endText) return ''
+  return `${startText} 至 ${endText}`
 })
 
 const summaryCards = computed(() => [
@@ -154,10 +159,10 @@ const summaryCards = computed(() => [
     icon: QuestionFilled,
   },
   {
-    label: '重点环境',
-    value: focusEnvironment.value,
-    unit: '',
-    meta: '',
+    label: '统计周期',
+    value: `${selectedRangeDays.value || 0}`,
+    unit: '天',
+    meta: selectedRangeLabel.value,
     tone: 'context',
     icon: Calendar,
   },
@@ -218,6 +223,51 @@ function resolveDashboardStatus(record, target, dayKey = '') {
 function truncateText(text = '', maxLength = 0) {
   if (!text || !maxLength || text.length <= maxLength) return text
   return `${text.slice(0, maxLength)}...`
+}
+
+function daysAgo(count) {
+  const date = new Date()
+  date.setHours(0, 0, 0, 0)
+  date.setDate(date.getDate() - count)
+  return date
+}
+
+function defaultHistoryDateRange() {
+  return [daysAgo(89), new Date()]
+}
+
+function inclusiveDays(range = []) {
+  const [start, end] = Array.isArray(range) ? range : []
+  if (!(start instanceof Date) || !(end instanceof Date)) return 0
+  const startTime = new Date(start)
+  const endTime = new Date(end)
+  startTime.setHours(0, 0, 0, 0)
+  endTime.setHours(0, 0, 0, 0)
+  const diff = Math.round((endTime.getTime() - startTime.getTime()) / 86400000)
+  return diff >= 0 ? diff + 1 : 0
+}
+
+function formatRangeDay(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function normalizeRange(range = []) {
+  if (Array.isArray(range) && range.length === 2) {
+    const start = range[0] instanceof Date ? new Date(range[0]) : new Date(range[0])
+    const end = range[1] instanceof Date ? new Date(range[1]) : new Date(range[1])
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      return [start, end]
+    }
+  }
+  return defaultHistoryDateRange()
+}
+
+function handleHistoryRangeChange(payload = {}) {
+  selectedDateRange.value = normalizeRange(payload.range)
 }
 
 function openOverview(tab) {
