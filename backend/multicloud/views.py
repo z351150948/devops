@@ -135,6 +135,9 @@ class CloudEnvironmentViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, v
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        system_name = (self.request.query_params.get('system_name') or self.request.query_params.get('system') or '').strip()
+        if system_name:
+            queryset = queryset.filter(business_line=system_name)
         mapping = {
             'provider': 'credential__provider',
             'environment_type': 'environment_type',

@@ -597,7 +597,7 @@ def _hourly_demo_event_time(hour_start, index, count, now):
     return hour_start.replace(minute=minute, second=0, microsecond=0)
 
 
-def _ensure_hourly_ecommerce_demo_events(hours=24):
+def _ensure_hourly_sample_demo_events(hours=24):
     now = timezone.localtime().replace(second=0, microsecond=0)
     current_hour = now.replace(minute=0, second=0, microsecond=0)
     created = []
@@ -715,7 +715,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         params = self.request.query_params
         if params.get('environment') == HOURLY_DEMO_ENVIRONMENT:
-            _ensure_hourly_ecommerce_demo_events()
+            _ensure_hourly_sample_demo_events()
         queryset = super().get_queryset().exclude(result=EventRecord.RESULT_REJECTED)
         if getattr(self, 'action', '') not in {'operation_audit', 'prune_operation_audit'}:
             queryset = queryset.filter(_event_wall_record_q())
@@ -783,6 +783,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
         system_names = list(queryset.exclude(business_line='').values_list('business_line', flat=True).distinct().order_by('business_line')[:50])
         return Response({
             'system_names': system_names,
+            'systems': system_names,
             'business_lines': system_names,
             'environments': list(queryset.exclude(environment='').values_list('environment', flat=True).distinct().order_by('environment')[:50]),
             'applications': sorted({
@@ -862,6 +863,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             'top_actors': actors,
             'top_applications': applications,
             'top_system_names': system_names,
+            'top_systems': system_names,
             'top_business_lines': system_names,
             'top_environments': environments,
             'top_scopes': scopes,
@@ -1174,7 +1176,7 @@ class EventRecordViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
             'recommendations': recommendations,
             'tips': [
                 '先确定故障时刻，再看故障前 1-4 小时内失败、高风险、工单、任务和外部系统事件。',
-                '同一应用、环境、业务线内靠近故障时刻的发布工单、任务执行和外部流水线异常优先排查。',
+                '同一应用、环境、系统内靠近故障时刻的发布工单、任务执行和外部流水线异常优先排查。',
             ],
         })
 

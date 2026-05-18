@@ -346,7 +346,7 @@
         </el-row>
         <el-row :gutter="12">
           <el-col :span="12"><el-form-item label="环境编码"><el-input v-model="envForm.code" /></el-form-item></el-col>
-          <el-col :span="12"><el-form-item label="业务线"><el-input v-model="envForm.business_line" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="系统"><el-input v-model="envForm.business_line" /></el-form-item></el-col>
         </el-row>
         <el-row :gutter="12">
           <el-col :span="8"><el-form-item label="环境类型"><el-select v-model="envForm.environment_type" style="width: 100%"><el-option label="生产" value="prod" /><el-option label="测试" value="test" /><el-option label="开发" value="dev" /><el-option label="共享" value="shared" /></el-select></el-form-item></el-col>
@@ -864,7 +864,7 @@ function buildLayeredTopologyLayout() {
     })
     graphics.push({
       type: 'text',
-      style: { x: leftPadding + laneWidth - 150, y: y + 32, text: `资源 ${envNode.value || 0} · ${envNode.business_line || '未设置业务线'}`, fill: palette.text, font: '600 11px sans-serif' },
+      style: { x: leftPadding + laneWidth - 150, y: y + 32, text: `资源 ${envNode.value || 0} · ${envNode.business_line || '未设置系统'}`, fill: palette.text, font: '600 11px sans-serif' },
       silent: true,
       z: -3,
     })

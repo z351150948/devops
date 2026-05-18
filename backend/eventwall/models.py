@@ -85,7 +85,7 @@ class EventRecord(models.Model):
     resource_type = models.CharField('资源类型', max_length=64, blank=True, default='', db_index=True)
     resource_id = models.CharField('资源 ID', max_length=64, blank=True, default='', db_index=True)
     resource_name = models.CharField('资源名称', max_length=255, blank=True, default='', db_index=True)
-    business_line = models.CharField('业务线', max_length=64, blank=True, default='')
+    business_line = models.CharField('系统', max_length=64, blank=True, default='')
     environment = models.CharField('环境', max_length=32, blank=True, default='')
     tags = models.JSONField('标签', default=list, blank=True)
     related_resources = models.JSONField('关联资源', default=list, blank=True)

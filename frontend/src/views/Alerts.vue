@@ -111,7 +111,7 @@
             <template #default="{ row }">{{ providerText(row.source_type) }}</template>
           </el-table-column>
           <el-table-column prop="environment" label="&#x73AF;&#x5883;" width="100" />
-          <el-table-column prop="claimed_by" label="&#x8BA4;&#x9886;&#x4EBA;" min-width="140">
+          <el-table-column prop="claimed_by" label="&#x8BA4;&#x9886;&#x4EBA;" width="120">
             <template #default="{ row }">
               <div class="claimant-cell" v-if="row.claimants?.length">
                 <el-tag v-for="item in row.claimants" :key="item.id" size="small" class="mini-tag claimant-tag">{{ item.claimant }}</el-tag>
@@ -319,7 +319,10 @@
       <section class="panel">
         <div class="section-head">
           <h3>Webhook &#x63A5;&#x5165;&#x6E90;</h3>
-          <el-button v-if="canManageConfig" size="small" type="primary" :icon="Plus" @click="openIntegration()">&#x65B0;&#x589E;&#x63A5;&#x5165;&#x6E90;</el-button>
+          <div class="section-actions">
+            <el-button size="small" @click="integrationHelpVisible = true">&#x63A5;&#x5165;&#x5E2E;&#x52A9;</el-button>
+            <el-button v-if="canManageConfig" size="small" type="primary" :icon="Plus" @click="openIntegration()">&#x65B0;&#x589E;&#x63A5;&#x5165;&#x6E90;</el-button>
+          </div>
         </div>
         <el-table :data="integrations" stripe size="small" v-loading="configLoading">
           <el-table-column prop="name" label="&#x540D;&#x79F0;" min-width="150" />
@@ -354,6 +357,43 @@
       </section>
     </template>
 
+    <el-dialog v-model="integrationHelpVisible" title="Webhook 接入帮助" width="860px">
+      <div class="integration-help">
+        <section class="integration-help-hero">
+          <div class="integration-help-hero-title">{{ integrationHelpIntro.title }}</div>
+          <div class="integration-help-hero-desc">{{ integrationHelpIntro.desc }}</div>
+        </section>
+        <section class="integration-help-card">
+          <div class="integration-help-title">平台统一字段</div>
+          <div class="integration-help-grid">
+            <div v-for="item in integrationCommonFields" :key="item.field" class="integration-help-item">
+              <div class="integration-help-field">{{ item.field }}</div>
+              <div class="integration-help-desc">{{ item.desc }}</div>
+            </div>
+          </div>
+        </section>
+        <section v-for="guide in integrationFieldGuides" :key="guide.provider" class="integration-help-card">
+          <div class="integration-help-head">
+            <div class="integration-help-title">{{ guide.title }}</div>
+            <div class="integration-help-note">{{ guide.note }}</div>
+          </div>
+          <div class="integration-help-grid">
+            <div v-for="item in guide.fields" :key="`${guide.provider}-${item.field}`" class="integration-help-item">
+              <div class="integration-help-field">{{ item.field }}</div>
+              <div class="integration-help-desc">{{ item.desc }}</div>
+            </div>
+          </div>
+          <div class="integration-sample-block">
+            <div class="integration-sample-title">最小可用示例</div>
+            <pre class="integration-sample-code">{{ guide.sample }}</pre>
+          </div>
+        </section>
+      </div>
+      <template #footer>
+        <el-button @click="integrationHelpVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <template v-if="activeTab === 'logs' && canViewAlerts">
       <section class="panel">
         <div class="section-head">
@@ -387,6 +427,7 @@
               <el-tag :type="statusType(selectedAlert.status)">{{ selectedAlert.status_display || statusText(selectedAlert.status) }}</el-tag>
             </div>
             <span class="detail-title">{{ selectedAlert.title }}</span>
+            <span class="detail-fingerprint">告警指纹：{{ selectedAlert.fingerprint || '-' }}</span>
           </div>
           <section class="alert-detail-card">
             <el-descriptions class="alert-detail-summary" :column="1" size="small" border>
@@ -876,7 +917,7 @@ const dimensionOptions = [
   { label: '\u670D\u52A1', value: 'service' },
   { label: '\u96C6\u7FA4', value: 'cluster' },
   { label: '\u547D\u540D\u7A7A\u95F4', value: 'namespace' },
-  { label: '\u4E1A\u52A1\u7EBF', value: 'business_line' },
+  { label: '业务线', value: 'business_line' },
   { label: '\u8D44\u6E90\u7C7B\u578B', value: 'resource_type' },
   { label: '\u8D44\u6E90', value: 'resource' },
   { label: '\u7EA7\u522B', value: 'level' },
@@ -915,6 +956,7 @@ const escalationPolicies = ref([])
 const notificationLogs = ref([])
 const selectedAlert = ref(null)
 const detailVisible = ref(false)
+const integrationHelpVisible = ref(false)
 
 const canViewAlerts = computed(() => authStore.hasPermission('ops.alert.view'))
 const canManageAlerts = computed(() => authStore.hasPermission('ops.alert.manage'))
@@ -928,6 +970,195 @@ const statCards = computed(() => [
   { label: '\u5DF2\u5C4F\u853D\u544A\u8B66', value: summary.value.muted || 0, tone: 'warning-card' },
   { label: '\u5DF2\u8BA4\u9886\u544A\u8B66', value: summary.value.claimed || 0, tone: 'success-card' },
 ])
+
+const integrationHelpIntro = {
+  title: '说明平台如何从各类 webhook payload 中提取告警字段',
+  desc: '下面按接入源分别说明标题、描述、服务、环境、资源、指纹、聚合键等字段的取值优先级，并附上最小可用示例，便于对照你自己的 webhook payload 调整。',
+}
+
+const integrationCommonFields = [
+  { field: '标题', desc: '告警列表标题和详情标题。不同来源会按各自优先级取规则名、summary、告警名等字段。' },
+  { field: '描述', desc: '对应详情里的“描述”字段。平台会优先取各来源的 description / message / 正文字段，取不到时回退到标题。' },
+  { field: '级别', desc: '统一归一成 critical / warning / info。通常来自 severity、level、priority、warnLevel 等字段。' },
+  { field: '状态', desc: '统一归一成 active / resolved / muted / closed。Webhook 接入时通常只负责 active / resolved。' },
+  { field: '服务', desc: '用于聚合和检索。通常优先取 labels.app，其次 job_name、service 或来源自己的业务字段。' },
+  { field: '环境', desc: '通常来自 env / environment；也支持在接入源里配置默认标签补齐。' },
+  { field: '资源', desc: '用于定位具体实例。常见取值包括 instance、pod、host、target_ident、instanceId。' },
+  { field: '告警指纹', desc: '事件去重键。优先使用来源自带 fingerprint/hash/triggerid 等；没有时平台按稳定字段计算。' },
+  { field: '聚合键', desc: '用于分组展示和通知聚合。Prometheus 优先取 Alertmanager 的 groupKey，其他来源优先取各自分组字段。' },
+]
+
+const integrationFieldGuides = [
+  {
+    provider: 'prometheus',
+    title: 'Alertmanager / Prometheus',
+    note: '适合直接接 Alertmanager webhook。',
+    fields: [
+      { field: '标题', desc: '优先 annotations.summary，其次 labels.alertname，再回退到 title。' },
+      { field: '描述', desc: '优先 annotations.description，其次 annotations.message，再其次 item.message；都没有时回退标题。' },
+      { field: '来源', desc: '优先 labels.job，其次 labels.alertname，默认显示 Alertmanager。' },
+      { field: '服务', desc: '优先 labels.app，其次 labels.job_name，再其次 labels.service，最后回退 labels.job。' },
+      { field: '环境', desc: '优先 labels.env，其次 labels.environment。' },
+      { field: '资源', desc: '优先 labels.instance，其次 pod、node、host、job。' },
+      { field: '告警指纹', desc: '使用 alerts[].fingerprint；平台会再基于 provider 做一次哈希后落库。' },
+      { field: '聚合键', desc: '优先使用 webhook 顶层 groupKey；没有时才按平台聚合规则生成。' },
+    ],
+    sample: `{
+  "status": "firing",
+  "groupKey": "{alertname=\\"HighErrorRate\\",service=\\"order-api\\"}",
+  "alerts": [
+    {
+      "status": "firing",
+      "fingerprint": "2f8aa6b2d2a4",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "severity": "critical",
+        "app": "order-api",
+        "env": "prod",
+        "instance": "10.0.1.10:8080"
+      },
+      "annotations": {
+        "summary": "订单服务错误率升高",
+        "description": "5xx 比例超过阈值"
+      },
+      "startsAt": "2026-05-17T12:30:00+08:00"
+    }
+  ]
+}`,
+  },
+  {
+    provider: 'nightingale',
+    title: '夜莺',
+    note: '兼容 events / alerts / data 多种结构。',
+    fields: [
+      { field: '标题', desc: '优先 rule_name，其次 title，再其次 annotations.summary。' },
+      { field: '描述', desc: '优先 rule_note，其次 trigger_value，再其次 annotations.description；都没有时回退标题。' },
+      { field: '来源', desc: '优先 cluster，其次 datasource_name、cate。' },
+      { field: '服务', desc: '优先 tags 里的 app / job_name / service，最后回退 rule_prod。' },
+      { field: '资源', desc: '优先 target_ident，其次 target、ident、instance、host。' },
+      { field: '告警指纹', desc: '优先 hash。' },
+      { field: '聚合键', desc: '优先 group_name，其次 group_id。' },
+    ],
+    sample: `{
+  "events": [
+    {
+      "rule_name": "CPU 使用率过高",
+      "rule_note": "持续 5 分钟超过 90%",
+      "severity": "2",
+      "status": "firing",
+      "hash": "9ec7b8d1",
+      "group_name": "order-api-prod",
+      "target_ident": "10.0.1.10",
+      "cluster": "prod-cluster",
+      "tags_map": {
+        "app": "order-api",
+        "env": "prod",
+        "instance": "10.0.1.10"
+      },
+      "trigger_time": 1778992200
+    }
+  ]
+}`,
+  },
+  {
+    provider: 'zabbix',
+    title: 'Zabbix',
+    note: '兼容常见自定义 webhook payload。',
+    fields: [
+      { field: '标题', desc: '优先 trigger_name，其次 event_name、subject、name。' },
+      { field: '描述', desc: '优先 message，其次 body，再其次 trigger_description；都没有时回退标题。' },
+      { field: '来源', desc: '优先 source，默认显示 Zabbix。' },
+      { field: '服务', desc: '优先 tags 里的 app / job_name / service，最后回退 application。' },
+      { field: '资源', desc: '优先 host / hostname / host_name；如果有 hosts 数组，会回退取第一个 host。' },
+      { field: '告警指纹', desc: '优先 triggerid，其次 trigger_id，再其次 eventid。' },
+      { field: '聚合键', desc: '优先 hostgroup，其次 host_group，再其次 tags.group。' },
+    ],
+    sample: `{
+  "alerts": [
+    {
+      "trigger_name": "磁盘使用率过高",
+      "message": "/data 使用率超过 85%",
+      "severity": "high",
+      "status": "PROBLEM",
+      "source": "Zabbix",
+      "triggerid": "28731",
+      "host": "db-prod-01",
+      "hostgroup": "database-prod",
+      "tags": "app=order-db,env=prod,cluster=prod-cluster",
+      "event_time": 1778992200
+    }
+  ]
+}`,
+  },
+  {
+    provider: 'aliyun',
+    title: '阿里云监控',
+    note: '适合接云监控告警 webhook。',
+    fields: [
+      { field: '标题', desc: '优先 alertName，其次 ruleName、name。' },
+      { field: '描述', desc: '优先 message，其次 content，再其次 curValue；都没有时回退标题。' },
+      { field: '来源', desc: '优先 namespace，其次 product，默认显示 Aliyun CloudMonitor。' },
+      { field: '服务', desc: '优先 dimensions 中的标签映射，最后回退 product / namespace。' },
+      { field: '环境', desc: '优先 item.env，其次 dimensions.env。' },
+      { field: '资源', desc: '优先 instanceName，其次 instanceId、dimensions.instanceId、dimensions.userId。' },
+      { field: '告警指纹', desc: '平台用 ruleId + resource + metricName 组合生成。' },
+      { field: '聚合键', desc: '优先 groupId，其次 contactGroups。' },
+    ],
+    sample: `{
+  "alerts": [
+    {
+      "alertName": "ECS CPU 使用率高",
+      "message": "CPU 持续 5 分钟超过 90%",
+      "level": "critical",
+      "alertState": "ALARM",
+      "namespace": "acs_ecs_dashboard",
+      "product": "ECS",
+      "ruleId": "rule-001",
+      "metricName": "CPUUtilization",
+      "instanceName": "ecs-prod-01",
+      "instanceId": "i-xxxxxx",
+      "groupId": "prod-ecs",
+      "dimensions": {
+        "env": "prod",
+        "cluster": "prod-cluster"
+      },
+      "timestamp": 1778992200
+    }
+  ]
+}`,
+  },
+  {
+    provider: 'generic',
+    title: '通用 Webhook',
+    note: '字段名越贴近平台统一字段，接入越省事。',
+    fields: [
+      { field: '标题', desc: '优先 title，其次 name、alertname、labels.alertname。' },
+      { field: '描述', desc: '优先 message，其次 description，再其次 annotations.description；都没有时回退标题。' },
+      { field: '级别', desc: '优先 level，其次 severity、labels.severity。' },
+      { field: '服务', desc: '优先 labels.app，其次 labels.job_name、labels.service，最后回退 payload.service。' },
+      { field: '环境', desc: '优先 environment、env，再看 labels.environment、labels.env。' },
+      { field: '资源', desc: '优先 resource、instance，再看 labels.instance、labels.host。' },
+      { field: '告警指纹', desc: '优先 payload.fingerprint；没有时平台自动计算。' },
+      { field: '聚合键', desc: '优先 payload.group_key；没有时平台按聚合规则生成。' },
+    ],
+    sample: `{
+  "title": "订单服务错误率升高",
+  "message": "5xx 比例超过阈值",
+  "level": "critical",
+  "status": "firing",
+  "source": "custom-monitor",
+  "fingerprint": "custom-order-error-rate",
+  "group_key": "service=order-api|env=prod",
+  "service": "order-api",
+  "environment": "prod",
+  "resource": "10.0.1.10:8080",
+  "labels": {
+    "alertname": "HighErrorRate",
+    "team": "trade"
+  }
+}`,
+  },
+]
 
 const environmentOptions = computed(() => {
   const values = new Set()
@@ -1707,6 +1938,12 @@ onMounted(async () => {
   flex: 1 1 auto;
 }
 
+.section-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 .toolbar .el-input {
   width: 280px;
 }
@@ -1819,6 +2056,112 @@ onMounted(async () => {
   word-break: break-all;
 }
 
+.integration-help {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.integration-help-hero {
+  background: linear-gradient(180deg, #f8fbff 0%, #fdfefe 100%);
+  border: 1px solid rgba(51, 112, 255, 0.14);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.integration-help-hero-title {
+  color: var(--alert-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.integration-help-hero-desc {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.65;
+  margin-top: 4px;
+}
+
+.integration-help-card {
+  background: #fbfcff;
+  border: 1px solid var(--alert-border-soft);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.integration-help-head {
+  margin-bottom: 8px;
+}
+
+.integration-help-title {
+  color: var(--alert-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.integration-help-note {
+  color: var(--alert-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+
+.integration-help-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.integration-help-item {
+  background: #fff;
+  border: 1px solid #edf0f5;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.integration-help-field {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 4px;
+}
+
+.integration-help-desc {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.integration-sample-block {
+  margin-top: 10px;
+}
+
+.integration-sample-title {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.integration-sample-code {
+  background: #0f172a;
+  border-radius: 10px;
+  color: #e2e8f0;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .alert-detail-body {
   display: flex;
   flex-direction: column;
@@ -1849,6 +2192,14 @@ onMounted(async () => {
   font-size: 14px;
   font-weight: 700;
   line-height: 1.45;
+}
+
+.detail-fingerprint {
+  color: var(--alert-subtle);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
 }
 
 .alert-detail-card {
@@ -2076,6 +2427,10 @@ onMounted(async () => {
   .release-stats,
   .split-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .integration-help-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -152,6 +152,16 @@ def _match_step_approver(user, step):
     return True
 
 
+def _apply_system_alias_filter(request, queryset, *fields):
+    system_name = (request.query_params.get('system_name') or request.query_params.get('system') or '').strip()
+    if not system_name:
+        return queryset
+    condition = Q()
+    for field in fields:
+        condition |= Q(**{field: system_name})
+    return queryset.filter(condition)
+
+
 class HostViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.ModelViewSet):
     queryset = Host.objects.all()
     serializer_class = HostSerializer
@@ -172,6 +182,9 @@ class HostViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.Mode
         'test_connection': ['ops.host.manage'],
         'refresh_info': ['ops.host.manage'],
     }
+
+    def get_queryset(self):
+        return _apply_system_alias_filter(self.request, super().get_queryset(), 'business_line')
 
     @action(detail=True, methods=['post'])
     def test_connection(self, request, pk=None):
@@ -1107,6 +1120,9 @@ class DeploymentViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewset
         'advance_batch': ['ops.deployment.manage'],
     }
 
+    def get_queryset(self):
+        return _apply_system_alias_filter(self.request, super().get_queryset(), 'business_line')
+
     def perform_create(self, serializer):
         deployment = serializer.save(submitter=self.request.user.username)
         _initialize_approval_steps(deployment)
@@ -1451,6 +1467,9 @@ class TransactionTicketViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, 
         'complete': ['ops.ticket.manage'],
     }
 
+    def get_queryset(self):
+        return _apply_system_alias_filter(self.request, super().get_queryset(), 'business_line')
+
     def perform_create(self, serializer):
         serializer.save(applicant=self.request.user.username)
 
@@ -1583,6 +1602,7 @@ class AlertViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.Mod
 
     def get_queryset(self):
         queryset = super().get_queryset().order_by('-last_received_at', '-created_at', '-id')
+        queryset = _apply_system_alias_filter(self.request, queryset, 'business_line', 'host__business_line')
         params = self.request.query_params
         claimed = params.get('claimed')
         if claimed is None:

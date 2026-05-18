@@ -167,12 +167,15 @@ class AIOpsSkill(models.Model):
 
 class AIOpsKnowledgeEnvironment(models.Model):
     name = models.CharField('知识图谱环境名', max_length=128, unique=True)
+    aliases = models.JSONField('环境别名', default=list, blank=True)
     description = models.CharField('描述', max_length=255, blank=True, default='')
     event_environments = models.JSONField('事件中心环境', default=list, blank=True)
     grafana_folder_keys = models.JSONField('监控看板目录', default=list, blank=True)
     log_datasource_ids = models.JSONField('日志中心数据源', default=list, blank=True)
     tracing_datasource_ids = models.JSONField('链路追踪数据源', default=list, blank=True)
+    observability_link_ids = models.JSONField('可观测性关联配置', default=list, blank=True)
     alert_environments = models.JSONField('告警中心环境', default=list, blank=True)
+    posture_environments = models.JSONField('系统态势环境', default=list, blank=True)
     k8s_cluster_ids = models.JSONField('K8s 集群', default=list, blank=True)
     k8s_namespaces = models.JSONField('K8s 命名空间', default=dict, blank=True)
     docker_host_ids = models.JSONField('Docker 环境', default=list, blank=True)
@@ -195,6 +198,7 @@ class AIOpsKnowledgeEnvironment(models.Model):
 
 
 class AIOpsChatSession(models.Model):
+    context = models.JSONField('上下文', default=dict, blank=True)
     STATUS_ACTIVE = 'active'
     STATUS_ARCHIVED = 'archived'
     STATUS_CHOICES = [

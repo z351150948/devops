@@ -754,7 +754,7 @@ function formatScopeText(item) {
   } else if (item?.environment) {
     parts.push(item.environment)
   }
-  return parts.join(' / ') || '未指定业务线 / 环境'
+  return parts.join(' / ') || '未指定系统 / 环境'
 }
 
 async function loadNotifications() {

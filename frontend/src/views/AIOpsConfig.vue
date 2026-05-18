@@ -723,6 +723,9 @@ async function handleListProviderModels() {
     const result = await listAIOpsProviderModels(providerForm.id, { probe: true })
     providerModels.value = result.models || []
     providerModelRecommendation.value = result.recommendation || null
+    if (result.catalog_error) {
+      ElMessage.warning(result.fallback_used ? `模型列表接口不可用，已回退到已配置模型：${result.catalog_error}` : result.catalog_error)
+    }
     if (providerModelRecommendation.value?.model) {
       providerForm.default_model = providerModelRecommendation.value.model
       ElMessage.success(providerModelRecommendation.value.message || `已推荐 ${providerModelRecommendation.value.model}`)

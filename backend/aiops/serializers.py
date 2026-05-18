@@ -119,9 +119,9 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = AIOpsKnowledgeEnvironment
         fields = [
-            'id', 'name', 'description', 'event_environments', 'grafana_folder_keys',
-            'log_datasource_ids', 'tracing_datasource_ids', 'alert_environments',
-            'k8s_cluster_ids', 'k8s_namespaces', 'docker_host_ids',
+            'id', 'name', 'aliases', 'description', 'event_environments', 'grafana_folder_keys',
+            'log_datasource_ids', 'tracing_datasource_ids', 'observability_link_ids', 'alert_environments',
+            'posture_environments', 'k8s_cluster_ids', 'k8s_namespaces', 'docker_host_ids',
             'is_enabled', 'created_by', 'updated_by', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
@@ -134,11 +134,14 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         list_fields = [
+            'aliases',
             'event_environments',
             'grafana_folder_keys',
             'log_datasource_ids',
             'tracing_datasource_ids',
+            'observability_link_ids',
             'alert_environments',
+            'posture_environments',
             'k8s_cluster_ids',
             'docker_host_ids',
         ]
@@ -189,11 +192,12 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
                 attrs['k8s_namespaces'] = normalized
 
         instance = self.instance
+        association_fields = [field for field in list_fields if field != 'aliases']
         has_association = any(
-            attrs.get(field, getattr(instance, field, [])) for field in list_fields
+            attrs.get(field, getattr(instance, field, [])) for field in association_fields
         )
         if not has_association:
-            raise serializers.ValidationError('请至少选择一个事件中心、看板目录、日志、链路、告警、K8s 集群或 Docker 环境来源')
+            raise serializers.ValidationError('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群或 Docker 环境来源')
         return attrs
 
 
@@ -226,7 +230,7 @@ class AIOpsChatSessionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AIOpsChatSession
-        fields = ['id', 'title', 'status', 'last_message_at', 'created_at', 'updated_at', 'latest_message']
+        fields = ['id', 'title', 'status', 'context', 'last_message_at', 'created_at', 'updated_at', 'latest_message']
 
     def get_latest_message(self, obj):
         message = obj.messages.order_by('-created_at', '-id').first()

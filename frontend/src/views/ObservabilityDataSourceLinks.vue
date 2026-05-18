@@ -135,7 +135,7 @@
             </div>
             <div class="section-grid">
               <el-form-item label="关联名称">
-                <el-input v-model="form.name" placeholder="例如：电商 k3s Loki ↔ Tempo" />
+                <el-input v-model="form.name" placeholder="例如：交易系统 k3s Loki ↔ Tempo" />
               </el-form-item>
               <el-form-item label="描述">
                 <el-input v-model="form.description" type="textarea" :rows="2" placeholder="说明该关联适用的环境、集群或命名空间" />
@@ -396,8 +396,8 @@ function openDialog(row) {
   } else {
     editingId.value = null
     form.value = createEmptyForm()
-    form.value.log_datasource = lokiDataSources.value.find((item) => item.name === '电商-k3s-loki')?.id || lokiDataSources.value[0]?.id || ''
-    form.value.tracing_datasource = tempoDataSources.value.find((item) => item.name === '电商-k3s-tempo')?.id || tempoDataSources.value[0]?.id || ''
+    form.value.log_datasource = lokiDataSources.value.find((item) => item.name === '交易系统-k3s-loki')?.id || lokiDataSources.value[0]?.id || ''
+    form.value.tracing_datasource = tempoDataSources.value.find((item) => item.name === '交易系统-k3s-tempo')?.id || tempoDataSources.value[0]?.id || ''
     traceIdFieldsText.value = form.value.trace_id_fields.join(', ')
   }
   dialogVisible.value = true

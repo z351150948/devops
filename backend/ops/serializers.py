@@ -154,13 +154,13 @@ class HostSerializer(serializers.ModelSerializer):
 
         business_line = business_line.strip()
         if business_line and not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
-            raise serializers.ValidationError({'business_line': '\u6240\u9009\u4e1a\u52a1\u7ebf\u672a\u5728\u8d44\u6e90\u6811\u4e2d\u914d\u7f6e'})
+            raise serializers.ValidationError({'business_line': '所选系统未在资源树中配置'})
 
         if environment:
             if not business_line:
-                raise serializers.ValidationError({'environment': '\u8bf7\u5148\u9009\u62e9\u4e1a\u52a1\u7ebf'})
+                raise serializers.ValidationError({'environment': '请先选择系统'})
             if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
-                raise serializers.ValidationError({'environment': '\u6240\u9009\u73af\u5883\u672a\u5728\u5f53\u524d\u4e1a\u52a1\u7ebf\u4e0b\u914d\u7f6e'})
+                raise serializers.ValidationError({'environment': '所选环境未在当前系统下配置'})
 
         attrs['business_line'] = business_line
         return attrs
@@ -1018,14 +1018,14 @@ class DeploymentSerializer(serializers.ModelSerializer):
         batch_size = attrs.get('batch_size', getattr(self.instance, 'batch_size', 1))
 
         if not business_line:
-            raise serializers.ValidationError({'business_line': '请选择业务线'})
+            raise serializers.ValidationError({'business_line': '请选择系统'})
         biz_node = ResourceNode.objects.filter(node_type='biz', name=business_line).first()
         if not biz_node:
-            raise serializers.ValidationError({'business_line': '所选业务线未在 CMDB 资源树中配置'})
+            raise serializers.ValidationError({'business_line': '所选系统未在资源树中配置'})
         if not environment:
             raise serializers.ValidationError({'environment': '请选择环境'})
         if not ResourceNode.objects.filter(node_type='env', parent=biz_node, name=environment).exists():
-            raise serializers.ValidationError({'environment': '所选环境未在 CMDB 中绑定到当前业务线'})
+            raise serializers.ValidationError({'environment': '所选环境未绑定到当前系统'})
         attrs['business_line'] = business_line
 
         if deploy_mode == 'docker_compose':
@@ -1146,14 +1146,14 @@ class TransactionTicketSerializer(serializers.ModelSerializer):
 
         business_line = business_line.strip()
         if not business_line:
-            raise serializers.ValidationError({'business_line': '请选择业务线'})
+            raise serializers.ValidationError({'business_line': '请选择系统'})
         if not ResourceNode.objects.filter(node_type='biz', name=business_line).exists():
-            raise serializers.ValidationError({'business_line': '所选业务线未在资源树中配置'})
+            raise serializers.ValidationError({'business_line': '所选系统未在资源树中配置'})
 
         if not environment:
             raise serializers.ValidationError({'environment': '请选择环境'})
         if not ResourceNode.objects.filter(node_type='env', parent__name=business_line, name=environment).exists():
-            raise serializers.ValidationError({'environment': '所选环境未在当前业务线下配置'})
+            raise serializers.ValidationError({'environment': '所选环境未在当前系统下配置'})
 
         approval_flow = attrs.get('approval_flow') if 'approval_flow' in attrs else getattr(self.instance, 'approval_flow', None)
         if approval_flow and approval_flow.environment and approval_flow.environment != environment:

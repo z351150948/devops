@@ -27,7 +27,7 @@ class Host(models.Model):
 
     hostname = models.CharField('\u4e3b\u673a\u540d', max_length=128, unique=True)
     ip_address = models.GenericIPAddressField('IP \u5730\u5740')
-    business_line = models.CharField('\u4e1a\u52a1\u7ebf', max_length=50, blank=True, default='')
+    business_line = models.CharField('系统', max_length=50, blank=True, default='')
     environment = models.CharField('\u73af\u5883', max_length=20, choices=ENV_CHOICES, blank=True, default='')
     admin_user = models.CharField('\u8d1f\u8d23\u4eba', max_length=50, blank=True, default='')
     os_type = models.CharField('\u64cd\u4f5c\u7cfb\u7edf', max_length=64, default='Linux')
@@ -476,7 +476,7 @@ class Deployment(models.Model):
     ]
 
     app_name = models.CharField('应用名称', max_length=128)
-    business_line = models.CharField('业务线', max_length=50, blank=True, default='')
+    business_line = models.CharField('系统', max_length=50, blank=True, default='')
     version = models.CharField('版本号', max_length=64)
     image = models.CharField('镜像地址', max_length=255, blank=True, default='')
     environment = models.CharField('环境', max_length=32, choices=ENV_CHOICES, default='test')
@@ -813,7 +813,7 @@ class Alert(models.Model):
     cluster = models.CharField('集群', max_length=128, blank=True, default='')
     namespace = models.CharField('命名空间', max_length=128, blank=True, default='')
     region = models.CharField('地域', max_length=128, blank=True, default='')
-    business_line = models.CharField('业务线', max_length=128, blank=True, default='')
+    business_line = models.CharField('系统', max_length=128, blank=True, default='')
     resource_type = models.CharField('资源类型', max_length=64, blank=True, default='')
     resource = models.CharField('资源标识', max_length=256, blank=True, default='')
     metric_name = models.CharField('指标名', max_length=128, blank=True, default='')
@@ -1704,7 +1704,7 @@ class TransactionTicket(models.Model):
     title = models.CharField('工单标题', max_length=200)
     ticket_type = models.CharField('事务类型', max_length=32, choices=TYPE_CHOICES, default=TYPE_CHANGE)
     priority = models.CharField('优先级', max_length=16, choices=PRIORITY_CHOICES, default=PRIORITY_MEDIUM)
-    business_line = models.CharField('业务线', max_length=50, blank=True, default='')
+    business_line = models.CharField('系统', max_length=50, blank=True, default='')
     environment = models.CharField('环境', max_length=32, choices=ENV_CHOICES, blank=True, default='')
     approval_flow = models.ForeignKey(
         'DeploymentApprovalFlow',

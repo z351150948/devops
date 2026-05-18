@@ -176,6 +176,8 @@ export const resolveGrafanaToLogs = (data, config = {}) => request.post('/observ
 export const resolveGrafanaToTrace = (data, config = {}) => request.post('/observability/datasource-links/resolve_grafana_to_trace/', data, config)
 export const getGrafanaConfig = () => request.get('/observability/grafana/config/')
 export const updateGrafanaConfig = (data) => request.put('/observability/grafana/config/', data)
+export const queryGrafanaPromQL = (data) => request.post('/observability/grafana/promql/query/', data)
+export const queryGrafanaPanel = (data) => request.post('/observability/grafana/panel/query/', data)
 export const getTracingProviders = () => request.get('/observability/tracing/providers/')
 export const getTracingDataSources = (params) => request.get('/observability/tracing/datasources/', { params })
 export const createTracingDataSource = (data) => request.post('/observability/tracing/datasources/', data)

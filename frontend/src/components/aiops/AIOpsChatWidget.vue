@@ -70,6 +70,9 @@
                       {{ currentSession?.last_message_at ? `活跃于 ${formatDateTime(currentSession.last_message_at)}` : '尚未开始提问' }}
                     </span>
                   </div>
+                  <span class="environment-chip" :class="{ empty: !currentEnvironmentName }">
+                    {{ currentEnvironmentName ? `环境：${currentEnvironmentName}` : '未指定环境' }}
+                  </span>
                   <label class="analysis-toggle">
                     <span>只分析</span>
                     <el-switch v-model="analysisOnly" size="small" />
@@ -176,6 +179,19 @@
                         <div class="message-error-desc">{{ getAssistantErrorDisplay(message).description }}</div>
                         <div v-if="getAssistantErrorDisplay(message).detail" class="message-error-detail">
                           {{ getAssistantErrorDisplay(message).detail }}
+                        </div>
+                        <div v-if="getEnvironmentCandidates(message).length" class="environment-candidate-list">
+                          <button
+                            v-for="candidate in getEnvironmentCandidates(message)"
+                            :key="candidate.name"
+                            type="button"
+                            class="environment-candidate-btn"
+                            :disabled="loading.send || loading.poll"
+                            @click="chooseEnvironmentCandidate(message, index, candidate)"
+                          >
+                            <strong>{{ candidate.name }}</strong>
+                            <span v-if="candidate.aliases?.length">{{ candidate.aliases.slice(0, 3).join(' / ') }}</span>
+                          </button>
                         </div>
                         <div v-if="canViewConfig && getAssistantErrorDisplay(message).actionLabel" class="message-error-actions">
                           <el-button size="small" text @click="openAIOpsConfig">
@@ -452,6 +468,11 @@ const FINAL_POLL_STABLE_ROUNDS = 2
 const available = computed(() => bootstrap.value.enabled && authStore.hasPermission('aiops.chat.view'))
 const renderMessages = computed(() => pendingAssistantMessage.value ? [...messages.value, pendingAssistantMessage.value] : messages.value)
 const currentSession = computed(() => sessions.value.find(item => item.id === currentSessionId.value) || null)
+const currentEnvironmentName = computed(() => {
+  const value = currentSession.value?.context?.current_environment
+  if (!value) return ''
+  return typeof value === 'string' ? value : (value.name || '')
+})
 const fabStyle = computed(() => {
   if (!fabPosition.value || visible.value) return null
   return {
@@ -473,6 +494,12 @@ const ASSISTANT_ERROR_DISPLAY = {
     description: '当前智能助手没有可用模型，暂时无法继续问答。“智能助手体验版”只是预置模板，需要填写真实 Base URL 和 API Key。',
     actionLabel: '前往模型配置',
     tag: '模型配置',
+  },
+  llm_api_error: {
+    title: 'LLM 接口调用失败',
+    description: '模型服务已进入调用流程，但接口没有返回可用结果。请检查模型服务地址、模型名、API Key、网络连通性或服务端日志。',
+    actionLabel: '检查模型配置',
+    tag: 'LLM 接口',
   },
   tool_unavailable: {
     title: '未启用可用工具',
@@ -497,6 +524,18 @@ const ASSISTANT_ERROR_DISPLAY = {
     description: '本次问答执行过程中发生异常，请稍后重试；如果持续失败，请检查模型与 MCP 的接入配置。',
     actionLabel: '查看智能体配置',
     tag: '运行异常',
+  },
+  environment_required: {
+    title: '必须先指定环境',
+    description: 'AIOps 分析需要先确认知识图谱环境。请在问题中带上环境名称，或从候选环境中选择后继续。',
+    actionLabel: '',
+    tag: '环境前置',
+  },
+  environment_ambiguous: {
+    title: '需要确认唯一环境',
+    description: '你的问题命中了多个知识图谱环境，请明确使用哪个环境后继续分析。',
+    actionLabel: '',
+    tag: '环境前置',
   },
   default: {
     title: '本次问答未完成',
@@ -570,6 +609,22 @@ function getAssistantErrorDisplay(message) {
     ...preset,
     detail: errorDetail || '',
   }
+}
+
+function getEnvironmentCandidates(message) {
+  const candidates = message?.metadata?.environment_candidates
+  if (!Array.isArray(candidates)) return []
+  const seen = new Set()
+  return candidates
+    .map(item => ({
+      name: String(item?.name || '').trim(),
+      aliases: Array.isArray(item?.aliases) ? item.aliases.filter(Boolean) : [],
+    }))
+    .filter((item) => {
+      if (!item.name || seen.has(item.name)) return false
+      seen.add(item.name)
+      return true
+    })
 }
 
 function formatDateTime(value) {
@@ -1172,6 +1227,19 @@ function applySuggestedQuestion(text) {
   focusComposer()
 }
 
+async function chooseEnvironmentCandidate(message, index, candidate) {
+  if (!candidate?.name || loading.value.send || loading.value.poll) return
+  const previousPrompt = resolveReusablePrompt(index, message)
+    .replace(/^只做分析，不要执行：/, '')
+    .trim()
+  composer.value = previousPrompt
+    ? `使用${candidate.name}环境继续分析：${previousPrompt}`
+    : `使用${candidate.name}环境继续分析`
+  persistDraft()
+  await nextTick()
+  await handleSend()
+}
+
 function clearDraft() {
   composer.value = ''
   persistDraft(currentSessionId.value, '')
@@ -1401,6 +1469,8 @@ onBeforeUnmount(() => {
 .session-indicator{display:flex;flex-direction:column;min-width:0;max-width:220px}
 .session-indicator-label{font-size:12px;font-weight:700;color:#334155;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .session-indicator-meta{font-size:12px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.environment-chip{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:6px;background:#ecfdf5;border:1px solid #bbf7d0;color:#047857;font-size:12px;font-weight:700;white-space:nowrap}
+.environment-chip.empty{background:#fff7ed;border-color:#fed7aa;color:#c2410c}
 .analysis-toggle{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155}
 .toolbar-hint{font-size:12px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .quick-palette{padding:8px 12px 0}
@@ -1458,6 +1528,12 @@ onBeforeUnmount(() => {
 .message-error-desc{font-size:12px;line-height:1.6;color:#7c2d12}
 .message-error-detail{padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.78);border:1px solid #fdba74;font-size:11px;line-height:1.5;color:#9a3412;white-space:pre-wrap;word-break:break-word}
 .message-error-actions{display:flex;justify-content:flex-start}
+.environment-candidate-list{display:flex;flex-wrap:wrap;gap:6px}
+.environment-candidate-btn{display:inline-flex;align-items:center;gap:6px;max-width:100%;border:1px solid #fdba74;border-radius:999px;background:#fff;color:#9a3412;padding:5px 9px;font-size:11px;cursor:pointer}
+.environment-candidate-btn:hover{background:#fff7ed}
+.environment-candidate-btn:disabled{cursor:not-allowed;opacity:.58}
+.environment-candidate-btn strong{font-size:12px;color:#7c2d12}
+.environment-candidate-btn span{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c2410c}
 .analysis-process-card{margin-bottom:10px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
 .analysis-process-card.active{border-color:#dbe4f0;background:#f8fafc}
 .analysis-process-head{display:flex;align-items:center;justify-content:space-between;gap:8px}

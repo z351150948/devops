@@ -93,7 +93,7 @@ PROVIDER_CATALOG = {
         'sections': [
             {'key': 'metadata', 'label': '治理信息', 'fields': [
                 {'path': 'metadata.project_name', 'label': '项目标识', 'type': 'text'},
-                {'path': 'metadata.business_line', 'label': '业务线', 'type': 'text'},
+                {'path': 'metadata.business_line', 'label': '系统', 'type': 'text'},
                 {'path': 'metadata.environment', 'label': '环境', 'type': 'select', 'options': ENV_CHOICES},
                 {'path': 'metadata.owner', 'label': '负责人', 'type': 'text'},
             ]},
@@ -229,7 +229,7 @@ PROVIDER_CATALOG = {
         'sections': [
             {'key': 'metadata', 'label': '治理信息', 'fields': [
                 {'path': 'metadata.project_name', 'label': '项目标识', 'type': 'text'},
-                {'path': 'metadata.business_line', 'label': '业务线', 'type': 'text'},
+                {'path': 'metadata.business_line', 'label': '系统', 'type': 'text'},
                 {'path': 'metadata.environment', 'label': '环境', 'type': 'select', 'options': ENV_CHOICES},
                 {'path': 'metadata.owner', 'label': '负责人', 'type': 'text'},
             ]},
@@ -1146,7 +1146,7 @@ def _build_readme(payload, has_secret_tfvars):
     summary_lines = [
         f'- 云厂商: {payload["provider_meta"]["label"]}',
         f'- 区域 / 可用区: `{payload["region"]}` / `{payload["zone"]}`',
-        f'- 业务线 / 环境: `{config["metadata"].get("business_line") or "default"}` / `{config["metadata"]["environment"]}`',
+        f'- 系统 / 环境: `{config["metadata"].get("business_line") or "default"}` / `{config["metadata"]["environment"]}`',
         f'- VPC / 子网: `{config["network"]["vpc_cidr"]}` / `{config["network"]["subnet_cidr"]}`',
         f'- 服务器数量: `{len(compute_instances)}`',
     ]

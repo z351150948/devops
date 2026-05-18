@@ -3,12 +3,13 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cmdb.demo_seed import BIZ_COMMERCE, BIZ_DATA, BIZ_INFRA
+from cmdb.demo_seed import BIZ_DATA, BIZ_INFRA
 from ops.models import DeploymentApprovalFlow, DeploymentApprovalNode, TransactionTicket
 
 
 DEMO_FLOW_PREFIX = '事务工单 · '
 DEMO_OPERATOR = 'ops-demo'
+SYSTEM_TRADE = '交易系统'
 
 
 class Command(BaseCommand):
@@ -62,7 +63,7 @@ class Command(BaseCommand):
                 'title': '生产数据库白名单开通',
                 'ticket_type': TransactionTicket.TYPE_ACCESS,
                 'priority': TransactionTicket.PRIORITY_HIGH,
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'prod',
                 'approval_flow': flow_prod_access,
                 'owner': 'DBA 值班',
@@ -92,7 +93,7 @@ class Command(BaseCommand):
                 'title': '网关限流策略紧急调整',
                 'ticket_type': TransactionTicket.TYPE_INCIDENT,
                 'priority': TransactionTicket.PRIORITY_HIGH,
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'prod',
                 'approval_flow': flow_prod_incident,
                 'owner': '应用网关值班',

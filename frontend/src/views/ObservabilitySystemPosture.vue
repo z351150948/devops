@@ -389,7 +389,7 @@
           </div>
           <div class="form-grid">
             <el-form-item label="系统名称">
-              <el-input v-model="systemForm.name" maxlength="128" show-word-limit placeholder="例如：电商交易核心" />
+              <el-input v-model="systemForm.name" maxlength="128" show-word-limit placeholder="例如：交易系统核心" />
             </el-form-item>
             <el-form-item label="系统域">
               <el-select v-model="systemForm.domain" placeholder="请选择系统域">
@@ -466,7 +466,7 @@
   "version": 1,
   "enabled": true,
   "engine": "prometheus-tempo",
-  "namespace": "ecommerce",
+  "namespace": "trade",
   "service_pattern": "api-gateway|cart|order|inventory|catalog",
   "north_star": {
     "metric": "checkout_success_rate",

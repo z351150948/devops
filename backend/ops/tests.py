@@ -1304,7 +1304,7 @@ class ObservabilityViewsTests(TestCase):
     @patch('ops.observability_views.http_requests.get')
     def test_observability_system_posture_uses_configured_ecommerce_rules(self, mock_get):
         system = SystemPostureSystem.objects.create(
-            name='电商交易核心',
+            name='交易系统核心',
             domain='核心业务',
             tier='交易链路',
             owner='commerce-oncall',
@@ -1338,7 +1338,7 @@ class ObservabilityViewsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         selected = response.json()['selected_system']
-        self.assertEqual(selected['name'], '电商交易核心')
+        self.assertEqual(selected['name'], '交易系统核心')
         self.assertNotIn('window', selected['rule_config'])
         self.assertNotIn('window', selected['form']['rule_config'])
         self.assertEqual(selected['live']['window'], '30m')
@@ -1459,7 +1459,7 @@ class ObservabilityViewsTests(TestCase):
 
     def test_builtin_system_posture_card_can_be_overridden_and_hidden(self):
         override = SystemPostureSystem.objects.create(
-            name='电商交易核心',
+            name='交易系统核心',
             domain='交易域',
             tier='P0',
             owner='new-owner',
@@ -1471,7 +1471,7 @@ class ObservabilityViewsTests(TestCase):
             updated_by='observer-admin',
         )
 
-        response = self.client.get('/api/observability/system-posture/?system=电商交易核心')
+        response = self.client.get('/api/observability/system-posture/?system=交易系统核心')
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['selected_system']['source'], 'custom')
@@ -1482,7 +1482,7 @@ class ObservabilityViewsTests(TestCase):
         override.is_enabled = False
         override.save(update_fields=['is_enabled'])
         hidden_response = self.client.get('/api/observability/system-posture/')
-        self.assertFalse(any(item['name'] == '电商交易核心' for item in hidden_response.json()['systems']))
+        self.assertFalse(any(item['name'] == '交易系统核心' for item in hidden_response.json()['systems']))
 
     def test_builtin_system_posture_override_inherits_rule_json_structure(self):
         SystemPostureSystem.objects.create(
@@ -1769,6 +1769,75 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(len(payload['modules']['grafana']['folders']), 3)
         self.assertEqual(payload['modules']['grafana']['folders'][1]['path'], '基础设施/节点')
         self.assertEqual(payload['modules']['grafana']['dashboards'][0]['folder'], '基础设施/节点')
+
+    @patch('ops.observability_views.http_requests.get')
+    def test_grafana_promql_query_uses_grafana_datasource_proxy(self, mock_get):
+        mock_get.side_effect = [
+            MockHttpResponse({'id': 12, 'uid': 'prometheus-infra'}),
+            MockHttpResponse({
+                'status': 'success',
+                'data': {
+                    'resultType': 'vector',
+                    'result': [{'metric': {'job': 'api'}, 'value': [1710000000, '1']}],
+                },
+            }),
+        ]
+
+        response = self.client.post(
+            '/api/observability/grafana/promql/query/',
+            {'query': 'up{job="api"}', 'datasource_uid': 'prometheus-infra', 'grafana_url': 'http://grafana.internal.local'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['source'], 'grafana')
+        self.assertEqual(payload['series_count'], 1)
+        self.assertIn('/api/datasources/uid/prometheus-infra', mock_get.call_args_list[0].args[0])
+        self.assertIn('/api/datasources/proxy/12/api/v1/query', mock_get.call_args_list[1].args[0])
+
+    @patch('ops.observability_views.http_requests.get')
+    def test_grafana_panel_query_fetches_dashboard_targets_and_runs_range_query(self, mock_get):
+        GrafanaSetting.objects.create(name='default', enabled=True, url='http://grafana.internal.local')
+        mock_get.side_effect = [
+            MockHttpResponse({
+                'dashboard': {
+                    'title': 'K8s Workload',
+                    'panels': [{
+                        'id': 7,
+                        'title': 'CPU 使用率',
+                        'targets': [{'expr': 'sum(rate(container_cpu_usage_seconds_total{namespace="$namespace"}[5m]))'}],
+                    }],
+                },
+            }),
+            MockHttpResponse({'id': 12, 'uid': 'prometheus-infra'}),
+            MockHttpResponse({
+                'status': 'success',
+                'data': {
+                    'resultType': 'matrix',
+                    'result': [{'metric': {'namespace': 'prod'}, 'values': [[1710000000, '0.4'], [1710000060, '0.5']]}],
+                },
+            }),
+        ]
+
+        response = self.client.post(
+            '/api/observability/grafana/panel/query/',
+            {
+                'dashboard_key': 'k8s-workload',
+                'panel_title': 'CPU',
+                'variables': {'namespace': 'prod'},
+                'step': '60s',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['dashboard_uid'], 'k8s-workload')
+        self.assertEqual(payload['panel_id'], 7)
+        self.assertEqual(payload['queries'][0]['series_count'], 1)
+        self.assertIn('/api/dashboards/uid/k8s-workload', mock_get.call_args_list[0].args[0])
+        self.assertIn('query_range', mock_get.call_args_list[2].args[0])
 
     @patch('ops.tracing_providers.http_requests.post')
     def test_tracing_catalog_uses_skywalking_graphql_when_configured(self, mock_post):

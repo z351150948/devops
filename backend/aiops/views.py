@@ -8,7 +8,7 @@ from rest_framework.response import Response
 
 from eventwall.models import EventRecord
 from eventwall.services import record_event
-from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, TracingDataSource
+from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, TracingDataSource
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 from rbac.services import is_demo_account, user_has_permissions
 
@@ -275,6 +275,13 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             .distinct()
             .order_by('environment')[:100]
         )
+        posture_environments = [
+            {
+                'key': item.key,
+                'name': item.name,
+            }
+            for item in SystemPostureEnvironment.objects.filter(is_enabled=True).order_by('sort_order', 'id')
+        ]
         log_datasources = [
             {
                 'id': item.id,
@@ -296,6 +303,26 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             }
             for item in TracingDataSource.objects.filter(is_enabled=True).order_by('provider', 'name')
             if not _is_demoish_catalog_item(item.name, item.description, item.provider)
+        ]
+        observability_links = [
+            {
+                'id': item.id,
+                'name': item.name,
+                'description': item.description,
+                'log_datasource_id': item.log_datasource_id,
+                'log_datasource_name': item.log_datasource.name if item.log_datasource else '',
+                'tracing_datasource_id': item.tracing_datasource_id,
+                'tracing_datasource_name': item.tracing_datasource.name if item.tracing_datasource else '',
+                'grafana_dashboard_key': item.grafana_dashboard_key,
+                'is_default': item.is_default,
+            }
+            for item in ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource').filter(is_enabled=True).order_by('-is_default', 'name')
+            if not _is_demoish_catalog_item(
+                item.name,
+                item.description,
+                getattr(item.log_datasource, 'name', ''),
+                getattr(item.tracing_datasource, 'name', ''),
+            )
         ]
         k8s_clusters = [
             {
@@ -349,7 +376,9 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             'grafana_folders': sorted(folder_map.values(), key=lambda item: item['label']),
             'log_datasources': log_datasources,
             'tracing_datasources': tracing_datasources,
+            'observability_links': observability_links,
             'alert_environments': [_clean_catalog_value(item) for item in alert_environments if _clean_catalog_value(item)],
+            'posture_environments': posture_environments,
             'k8s_clusters': k8s_clusters,
             'docker_hosts': docker_hosts,
         })

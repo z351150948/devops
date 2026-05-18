@@ -561,7 +561,7 @@ FIREMAP_STATUS_META = {
 FIREMAP_SYSTEM_TEMPLATES = [
     {
         'id': 'commerce-core',
-        'name': '电商交易核心',
+        'name': '交易系统核心',
         'domain': '交易域',
         'owner': '交易平台',
         'tier': 'P0',
@@ -1400,7 +1400,7 @@ def _record_matches_keywords(record_text, keywords):
     return _keywords_match(record_text, keywords)
 
 
-ECOMMERCE_FIREMAP_NAME = '电商交易核心'
+ECOMMERCE_FIREMAP_NAME = '交易系统核心'
 ECOMMERCE_NAMESPACE = 'ecommerce'
 ECOMMERCE_PROMQL_WINDOW = '30m'
 ECOMMERCE_SERVICE_PATTERN = 'api-gateway|cart|order|inventory|catalog'
@@ -1860,8 +1860,12 @@ def _prometheus_config():
     return config
 
 
-def _resolve_prometheus_client():
+def _resolve_prometheus_client(overrides=None):
     config = _prometheus_config()
+    if isinstance(overrides, dict):
+        for key in ['query_url', 'grafana_url', 'grafana_datasource_uid', 'grafana_datasource_id', 'grafana_api_token', 'timeout']:
+            if overrides.get(key) not in (None, ''):
+                config[key] = overrides.get(key)
     if not _config_bool(config.get('enabled'), True):
         return {'ready': False, 'warning': 'Prometheus 查询已禁用'}
 
@@ -1932,6 +1936,28 @@ def _prometheus_query(client, query, at_time=None):
     return ((body.get('data') or {}).get('result') or [])
 
 
+def _prometheus_query_range(client, query, start_time, end_time, step):
+    params = {
+        'query': query,
+        'start': start_time.timestamp(),
+        'end': end_time.timestamp(),
+        'step': step,
+    }
+    response = http_requests.get(
+        f"{client['base_url'].rstrip('/')}/api/v1/query_range",
+        params=params,
+        headers=client.get('headers') or {},
+        timeout=client.get('timeout') or 6,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f'Prometheus HTTP {response.status_code}')
+    body = response.json()
+    if body.get('status') != 'success':
+        raise RuntimeError(body.get('error') or 'Prometheus 查询失败')
+    data = body.get('data') or {}
+    return data.get('result') or [], data.get('resultType') or ''
+
+
 def _prometheus_scalar(client, query, at_time=None):
     results = _prometheus_query(client, query, at_time=at_time)
     return _prometheus_value(results[0]) if results else None
@@ -1956,6 +1982,211 @@ def _safe_prometheus_scalar(client, query, warnings, at_time=None):
     except Exception as exc:
         warnings.append(str(exc))
         return None
+
+
+def _parse_promql_datetime(value, default):
+    if value in (None, ''):
+        return default
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        try:
+            parsed = datetime.fromtimestamp(float(text), tz=datetime_timezone.utc)
+        except (TypeError, ValueError):
+            try:
+                parsed = datetime.fromisoformat(text.replace('Z', '+00:00'))
+            except ValueError:
+                parsed = default
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, datetime_timezone.utc)
+    return parsed
+
+
+def _normalize_promql_step(value, default=60):
+    text = str(value or '').strip().lower()
+    if not text:
+        return default
+    multipliers = {'s': 1, 'm': 60, 'h': 3600}
+    suffix = text[-1]
+    try:
+        if suffix in multipliers:
+            seconds = int(float(text[:-1]) * multipliers[suffix])
+        else:
+            seconds = int(float(text))
+    except (TypeError, ValueError):
+        return default
+    return min(max(seconds, 1), 3600)
+
+
+def _promql_result_sample(results, limit=5):
+    sample = []
+    for item in (results or [])[:limit]:
+        metric = item.get('metric') or {}
+        value = item.get('value')
+        values = item.get('values')
+        latest = values[-1] if values else value
+        sample.append({
+            'metric': metric,
+            'value': latest,
+            'points': len(values or []),
+        })
+    return sample
+
+
+def execute_promql_query(query, *, range_query=False, start_time=None, end_time=None, step=60, datasource_uid='', datasource_id='', grafana_url=''):
+    query = str(query or '').strip()
+    if not query:
+        raise ValueError('PromQL 不能为空')
+    if len(query) > 2000:
+        raise ValueError('PromQL 过长')
+
+    overrides = {
+        'grafana_datasource_uid': str(datasource_uid or '').strip(),
+        'grafana_datasource_id': str(datasource_id or '').strip(),
+        'grafana_url': str(grafana_url or '').strip(),
+    }
+    client = _resolve_prometheus_client(overrides)
+    if not client.get('ready'):
+        raise RuntimeError(client.get('warning') or 'Prometheus/Grafana 数据源未就绪')
+
+    now = timezone.now()
+    end_dt = _parse_promql_datetime(end_time, now)
+    start_dt = _parse_promql_datetime(start_time, end_dt - timedelta(minutes=30))
+    if start_dt >= end_dt:
+        start_dt = end_dt - timedelta(minutes=30)
+    step_seconds = _normalize_promql_step(step)
+
+    if range_query:
+        results, result_type = _prometheus_query_range(client, query, start_dt, end_dt, step_seconds)
+    else:
+        results = _prometheus_query(client, query, at_time=end_dt)
+        result_type = 'vector'
+    return {
+        'query': query,
+        'range': bool(range_query),
+        'start': start_dt.isoformat(),
+        'end': end_dt.isoformat(),
+        'step': step_seconds,
+        'source': client.get('source'),
+        'description': client.get('description'),
+        'resultType': result_type,
+        'result': results,
+        'sample': _promql_result_sample(results),
+        'series_count': len(results or []),
+    }
+
+
+def _grafana_api_base():
+    grafana = _grafana_config()
+    grafana_url = str(grafana.get('url') or _prometheus_config().get('grafana_url') or '').strip().rstrip('/')
+    if not grafana_url or _is_example_url(grafana_url):
+        return ''
+    return grafana_url
+
+
+def _dashboard_uid_from_key(dashboard_key):
+    text = str(dashboard_key or '').strip()
+    if not text:
+        return ''
+    if text.startswith('http://') or text.startswith('https://'):
+        parsed = urlparse(text)
+        parts = [part for part in parsed.path.split('/') if part]
+        if len(parts) >= 2 and parts[0] == 'd':
+            return parts[1]
+    return text
+
+
+def _flatten_dashboard_panels(panels):
+    flattened = []
+    for panel in panels or []:
+        if not isinstance(panel, dict):
+            continue
+        flattened.append(panel)
+        if isinstance(panel.get('panels'), list):
+            flattened.extend(_flatten_dashboard_panels(panel.get('panels')))
+    return flattened
+
+
+def _find_dashboard_panel(dashboard_payload, panel_id='', panel_title=''):
+    dashboard = dashboard_payload.get('dashboard') if isinstance(dashboard_payload, dict) else {}
+    panels = _flatten_dashboard_panels((dashboard or {}).get('panels') or [])
+    title = str(panel_title or '').strip().lower()
+    panel_id_text = str(panel_id or '').strip()
+    for panel in panels:
+        if panel_id_text and str(panel.get('id') or '') == panel_id_text:
+            return panel
+        if title and title in str(panel.get('title') or '').strip().lower():
+            return panel
+    return panels[0] if panels else {}
+
+
+def _render_promql_variables(expr, variables):
+    rendered = str(expr or '')
+    if not isinstance(variables, dict):
+        return rendered
+    for key, value in variables.items():
+        safe_key = str(key or '').strip()
+        if not safe_key:
+            continue
+        safe_value = str(value or '').strip()
+        rendered = rendered.replace(f'${safe_key}', safe_value).replace(f'${{{safe_key}}}', safe_value)
+    return rendered
+
+
+def execute_dashboard_panel_queries(dashboard_key, *, panel_id='', panel_title='', variables=None, start_time=None, end_time=None, step=60, limit=3):
+    uid = _dashboard_uid_from_key(dashboard_key)
+    if not uid:
+        raise ValueError('Grafana 看板 UID 不能为空')
+    grafana_url = _grafana_api_base()
+    if not grafana_url:
+        raise RuntimeError('未配置可用 Grafana 地址')
+    headers = _prometheus_headers(_prometheus_config())
+    timeout = _config_int(_prometheus_config().get('timeout'), 6)
+    response = http_requests.get(
+        f'{grafana_url}/api/dashboards/uid/{quote(uid, safe="")}',
+        headers=headers,
+        timeout=timeout,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f'Grafana Dashboard HTTP {response.status_code}')
+    dashboard_payload = response.json()
+    panel = _find_dashboard_panel(dashboard_payload, panel_id=panel_id, panel_title=panel_title)
+    if not panel:
+        raise RuntimeError('未找到可分析的 Grafana 面板')
+    expressions = []
+    for target in panel.get('targets') or []:
+        if not isinstance(target, dict):
+            continue
+        expr = target.get('expr') or target.get('query') or target.get('rawSql')
+        datasource = target.get('datasource') if isinstance(target.get('datasource'), dict) else {}
+        if expr and (not datasource or str(datasource.get('type') or '').lower() in {'', 'prometheus'}):
+            expressions.append({
+                'expr': _render_promql_variables(expr, variables or {}),
+                'datasource_uid': datasource.get('uid') or '',
+            })
+        if len(expressions) >= limit:
+            break
+    if not expressions:
+        raise RuntimeError('该面板未找到 Prometheus PromQL target')
+    results = [
+        execute_promql_query(
+            item['expr'],
+            range_query=True,
+            start_time=start_time,
+            end_time=end_time,
+            step=step,
+            datasource_uid=item.get('datasource_uid') or '',
+        )
+        for item in expressions
+    ]
+    return {
+        'dashboard_uid': uid,
+        'dashboard_title': (dashboard_payload.get('dashboard') or {}).get('title') or uid,
+        'panel_id': panel.get('id'),
+        'panel_title': panel.get('title') or '',
+        'queries': results,
+    }
 
 
 def _safe_prometheus_series_map(client, query, labels, warnings, at_time=None):
@@ -2407,7 +2638,7 @@ def _build_ecommerce_unavailable_dependencies(rule_config):
 def _ecommerce_unavailable_live_template(template, rule_config, client=None, warnings=None, reason=''):
     warnings = [str(item) for item in (warnings or []) if item]
     source_text = 'Grafana 代理 Prometheus' if (client or {}).get('source') == 'grafana' else 'Prometheus'
-    summary = reason or f'已配置 {source_text}，但未采集到电商 K8s 运行指标，按电商环境不可用处理。'
+    summary = reason or f'已配置 {source_text}，但未采集到交易系统 K8s 运行指标，按交易系统环境不可用处理。'
     slo_target = _ecommerce_slo_target(rule_config)
     return {
         **template,
@@ -2456,7 +2687,7 @@ def _apply_ecommerce_live_template(template, access, time_context=None):
             rule_config,
             client=client,
             warnings=[client.get('warning') or 'Prometheus 未就绪'],
-            reason='未连接到可用的 Prometheus/Grafana 实时数据源，电商交易核心不再使用内置演示成功率。',
+            reason='未连接到可用的 Prometheus/Grafana 实时数据源，交易系统核心不再使用内置演示成功率。',
         )
     try:
         snapshot = _ecommerce_prometheus_snapshot(client, rule_config, time_context=time_context)
@@ -3183,7 +3414,7 @@ def _system_posture_timeline(template):
             'path': '/workorders/releases',
             'status': status,
             'tone': 'danger' if deployment.status in {'failed', 'removed'} or deployment.approval_status == 'rejected' else 'warning' if deployment.status in {'pending', 'deploying'} or deployment.approval_status == 'pending' else 'success',
-            'meta': f'{deployment.business_line or "未设置业务线"} / {deployment.environment or "test"}',
+            'meta': f'{deployment.business_line or "未设置系统"} / {deployment.environment or "test"}',
         })
 
     if template.get('focus_service_id'):
@@ -3821,6 +4052,52 @@ def grafana_setting_view(request):
     response_data = GrafanaSettingSerializer(saved).data
     response_data['persisted'] = True
     return Response(response_data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.grafana.view')])
+def grafana_promql_query(request):
+    query = request.data.get('query') or request.data.get('promql') or ''
+    range_query = str(request.data.get('range') or request.data.get('query_type') or '').lower() in {'1', 'true', 'range', 'query_range'}
+    if request.data.get('range_query') is not None:
+        range_query = bool(request.data.get('range_query'))
+    try:
+        payload = execute_promql_query(
+            query,
+            range_query=range_query,
+            start_time=request.data.get('start') or request.data.get('start_time'),
+            end_time=request.data.get('end') or request.data.get('end_time'),
+            step=request.data.get('step') or 60,
+            datasource_uid=request.data.get('datasource_uid') or '',
+            datasource_id=request.data.get('datasource_id') or '',
+            grafana_url=request.data.get('grafana_url') or '',
+        )
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+    return Response(payload)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.grafana.view')])
+def grafana_panel_query(request):
+    try:
+        payload = execute_dashboard_panel_queries(
+            request.data.get('dashboard_key') or request.data.get('dashboard_uid') or request.data.get('dashboard') or '',
+            panel_id=request.data.get('panel_id') or '',
+            panel_title=request.data.get('panel_title') or request.data.get('panel') or '',
+            variables=request.data.get('variables') if isinstance(request.data.get('variables'), dict) else {},
+            start_time=request.data.get('start') or request.data.get('start_time'),
+            end_time=request.data.get('end') or request.data.get('end_time'),
+            step=request.data.get('step') or 60,
+            limit=_config_int(request.data.get('limit'), 3),
+        )
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+    return Response(payload)
 
 
 @api_view(['GET'])

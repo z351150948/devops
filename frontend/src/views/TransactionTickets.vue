@@ -58,7 +58,7 @@
         <el-select v-model="priorityFilter" clearable placeholder="优先级" style="width: 118px">
           <el-option v-for="item in priorityOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="bizFilter" clearable filterable placeholder="业务线" style="width: 128px" @change="handleBizFilterChange">
+        <el-select v-model="bizFilter" clearable filterable placeholder="系统" style="width: 128px" @change="handleBizFilterChange">
           <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
         <el-select v-model="envFilter" clearable placeholder="环境" style="width: 118px">
@@ -85,7 +85,7 @@
             <el-tag size="small" effect="light" :type="typeTagType(row.ticket_type)">{{ typeLabel(row.ticket_type) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="业务线 / 环境" min-width="160">
+        <el-table-column label="系统 / 环境" min-width="160">
           <template #default="{ row }">
             <div class="stack-cell">
               <span>{{ row.business_line || '-' }}</span>
@@ -173,7 +173,7 @@
             <el-option v-for="item in priorityOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="业务线" required>
+        <el-form-item label="系统" required>
           <el-select v-model="ticketForm.business_line" filterable style="width: 100%" @change="handleBusinessLineChange">
             <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
@@ -208,7 +208,7 @@
         <el-descriptions-item label="工单标题" :span="2">{{ activeTicket.title }}</el-descriptions-item>
         <el-descriptions-item label="事务类型">{{ typeLabel(activeTicket.ticket_type) }}</el-descriptions-item>
         <el-descriptions-item label="优先级">{{ priorityLabel(activeTicket.priority) }}</el-descriptions-item>
-        <el-descriptions-item label="业务线">{{ activeTicket.business_line || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="系统">{{ activeTicket.business_line || '-' }}</el-descriptions-item>
         <el-descriptions-item label="环境">{{ activeTicket.environment_display || environmentLabel(activeTicket.environment) }}</el-descriptions-item>
         <el-descriptions-item label="审批流">{{ activeTicket.approval_flow_name || '默认审批' }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ statusLabel(activeTicket.status) }}</el-descriptions-item>
@@ -443,7 +443,7 @@ function openCreateDialog() {
 
 async function createTicket() {
   if (!ticketForm.value.title) return ElMessage.warning('请填写工单标题')
-  if (!ticketForm.value.business_line) return ElMessage.warning('请选择业务线')
+  if (!ticketForm.value.business_line) return ElMessage.warning('请选择系统')
   if (!ticketForm.value.environment) return ElMessage.warning('请选择环境')
 
   submitting.value = true

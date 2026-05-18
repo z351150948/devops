@@ -33,21 +33,21 @@
         <div class="stat-label">关联来源</div>
       </div>
       <div class="release-stat-card">
-        <div class="stat-value">{{ catalog.grafana_folders.length }}</div>
-        <div class="stat-label">看板目录</div>
+        <div class="stat-value">{{ catalog.posture_environments.length }}</div>
+        <div class="stat-label">系统态势环境</div>
       </div>
     </div>
 
     <div class="runtime-strip">
       <el-icon><InfoFilled /></el-icon>
-      <span>知识图谱环境名会作为图谱筛选和后续 AIOps 分析入口，底层数据只从事件中心、监控看板、日志中心、链路追踪和告警中心读取。</span>
+      <span>知识图谱环境名和别名会作为 AIOps 分析入口；分析优先取告警中心和系统态势，事件中心只作为辅助定位证据。</span>
     </div>
 
     <section class="panel">
       <div class="config-actionbar">
         <div>
           <div class="actionbar-title">环境关联配置</div>
-          <div class="actionbar-desc">把事件中心、监控看板、日志、链路和告警来源绑定成一个知识图谱环境。</div>
+          <div class="actionbar-desc">把告警、系统态势、监控看板、日志、链路、事件和容器来源绑定成一个知识图谱环境。</div>
         </div>
         <div class="actionbar-actions">
           <el-button size="small" :loading="loading" @click="loadData">
@@ -67,20 +67,17 @@
             <div v-if="row.description" class="env-desc">{{ row.description }}</div>
           </template>
         </el-table-column>
+        <el-table-column label="环境别名" min-width="150">
+          <template #default="{ row }"><TagList :items="row.aliases" /></template>
+        </el-table-column>
         <el-table-column label="事件中心环境" min-width="170">
           <template #default="{ row }"><TagList :items="row.event_environments" /></template>
         </el-table-column>
-        <el-table-column label="监控看板目录" min-width="180">
-          <template #default="{ row }"><TagList :items="row.grafana_folder_keys" /></template>
-        </el-table-column>
-        <el-table-column label="日志数据源" min-width="170">
-          <template #default="{ row }"><TagList :items="datasourceNames(row.log_datasource_ids, 'log')" /></template>
-        </el-table-column>
-        <el-table-column label="链路数据源" min-width="170">
-          <template #default="{ row }"><TagList :items="datasourceNames(row.tracing_datasource_ids, 'trace')" /></template>
-        </el-table-column>
         <el-table-column label="告警环境" min-width="160">
           <template #default="{ row }"><TagList :items="row.alert_environments" /></template>
+        </el-table-column>
+        <el-table-column label="可观测性来源" min-width="260">
+          <template #default="{ row }"><TagList :items="observabilityNames(row)" /></template>
         </el-table-column>
         <el-table-column label="基础设施" min-width="190">
           <template #default="{ row }"><TagList :items="infrastructureNames(row)" /></template>
@@ -104,6 +101,17 @@
         <el-form-item label="环境名" prop="name">
           <el-input v-model.trim="form.name" placeholder="例如：交易生产 / 核心测试" />
         </el-form-item>
+        <el-form-item label="环境别名">
+          <el-select
+            v-model="form.aliases"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            placeholder="例如：生产 / 线上 / prod"
+          />
+        </el-form-item>
         <el-form-item label="描述">
           <el-input v-model.trim="form.description" maxlength="255" show-word-limit placeholder="可选，说明这个图谱环境绑定的业务范围" />
         </el-form-item>
@@ -112,26 +120,42 @@
             <el-option v-for="item in catalog.event_environments" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="监控看板目录">
-          <el-select v-model="form.grafana_folder_keys" multiple filterable clearable placeholder="选择一个或多个监控看板目录">
-            <el-option v-for="item in catalog.grafana_folders" :key="item.key" :label="folderLabel(item)" :value="item.key" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="日志数据源">
-          <el-select v-model="form.log_datasource_ids" multiple filterable clearable placeholder="选择一个或多个日志中心数据源">
-            <el-option v-for="item in catalog.log_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="链路数据源">
-          <el-select v-model="form.tracing_datasource_ids" multiple filterable clearable placeholder="选择一个或多个链路追踪数据源">
-            <el-option v-for="item in catalog.tracing_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="告警中心环境">
           <el-select v-model="form.alert_environments" multiple filterable clearable placeholder="选择一个或多个告警中心环境">
             <el-option v-for="item in catalog.alert_environments" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
+        <div class="form-group-card">
+          <div class="form-group-card__head">
+            <strong>可观测性关联配置</strong>
+            <span>系统态势归类到可观测性，和日志、链路、看板、跳转关联一起作为分析证据。</span>
+          </div>
+          <el-form-item label="系统态势环境">
+            <el-select v-model="form.posture_environments" multiple filterable clearable placeholder="选择一个或多个系统态势环境">
+              <el-option v-for="item in catalog.posture_environments" :key="item.key" :label="postureEnvironmentLabel(item)" :value="item.key" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联配置">
+            <el-select v-model="form.observability_link_ids" multiple filterable clearable placeholder="选择日志 / 链路 / 看板之间的关联配置">
+              <el-option v-for="item in catalog.observability_links" :key="item.id" :label="observabilityLinkLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="监控看板目录">
+            <el-select v-model="form.grafana_folder_keys" multiple filterable clearable placeholder="选择一个或多个监控看板目录">
+              <el-option v-for="item in catalog.grafana_folders" :key="item.key" :label="folderLabel(item)" :value="item.key" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="日志数据源">
+            <el-select v-model="form.log_datasource_ids" multiple filterable clearable placeholder="选择一个或多个日志中心数据源">
+              <el-option v-for="item in catalog.log_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="链路数据源">
+            <el-select v-model="form.tracing_datasource_ids" multiple filterable clearable placeholder="选择一个或多个链路追踪数据源">
+              <el-option v-for="item in catalog.tracing_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+        </div>
         <el-form-item label="K8s 集群">
           <el-select v-model="form.k8s_cluster_ids" multiple filterable clearable placeholder="选择此图谱所在的 K8s 集群">
             <el-option v-for="item in catalog.k8s_clusters" :key="item.id" :label="k8sClusterLabel(item)" :value="item.id" />
@@ -218,19 +242,24 @@ const catalog = reactive({
   grafana_folders: [],
   log_datasources: [],
   tracing_datasources: [],
+  observability_links: [],
   alert_environments: [],
+  posture_environments: [],
   k8s_clusters: [],
   docker_hosts: [],
 })
 const dialog = reactive({ visible: false, editingId: null })
 const form = reactive({
   name: '',
+  aliases: [],
   description: '',
   event_environments: [],
   grafana_folder_keys: [],
   log_datasource_ids: [],
   tracing_datasource_ids: [],
+  observability_link_ids: [],
   alert_environments: [],
+  posture_environments: [],
   k8s_cluster_ids: [],
   k8s_namespaces: {},
   docker_host_ids: [],
@@ -247,7 +276,9 @@ const totalBindingCount = computed(() => environments.value.reduce((total, item)
   + (item.grafana_folder_keys?.length || 0)
   + (item.log_datasource_ids?.length || 0)
   + (item.tracing_datasource_ids?.length || 0)
+  + (item.observability_link_ids?.length || 0)
   + (item.alert_environments?.length || 0)
+  + (item.posture_environments?.length || 0)
   + (item.k8s_cluster_ids?.length || 0)
   + (item.docker_host_ids?.length || 0), 0))
 
@@ -259,12 +290,15 @@ const selectedK8sClusters = computed(() => {
 function resetForm(row = null) {
   dialog.editingId = row?.id || null
   form.name = row?.name || ''
+  form.aliases = [...(row?.aliases || [])]
   form.description = row?.description || ''
   form.event_environments = [...(row?.event_environments || [])]
   form.grafana_folder_keys = [...(row?.grafana_folder_keys || [])]
   form.log_datasource_ids = [...(row?.log_datasource_ids || [])]
   form.tracing_datasource_ids = [...(row?.tracing_datasource_ids || [])]
+  form.observability_link_ids = [...(row?.observability_link_ids || [])]
   form.alert_environments = [...(row?.alert_environments || [])]
+  form.posture_environments = [...(row?.posture_environments || [])]
   form.k8s_cluster_ids = [...(row?.k8s_cluster_ids || [])]
   form.k8s_namespaces = { ...(row?.k8s_namespaces || {}) }
   form.docker_host_ids = [...(row?.docker_host_ids || [])]
@@ -277,7 +311,9 @@ function hasAnyBinding() {
     form.grafana_folder_keys,
     form.log_datasource_ids,
     form.tracing_datasource_ids,
+    form.observability_link_ids,
     form.alert_environments,
+    form.posture_environments,
     form.k8s_cluster_ids,
     form.docker_host_ids,
   ].some(items => items.length)
@@ -289,6 +325,23 @@ function datasourceLabel(item) {
 
 function folderLabel(item) {
   return item.dashboard_count ? `${item.label}（${item.dashboard_count} 个看板）` : item.label
+}
+
+function postureEnvironmentLabel(item) {
+  const name = item?.name || ''
+  const key = item?.key || ''
+  if (!name) return key
+  if (!key || key === name || key === 'prod') return name
+  return `${name} / ${key}`
+}
+
+function observabilityLinkLabel(item) {
+  const parts = [item.name]
+  if (item.log_datasource_name || item.tracing_datasource_name) {
+    parts.push(`${item.log_datasource_name || '--'} ↔ ${item.tracing_datasource_name || '--'}`)
+  }
+  if (item.grafana_dashboard_key) parts.push(`看板 ${item.grafana_dashboard_key}`)
+  return parts.filter(Boolean).join(' / ')
 }
 
 function datasourceNames(ids = [], type = 'log') {
@@ -307,6 +360,26 @@ function namespaceOptionsForCluster(cluster) {
 
 function dockerHostLabel(item) {
   return item.ip_address ? `${item.name} / ${item.ip_address}` : item.name
+}
+
+function postureEnvironmentNames(keys = []) {
+  const nameMap = new Map(catalog.posture_environments.map(item => [item.key, postureEnvironmentLabel(item)]))
+  return keys.map(key => nameMap.get(key) || key)
+}
+
+function observabilityLinkNames(ids = []) {
+  const nameMap = new Map(catalog.observability_links.map(item => [Number(item.id), item.name]))
+  return ids.map(id => nameMap.get(Number(id)) || `关联配置 ID ${id}`)
+}
+
+function observabilityNames(row) {
+  return [
+    ...(row.posture_environments || []).map(name => `系统态势: ${postureEnvironmentNames([name])[0]}`),
+    ...(row.observability_link_ids || []).map(name => `关联: ${observabilityLinkNames([name])[0]}`),
+    ...(row.grafana_folder_keys || []).map(name => `看板: ${name}`),
+    ...(row.log_datasource_ids || []).map(name => `日志: ${datasourceNames([name], 'log')[0]}`),
+    ...(row.tracing_datasource_ids || []).map(name => `链路: ${datasourceNames([name], 'trace')[0]}`),
+  ]
 }
 
 function infrastructureNames(row) {
@@ -335,7 +408,9 @@ async function loadData() {
       grafana_folders: options.grafana_folders || [],
       log_datasources: options.log_datasources || [],
       tracing_datasources: options.tracing_datasources || [],
+      observability_links: options.observability_links || [],
       alert_environments: options.alert_environments || [],
+      posture_environments: options.posture_environments || [],
       k8s_clusters: options.k8s_clusters || [],
       docker_hosts: options.docker_hosts || [],
     })
@@ -352,19 +427,22 @@ function openDialog(row = null) {
 async function submitForm() {
   await formRef.value?.validate()
   if (!hasAnyBinding()) {
-    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、K8s 集群或 Docker 环境来源')
+    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群或 Docker 环境来源')
     return
   }
   saving.value = true
   try {
     const payload = {
       name: form.name,
+      aliases: form.aliases,
       description: form.description,
       event_environments: form.event_environments,
       grafana_folder_keys: form.grafana_folder_keys,
       log_datasource_ids: form.log_datasource_ids,
       tracing_datasource_ids: form.tracing_datasource_ids,
+      observability_link_ids: form.observability_link_ids,
       alert_environments: form.alert_environments,
+      posture_environments: form.posture_environments,
       k8s_cluster_ids: form.k8s_cluster_ids,
       k8s_namespaces: form.k8s_namespaces,
       docker_host_ids: form.docker_host_ids,
@@ -536,6 +614,31 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   font-size: 12px;
 }
 
+.form-group-card {
+  margin: 0 0 16px;
+  padding: 12px 12px 2px;
+  border: 1px solid rgba(14, 165, 233, 0.18);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
+}
+
+.form-group-card__head {
+  margin: 0 0 10px 128px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.form-group-card__head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.form-group-card__head span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .env-name {
   color: #0f172a;
   font-weight: 700;
@@ -589,6 +692,10 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   }
 
   .namespace-config {
+    margin-left: 0;
+  }
+
+  .form-group-card__head {
     margin-left: 0;
   }
 

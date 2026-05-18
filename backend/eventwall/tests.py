@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .models import EventRecord, EventSource
-from .views import _ensure_default_event_sources, _ensure_hourly_ecommerce_demo_events
+from .views import _ensure_default_event_sources, _ensure_hourly_sample_demo_events
 
 
 class EventSourceTests(TestCase):
@@ -23,10 +23,10 @@ class EventSourceTests(TestCase):
         self.assertTrue(EventSource.objects.filter(code='gitlab', source_kind=EventSource.KIND_EXTERNAL).exists())
         self.assertTrue(EventSource.objects.filter(code='custom', source_kind=EventSource.KIND_EXTERNAL).exists())
 
-    def test_hourly_ecommerce_demo_events_are_generated_idempotently(self):
-        _ensure_hourly_ecommerce_demo_events(hours=4)
+    def test_hourly_sample_demo_events_are_generated_idempotently(self):
+        _ensure_hourly_sample_demo_events(hours=4)
         first_count = EventRecord.objects.filter(metadata__hourly_demo_environment='电商测试环境-k3s').count()
-        _ensure_hourly_ecommerce_demo_events(hours=4)
+        _ensure_hourly_sample_demo_events(hours=4)
         second_count = EventRecord.objects.filter(metadata__hourly_demo_environment='电商测试环境-k3s').count()
 
         self.assertEqual(first_count, second_count)

@@ -74,11 +74,11 @@
 
     <div v-if="!isFlowMode" class="release-content-card">
       <div class="filter-bar release-filter-bar">
-        <el-select v-model="bizFilter" clearable filterable placeholder="业务线" style="width: 128px">
-          <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
         <el-select v-model="envFilter" clearable placeholder="环境" style="width: 104px">
           <el-option v-for="item in environmentOptions" :key="item.value" :label="item.label" :value="item.value" />
+        </el-select>
+        <el-select v-model="bizFilter" clearable filterable placeholder="系统" style="width: 128px">
+          <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
         <el-input v-model="search" clearable placeholder="搜索应用 / 版本 / 镜像 / 目标 / 申请人" style="width: 280px" />
         <el-select v-model="modeFilter" clearable placeholder="模式" style="width: 104px">
@@ -125,13 +125,15 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="业务线 / 环境" min-width="160">
+            <el-table-column label="环境 / 系统" min-width="170">
               <template #default="{ row }">
-                <div class="stack-cell">
-                  <span>{{ row.business_line || '-' }}</span>
-                  <div class="tag-line">
-                    <el-tag size="small" :type="envTagType(row.environment)">{{ row.environment_display }}</el-tag>
-                    <span class="sub-text">{{ row.deploy_mode_display }}</span>
+                <div class="scope-cell">
+                  <div class="scope-cell__env">
+                    <el-tag size="small" :type="envTagType(row.environment)">{{ row.environment_display || '-' }}</el-tag>
+                    <span class="scope-cell__mode">{{ row.deploy_mode_display }}</span>
+                  </div>
+                  <div class="scope-cell__system">
+                    <span>{{ row.business_line || '未设置系统' }}</span>
                   </div>
                 </div>
               </template>
@@ -254,8 +256,8 @@
         <el-form-item label="应用名称" required><el-input v-model="releaseForm.app_name" /></el-form-item>
         <el-form-item label="版本号" required><el-input v-model="releaseForm.version" /></el-form-item>
         <el-form-item label="镜像地址" class="span-2"><el-input v-model="releaseForm.image" placeholder="为空时默认使用 应用名:版本号" /></el-form-item>
-        <el-form-item label="业务线" required>
-          <el-select v-model="releaseForm.business_line" filterable placeholder="选择业务线" style="width: 100%" @change="handleBusinessLineChange">
+        <el-form-item label="系统" required>
+          <el-select v-model="releaseForm.business_line" filterable placeholder="选择系统" style="width: 100%" @change="handleBusinessLineChange">
             <el-option v-for="item in businessLineOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
@@ -400,7 +402,7 @@
         <el-descriptions :column="2" border size="small">
           <el-descriptions-item label="应用">{{ detailItem.app_name }}</el-descriptions-item>
           <el-descriptions-item label="版本">{{ detailItem.version }}</el-descriptions-item>
-          <el-descriptions-item label="业务线">{{ detailItem.business_line || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="系统">{{ detailItem.business_line || '-' }}</el-descriptions-item>
           <el-descriptions-item label="镜像">{{ detailItem.image || '-' }}</el-descriptions-item>
           <el-descriptions-item label="发布目标">
             <div v-if="detailItem.deploy_mode === 'k8s'" class="stack-cell detail-target-cell">
@@ -735,7 +737,7 @@ function openReleaseDialog() {
 }
 async function handleSaveRelease() {
   if (!releaseForm.value.app_name || !releaseForm.value.version) return ElMessage.warning('请填写应用名称和版本号')
-  if (!releaseForm.value.business_line) return ElMessage.warning('请选择业务线')
+  if (!releaseForm.value.business_line) return ElMessage.warning('请选择系统')
   if (!releaseForm.value.environment) return ElMessage.warning('请选择环境')
   if (releaseForm.value.deploy_mode === 'docker_compose' && !releaseForm.value.docker_host) return ElMessage.warning('请选择 Docker 环境')
   if (releaseForm.value.deploy_mode === 'k8s' && !releaseForm.value.cluster) return ElMessage.warning('请选择目标集群')
@@ -974,6 +976,10 @@ onMounted(async () => {
 .release-filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;margin-bottom:10px;overflow-x:auto;padding-bottom:2px}.flow-toolbar-spacer{flex:1}.app-cell,.stack-cell,.strategy-cell{display:flex;flex-direction:column;gap:6px}.app-cell-title{display:flex;align-items:center;gap:8px}.app-name{font-weight:600}
 .filter-refresh-btn{margin-left:auto;flex-shrink:0}
 .tag-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scope-cell{display:flex;flex-direction:column;gap:6px;min-width:0}
+.scope-cell__env{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scope-cell__mode{font-size:12px;color:#64748b}
+.scope-cell__system{font-size:13px;color:#0f172a;font-weight:600;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .detail-target-cell{min-width:0}
 :deep(.release-orders-table .release-actions-column .cell){display:flex;justify-content:flex-start;padding-left:8px;padding-right:0}
 :deep(.release-orders-table .el-table__fixed-right::before){left:72px;right:auto;width:8px;background:linear-gradient(90deg,rgba(15,23,42,.1),rgba(15,23,42,0))}

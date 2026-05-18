@@ -82,7 +82,7 @@ class CloudEnvironment(models.Model):
     )
     name = models.CharField('环境名称', max_length=128)
     code = models.CharField('环境编码', max_length=64, unique=True)
-    business_line = models.CharField('业务线', max_length=64, blank=True, default='')
+    business_line = models.CharField('系统', max_length=64, blank=True, default='')
     environment_type = models.CharField('环境类型', max_length=16, choices=ENVIRONMENT_CHOICES, default='prod')
     region = models.CharField('区域', max_length=64)
     zone = models.CharField('可用区', max_length=64, blank=True, default='')

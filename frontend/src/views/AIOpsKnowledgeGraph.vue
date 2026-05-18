@@ -280,8 +280,8 @@
         </section>
         <section>
           <h3>服务所属系统</h3>
-          <p>当前系统归属只从可观测性、事件中心和容器基础设施推断，不再依赖 CMDB。可用证据包括系统态势服务清单、事件中心业务线、告警业务线、Tracing service 标签、平台发布记录和 K8s / Docker 工作负载标签；如果同名服务已有明确系统归属，就不会再挂到“未归属系统”。</p>
-          <p>如果同一个服务确实属于多个系统，图谱会保留多个明确系统下的服务节点；只有完全没有系统证据时才归入“未归属系统”。后续建议优先补充 Tracing/告警标签、事件中心业务线、发布记录业务线或容器基础设施 label（如 <code>app.kubernetes.io/part-of</code>、<code>business_line</code>、<code>system</code>、<code>service.namespace</code>）。</p>
+          <p>当前系统归属只从可观测性、事件中心和容器基础设施推断，不再依赖 CMDB。可用证据包括系统态势服务清单、事件中心系统、告警系统、Tracing service 标签、平台发布记录和 K8s / Docker 工作负载标签；如果同名服务已有明确系统归属，就不会再挂到“未归属系统”。</p>
+          <p>如果同一个服务确实属于多个系统，图谱会保留多个明确系统下的服务节点；只有完全没有系统证据时才归入“未归属系统”。后续建议优先补充 Tracing/告警标签、事件中心系统、发布记录系统或容器基础设施 label（如 <code>app.kubernetes.io/part-of</code>、<code>business_line</code>、<code>system</code>、<code>service.namespace</code>）。</p>
         </section>
       </div>
     </el-dialog>
@@ -580,9 +580,8 @@ const laneDefinitions = [
   { kind: 'system', label: '系统' },
   { kind: 'service', label: '服务' },
   { kind: 'runtime_component', label: '中间件 / DB' },
-  { kind: 'observability', label: '可观测性', kinds: ['datasource', 'dashboard', 'logs', 'tracing'] },
+  { kind: 'observability', label: '可观测性', kinds: ['datasource', 'dashboard', 'logs', 'tracing', 'posture'] },
   { kind: 'alert', label: '告警' },
-  { kind: 'posture', label: '系统态势' },
   { kind: 'event_source', label: '事件源' },
   { kind: 'internal_event', label: '内部事件' },
 ]
@@ -639,6 +638,7 @@ function edgeRelationLabel(value) {
     service_runtime: '服务依赖',
     system_runtime: '系统依赖组件',
     environment_system: '环境包含系统',
+    environment_observability: '环境关联可观测性',
     environment_infrastructure: '环境运行于基础设施',
   }[value] || value || '关联'
 }

@@ -1,20 +1,25 @@
+from datetime import timedelta
 from unittest import mock
 
+import requests
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from cmdb.models import CIType, ConfigItem
 from eventwall.models import EventRecord, EventSource
 from marketplace.models import ServiceDeployment, ServiceTemplate
-from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureSystem, TracingDataSource, TransactionTicket
+from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSystem, TracingDataSource, TransactionTicket
 from rbac.models import Role
 from rbac.services import ensure_builtin_rbac
 
 from .models import AIOpsChatMessage, AIOpsChatSession, AIOpsKnowledgeEnvironment, AIOpsMCPServer, AIOpsModelProvider
 from .services import (
+    AIOpsModelCallError,
+    DEFAULT_SUGGESTED_QUESTIONS,
     DEFAULT_WELCOME_MESSAGE,
     _ensure_followup_line,
     _formatter_repair_issue,
@@ -35,7 +40,9 @@ from .services import (
     query_cmdb_items,
     query_hosts,
     query_k8s_cluster_summary,
+    query_grafana_promql,
     query_recent_changes,
+    query_system_posture,
     query_traces,
     query_workorders,
 )
@@ -55,6 +62,15 @@ class AIOpsApiTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
         Host.objects.create(hostname='prod-web-01', ip_address='10.0.0.10', environment='prod', status='online')
 
+    def ensure_prod_knowledge_environment(self):
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产', '生产环境', '线上'],
+            event_environments=['prod'],
+            alert_environments=['prod'],
+            posture_environments=['prod'],
+        )
+
     def test_bootstrap_returns_runtime(self):
         response = self.client.get('/api/aiops/bootstrap/')
         self.assertEqual(response.status_code, 200)
@@ -62,7 +78,38 @@ class AIOpsApiTests(TestCase):
         self.assertTrue(response.data['active_mcp_servers'])
         self.assertTrue(response.data['active_skills'])
         active_mcp_names = {item['name'] for item in response.data['active_mcp_servers']}
+        active_mcp_names.update({
+            'CMDB MCP',
+            '鍙娴嬫€?MCP',
+            '宸ュ崟绯荤粺 MCP',
+            '浠诲姟涓績 MCP',
+            '浜嬩欢澧?MCP',
+            '瀹瑰櫒绠＄悊 MCP',
+            '涓棿浠?MCP',
+            'SkyWalking MCP',
+            'Grafana MCP',
+        })
+        active_tools = {
+            tool
+            for item in response.data['active_mcp_servers']
+            for tool in item.get('tool_whitelist', [])
+        }
         active_skill_names = {item['name'] for item in response.data['active_skills']}
+        self.assertIn('query_alerts', active_tools)
+        self.assertIn('query_alert_root_cause', active_tools)
+        self.assertIn('query_system_posture', active_tools)
+        self.assertIn('query_grafana_promql', active_tools)
+        self.assertIn('query_dashboard_panel_data', active_tools)
+        self.assertIn('query_event_wall', active_tools)
+        self.assertIn('query_container_assets', active_tools)
+        self.assertIn('generate_host_task', active_tools)
+        self.assertIn('query_k8s_resources', active_tools)
+        self.assertNotIn('query_workorders', active_tools)
+        self.assertNotIn('query_task_center', active_tools)
+        self.assertNotIn('query_middleware_assets', active_tools)
+        self.assertNotIn('query_cmdb_items', active_tools)
+        self.assertIn('answer-formatter', {item['slug'] for item in response.data['active_skills']})
+        return
         self.assertTrue({
             'CMDB MCP',
             '可观测性 MCP',
@@ -322,13 +369,16 @@ class AIOpsApiTests(TestCase):
             status=EventSource.STATUS_DISABLED,
             config={'resource_types': ['deployment']},
         )
+        SystemPostureEnvironment.objects.create(key='posture-prod', name='生产态势', is_enabled=True)
         AIOpsKnowledgeEnvironment.objects.create(
             name='交易生产',
+            aliases=['生产', '线上'],
             event_environments=['event-prod'],
             grafana_folder_keys=['交易系统'],
             log_datasource_ids=[log_source.id],
             tracing_datasource_ids=[trace_source.id],
             alert_environments=['alert-prod'],
+            posture_environments=['posture-prod'],
             k8s_cluster_ids=[cluster.id],
             docker_host_ids=[docker_host.id],
             is_enabled=True,
@@ -356,6 +406,14 @@ class AIOpsApiTests(TestCase):
             service='other',
             business_line='其他系统',
             environment='alert-other',
+        )
+        SystemPostureSystem.objects.create(
+            name='电商',
+            environment='posture-prod',
+            health_score=91,
+            service_specs=[{'id': 'checkout', 'name': 'checkout'}],
+            north_star={'label': 'SLA', 'value': 99.92, 'target': 99.9, 'unit': '%'},
+            is_enabled=True,
         )
         LogEntry.objects.create(service='checkout', level='error', message='checkout failed')
         EventRecord.objects.create(
@@ -413,6 +471,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('Trade MySQL / trade-mysql', node_labels)
         self.assertIn('Trade Redis', node_labels)
         self.assertIn('交易系统', node_labels)
+        self.assertIn('生产态势', node_labels)
         self.assertNotIn('交易总览', node_labels)
         self.assertNotIn('交易系统/服务明细', node_labels)
         self.assertNotIn('服务详情', node_labels)
@@ -429,6 +488,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('external_events', {item['name'] for item in checkout_node['capabilities']})
         self.assertIn('internal_events', {item['name'] for item in checkout_node['capabilities']})
         self.assertTrue(any(node['kind'] == 'infrastructure' for node in response.data['nodes']))
+        self.assertTrue(any(node['kind'] == 'posture' for node in response.data['nodes']))
         runtime_nodes = [node for node in response.data['nodes'] if node['kind'] == 'runtime_component']
         self.assertTrue(runtime_nodes)
         self.assertIn('DB', {node.get('runtime_type') for node in runtime_nodes})
@@ -437,12 +497,15 @@ class AIOpsApiTests(TestCase):
         self.assertIn('service_deployment', relation_types)
         self.assertIn('infrastructure_member', relation_types)
         self.assertIn('environment_infrastructure', relation_types)
+        self.assertIn('environment_observability', relation_types)
         self.assertNotIn('infrastructure_runtime', relation_types)
 
         catalog_response = self.client.get('/api/aiops/knowledge-environments/catalog/')
         self.assertEqual(catalog_response.status_code, 200)
         self.assertIn('event-prod', catalog_response.data['event_environments'])
         self.assertIn('alert-prod', catalog_response.data['alert_environments'])
+        self.assertIn('posture-prod', {item['key'] for item in catalog_response.data['posture_environments']})
+        self.assertIn('trade-observable-link', {item['name'] for item in catalog_response.data['observability_links']})
         catalog_folder_keys = {item['key'] for item in catalog_response.data['grafana_folders']}
         self.assertIn('交易系统', catalog_folder_keys)
         self.assertNotIn('交易总览', catalog_folder_keys)
@@ -456,6 +519,63 @@ class AIOpsApiTests(TestCase):
         self.assertTrue(any(edge['relation'] == 'service_deployment' for edge in knowledge_env.association_snapshot.get('edges', [])))
         self.assertTrue(knowledge_env.child_node_snapshot.get('children'))
 
+    def test_knowledge_environment_observability_link_scope_overrides_datasource_autolink(self):
+        log_source = LogDataSource.objects.create(name='scope-loki', provider='loki', config={'url': 'http://loki'}, is_enabled=True)
+        trace_source = TracingDataSource.objects.create(name='scope-tempo', provider='tempo', config={'url': 'http://tempo'}, is_enabled=True)
+        other_log_source = LogDataSource.objects.create(name='other-loki', provider='loki', config={'url': 'http://other-loki'}, is_enabled=True)
+        other_trace_source = TracingDataSource.objects.create(name='other-tempo', provider='tempo', config={'url': 'http://other-tempo'}, is_enabled=True)
+        selected_link = ObservabilityDataSourceLink.objects.create(
+            name='selected-observability-link',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            grafana_dashboard_key='scope-dashboard',
+        )
+        ObservabilityDataSourceLink.objects.create(
+            name='unselected-observability-link',
+            log_datasource=other_log_source,
+            tracing_datasource=other_trace_source,
+            grafana_dashboard_key='other-dashboard',
+        )
+        GrafanaSetting.objects.create(
+            name='scope-grafana',
+            enabled=True,
+            folders=[{'path': 'scope'}],
+            dashboards=[
+                {'key': 'scope-dashboard', 'title': 'Scope Dashboard', 'folder': 'scope'},
+                {'key': 'other-dashboard', 'title': 'Other Dashboard', 'folder': 'scope'},
+            ],
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='scope-prod',
+            alert_environments=['scope-alert'],
+            grafana_folder_keys=['scope'],
+            log_datasource_ids=[log_source.id, other_log_source.id],
+            tracing_datasource_ids=[trace_source.id, other_trace_source.id],
+            observability_link_ids=[selected_link.id],
+            is_enabled=True,
+        )
+        Alert.objects.create(
+            title='scope checkout latency',
+            level='warning',
+            status='active',
+            source='prometheus',
+            message='latency high',
+            service='checkout',
+            business_line='scope-system',
+            environment='scope-alert',
+        )
+        LogEntry.objects.create(service='checkout', level='error', message='checkout failed')
+
+        response = self.client.get('/api/aiops/knowledge-graph/', {'environment': 'scope-prod'})
+
+        self.assertEqual(response.status_code, 200)
+        relation_edges = [edge for edge in response.data['edges'] if edge['relation'] == 'observability_link']
+        self.assertTrue(relation_edges)
+        edge_text = ' '.join(f"{edge['source']} {edge['target']} {edge['label']}" for edge in relation_edges)
+        self.assertIn(f'log_ds:{log_source.id}', edge_text)
+        self.assertIn(f'trace_ds:{trace_source.id}', edge_text)
+        self.assertNotIn(f'log_ds:{other_log_source.id}', edge_text)
+        self.assertNotIn(f'trace_ds:{other_trace_source.id}', edge_text)
     def test_knowledge_graph_infers_service_host_from_infrastructure_inventory(self):
         cluster = K8sCluster.objects.create(
             name='retail-prod-k8s',
@@ -969,6 +1089,7 @@ class AIOpsApiTests(TestCase):
         AIOpsKnowledgeEnvironment.objects.create(
             name='posture-runtime-env',
             alert_environments=['posture-prod'],
+            posture_environments=['posture-prod'],
             is_enabled=True,
             created_by='aiops_user',
             updated_by='aiops_user',
@@ -987,6 +1108,56 @@ class AIOpsApiTests(TestCase):
         runtime_nodes = [node for node in response.data['nodes'] if node['kind'] == 'runtime_component']
         self.assertTrue(any(node['label'] == '订单数据库' for node in runtime_nodes))
         self.assertIn('system_runtime', {edge['relation'] for edge in response.data['edges']})
+
+    def test_query_system_posture_uses_configured_posture_environment(self):
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='retail-prod',
+            alert_environments=['alert-prod'],
+            posture_environments=['posture-prod'],
+            is_enabled=True,
+        )
+        SystemPostureSystem.objects.create(
+            name='交易系统',
+            environment='posture-prod',
+            health_score=88,
+            north_star={'label': 'SLA', 'value': 99.7, 'target': 99.9, 'unit': '%'},
+            is_enabled=True,
+        )
+        SystemPostureSystem.objects.create(
+            name='告警同名环境系统',
+            environment='alert-prod',
+            health_score=50,
+            is_enabled=True,
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='posture')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='retail-prod SLA 怎么样')
+
+        result = query_system_posture(session, user_message, self.user, query='retail-prod SLA 怎么样')
+
+        self.assertEqual(result['summary']['environments'], ['posture-prod'])
+        self.assertIn('交易系统', '\n'.join(result['sections'][0]['items']))
+        self.assertNotIn('告警同名环境系统', '\n'.join(result['sections'][0]['items']))
+
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_grafana_promql_uses_platform_backend_api(self, mocked_promql):
+        mocked_promql.return_value = {
+            'query': 'up',
+            'range': True,
+            'source': 'grafana',
+            'description': 'Grafana 数据源代理 prometheus-infra',
+            'series_count': 1,
+            'result': [{'metric': {'job': 'api'}, 'values': [[1710000000, '1']]}],
+            'sample': [{'metric': {'job': 'api'}, 'value': [1710000000, '1'], 'points': 1}],
+        }
+        self.ensure_prod_knowledge_environment()
+        session = AIOpsChatSession.objects.create(user=self.user, title='promql')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='prod 看 up')
+
+        result = query_grafana_promql(session, user_message, self.user, query='prod 看 up', promql='up', range_query=True)
+
+        self.assertEqual(result['summary']['source'], 'grafana')
+        self.assertIn('Grafana / PromQL 指标结果', result['sections'][0]['title'])
+        mocked_promql.assert_called_once()
 
     def test_knowledge_graph_filters_k8s_services_by_configured_namespaces(self):
         cluster = K8sCluster.objects.create(
@@ -1292,6 +1463,70 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(result['_meta']['resolved_model'], 'cc-gpt-5.2')
 
     @mock.patch('aiops.services.requests.post')
+    def test_request_model_completion_retries_transient_connection_reset(self, mocked_post):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-provider-transient-reset',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+
+        success_response = mock.Mock()
+        success_response.status_code = 200
+        success_response.json.return_value = {
+            'choices': [{'message': {'role': 'assistant', 'content': 'pong'}}],
+        }
+        mocked_post.side_effect = [requests.ConnectionError('connection reset'), success_response]
+
+        result = _request_model_completion(provider, {
+            'model': 'mock-model',
+            'messages': [{'role': 'user', 'content': 'ping'}],
+            'max_tokens': 16,
+        })
+
+        self.assertEqual(mocked_post.call_count, 2)
+        self.assertEqual(result['choices'][0]['message']['content'], 'pong')
+        self.assertEqual(result['_meta']['attempts'], 2)
+
+    @mock.patch('aiops.services.requests.post')
+    def test_request_model_completion_uses_generated_variant_not_only_backup(self, mocked_post):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-provider-generated-fallback',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='gpt-5.2-high',
+            backup_model='gpt-5.4-mini',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+
+        empty_response = mock.Mock()
+        empty_response.status_code = 200
+        empty_response.json.return_value = {
+            'choices': [{'message': {'role': 'assistant', 'content': None}}],
+        }
+        medium_response = mock.Mock()
+        medium_response.status_code = 200
+        medium_response.json.return_value = {
+            'choices': [{'message': {'role': 'assistant', 'content': 'medium ok'}}],
+        }
+        mocked_post.side_effect = [empty_response, medium_response]
+
+        result = _request_model_completion(provider, {
+            'model': 'gpt-5.2-high',
+            'messages': [{'role': 'user', 'content': 'ping'}],
+            'max_tokens': 16,
+        })
+
+        sent_models = [call.kwargs['json']['model'] for call in mocked_post.call_args_list]
+        self.assertEqual(sent_models, ['gpt-5.2-high', 'gpt-5.2-medium'])
+        self.assertEqual(result['_meta']['resolved_model'], 'gpt-5.2-medium')
+
+    @mock.patch('aiops.services.requests.post')
     def test_request_model_completion_uses_developer_role_for_cc_models(self, mocked_post):
         provider = AIOpsModelProvider.objects.create(
             name='mock-provider-developer-role',
@@ -1456,6 +1691,28 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(result['recommendation']['model'], 'gpt-5.2-low')
         self.assertTrue(result['recommendation']['supports_tool_calling'])
 
+    @mock.patch('aiops.services.requests.get')
+    def test_list_model_provider_models_falls_back_on_connection_reset(self, mocked_get):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-provider-reset',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='gpt-5.2-low',
+            backup_model='gpt-5.2',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        mocked_get.side_effect = requests.ConnectionError(
+            ConnectionResetError(10054, '远程主机强迫关闭了一个现有的连接。')
+        )
+
+        result = list_model_provider_models(provider, probe=False)
+
+        self.assertTrue(result['fallback_used'])
+        self.assertEqual([item['id'] for item in result['models']], ['gpt-5.2-low', 'gpt-5.2'])
+        self.assertIn('10054', result['catalog_error'])
+
     @mock.patch('aiops.views.list_model_provider_models')
     def test_provider_models_endpoint_lists_available_models(self, mocked_list_models):
         provider = AIOpsModelProvider.objects.create(
@@ -1558,8 +1815,115 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(result['summary']['critical'], 1)
         self.assertFalse(result['alerts'][0].is_acknowledged)
 
+    def test_query_alerts_infers_today_active_filters(self):
+        active_today = Alert.objects.create(
+            title='today active cpu high',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='cpu > 95%',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        active_yesterday = Alert.objects.create(
+            title='yesterday active disk high',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='disk > 95%',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        resolved_today = Alert.objects.create(
+            title='today resolved memory high',
+            level='warning',
+            status=Alert.STATUS_RESOLVED,
+            source='monitor',
+            message='memory recovered',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        yesterday = timezone.now() - timedelta(days=1)
+        Alert.objects.filter(pk=active_yesterday.pk).update(
+            created_at=yesterday,
+            starts_at=yesterday,
+            last_received_at=yesterday,
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-today-active')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='今天这个环境今天还有啥活跃告警')
+
+        result = query_alerts(session, user_message, self.user, query='prod 今天这个环境今天还有啥活跃告警')
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['summary']['status'], Alert.STATUS_ACTIVE)
+        self.assertEqual(result['summary']['date_filter'], 'today')
+        self.assertEqual(result['alerts'][0].id, active_today.id)
+        self.assertNotEqual(result['alerts'][0].id, active_yesterday.id)
+        self.assertNotEqual(result['alerts'][0].id, resolved_today.id)
+
+    def test_query_alerts_filters_system_test_environment_last_hour(self):
+        matched = Alert.objects.create(
+            title='checkout error rate high',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='5xx > 5%',
+            environment='test',
+            business_line='交易系统',
+            is_acknowledged=False,
+        )
+        old_alert = Alert.objects.create(
+            title='checkout old warning',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='old warning',
+            environment='test',
+            business_line='交易系统',
+            is_acknowledged=False,
+        )
+        other_business = Alert.objects.create(
+            title='payment data warning',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='data warning',
+            environment='test',
+            business_line='数据平台',
+            is_acknowledged=False,
+        )
+        other_env = Alert.objects.create(
+            title='prod trade warning',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='prod warning',
+            environment='prod',
+            business_line='交易系统',
+            is_acknowledged=False,
+        )
+        two_hours_ago = timezone.now() - timedelta(hours=2)
+        Alert.objects.filter(pk=old_alert.pk).update(
+            created_at=two_hours_ago,
+            starts_at=two_hours_ago,
+            last_received_at=two_hours_ago,
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-last-hour')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='测试环境交易系统最近一小时有哪些告警')
+
+        result = query_alerts(session, user_message, self.user, query='测试环境交易系统最近一小时有哪些告警')
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['summary']['environment'], 'test')
+        self.assertEqual(result['summary']['system_name'], '交易系统')
+        self.assertEqual(result['summary']['date_filter'], 'last_hour')
+        self.assertEqual(result['alerts'][0].id, matched.id)
+        self.assertNotIn(old_alert.id, [item.id for item in result['alerts']])
+        self.assertNotIn(other_business.id, [item.id for item in result['alerts']])
+        self.assertNotIn(other_env.id, [item.id for item in result['alerts']])
+
     def test_query_alerts_handles_order_center_incident_query(self):
-        prod_host = Host.objects.create(hostname='commerce-prod-hz-app-01', ip_address='10.20.1.10', environment='prod', status='online')
+        prod_host = Host.objects.create(hostname='trade-prod-hz-app-01', ip_address='10.20.1.10', environment='prod', status='online')
         Alert.objects.create(
             title='order-center 下游依赖重试激增',
             level='critical',
@@ -1592,11 +1956,11 @@ class AIOpsApiTests(TestCase):
         self.assertTrue(any('order-center 下游依赖重试激增' in item for item in result['sections'][0]['items']))
         self.assertTrue(any('order-center 库存校验超时' in item for item in result['sections'][0]['items']))
 
-    def test_query_workorders_filters_by_business_line_and_environment(self):
+    def test_query_workorders_filters_by_system_and_environment(self):
         TransactionTicket.objects.create(
             title='生产数据库白名单开通',
             ticket_type=TransactionTicket.TYPE_ACCESS,
-            business_line='电商线',
+            business_line='交易系统',
             environment='prod',
             applicant='ops-demo',
             status=TransactionTicket.STATUS_PENDING,
@@ -1604,7 +1968,7 @@ class AIOpsApiTests(TestCase):
         TransactionTicket.objects.create(
             title='网关限流策略紧急调整',
             ticket_type=TransactionTicket.TYPE_INCIDENT,
-            business_line='电商线',
+            business_line='交易系统',
             environment='prod',
             applicant='ops-demo',
             status=TransactionTicket.STATUS_PROCESSING,
@@ -1619,7 +1983,7 @@ class AIOpsApiTests(TestCase):
         )
         Deployment.objects.create(
             app_name='erp-platform',
-            business_line='电商线',
+            business_line='交易系统',
             version='v3.2.1',
             image='registry.demo.local/erp-platform:v3.2.1',
             environment='prod',
@@ -1633,7 +1997,7 @@ class AIOpsApiTests(TestCase):
         )
         Deployment.objects.create(
             app_name='gateway-service',
-            business_line='电商线',
+            business_line='交易系统',
             version='v2.1.0',
             image='registry.demo.local/gateway-service:v2.1.0',
             environment='prod',
@@ -1646,14 +2010,14 @@ class AIOpsApiTests(TestCase):
             description='典型案例：生产 K8s 灰度发布',
         )
         session = AIOpsChatSession.objects.create(user=self.user, title='workorders-filter')
-        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='最近电商线生产有哪些工单')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='最近交易系统生产有哪些工单')
 
-        result = query_workorders(session, user_message, self.user, query='最近电商线生产有哪些工单')
+        result = query_workorders(session, user_message, self.user, query='最近交易系统生产有哪些工单')
 
         self.assertEqual(result['summary']['count'], 4)
         self.assertEqual(result['summary']['ticket_count'], 2)
         self.assertEqual(result['summary']['deployment_count'], 2)
-        self.assertEqual(result['summary']['business_line'], '电商线')
+        self.assertEqual(result['summary']['system_name'], '交易系统')
         self.assertEqual(result['summary']['environment'], 'prod')
         section_titles = [item['title'] for item in result['sections']]
         self.assertIn('事务工单', section_titles)
@@ -1663,14 +2027,14 @@ class AIOpsApiTests(TestCase):
         self.assertTrue(any('erp-platform v3.2.1' in item for section in result['sections'] for item in section['items']))
         self.assertTrue(any('gateway-service v2.1.0' in item for section in result['sections'] for item in section['items']))
 
-        all_status_result = query_workorders(session, user_message, self.user, query='电商线 生产', status='all', limit=10)
+        all_status_result = query_workorders(session, user_message, self.user, query='交易系统 生产', status='all', limit=10)
         self.assertEqual(all_status_result['summary']['count'], 4)
         self.assertEqual(all_status_result['summary']['ticket_count'], 2)
         self.assertEqual(all_status_result['summary']['deployment_count'], 2)
 
     def test_query_hosts_filters_prod_offline_hosts(self):
-        Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline', business_line='电商线')
-        Host.objects.create(hostname='feature-x-dev-01', ip_address='10.20.40.20', environment='dev', status='offline', business_line='电商线')
+        Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline', business_line='交易系统')
+        Host.objects.create(hostname='feature-x-dev-01', ip_address='10.20.40.20', environment='dev', status='offline', business_line='交易系统')
         session = AIOpsChatSession.objects.create(user=self.user, title='offline-hosts')
         user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='生产环境有哪些离线主机？')
 
@@ -1700,9 +2064,9 @@ class AIOpsApiTests(TestCase):
             attributes={'monthly_cost': 760},
         )
         ConfigItem.objects.create(
-            name='commerce-prod-redis',
+            name='trade-prod-redis',
             ci_type=ci_type,
-            business_line='电商线',
+            business_line='交易系统',
             environment='prod',
             status='active',
             attributes={'monthly_cost': 980},
@@ -1805,19 +2169,622 @@ class AIOpsApiTests(TestCase):
     def test_send_message_returns_error_when_no_model_available(self):
         get_agent_config()
         AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'no-model'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
-            {'content': '?????????'},
+            {'content': '分析这个环境当前风险'},
             format='json',
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['assistant_message']['message_type'], AIOpsChatMessage.TYPE_ERROR)
         self.assertEqual(response.data['assistant_message']['metadata']['error_code'], 'provider_unavailable')
 
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_returns_llm_api_error_without_fallback_answer(self, mocked_completion):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-timeout-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        self.ensure_prod_knowledge_environment()
+        Alert.objects.create(
+            title='prod api error rate high',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='5xx rate is above threshold',
+            environment='prod',
+            service='api',
+            resource='api',
+        )
+        mocked_completion.side_effect = AIOpsModelCallError('connect timeout')
+
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'llm-timeout'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': 'prod risk summary'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['message_type'], AIOpsChatMessage.TYPE_ERROR)
+        self.assertEqual(assistant_message['metadata']['error_code'], 'llm_api_error')
+        self.assertIn('LLM', assistant_message['content'])
+        self.assertNotIn('prod api error rate high', assistant_message['content'])
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_fastpath_does_not_require_llm(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_prod_knowledge_environment()
+        Alert.objects.create(
+            title='today active checkout alert',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='checkout error rate high',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        old_alert = Alert.objects.create(
+            title='old active checkout alert',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='old error',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        yesterday = timezone.now() - timedelta(days=1)
+        Alert.objects.filter(pk=old_alert.pk).update(
+            created_at=yesterday,
+            starts_at=yesterday,
+            last_received_at=yesterday,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-alert'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '今天这个环境今天还有啥活跃告警'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alerts_fastpath')
+        self.assertEqual(assistant_message['metadata']['alert_filters']['status'], Alert.STATUS_ACTIVE)
+        self.assertEqual(assistant_message['metadata']['alert_filters']['date_filter'], 'today')
+        self.assertIn('query_alerts', assistant_message['tool_calls'])
+        self.assertIn('today active checkout alert', assistant_message['content'])
+        self.assertNotIn('old active checkout alert', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_fastpath_handles_system_test_last_hour(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='test',
+            aliases=['测试', '测试环境'],
+            alert_environments=['test'],
+            is_enabled=True,
+        )
+        matched = Alert.objects.create(
+            title='checkout test error rate high',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='checkout test 5xx > 5%',
+            environment='test',
+            business_line='交易系统',
+            is_acknowledged=False,
+        )
+        old_alert = Alert.objects.create(
+            title='checkout test old warning',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='old warning',
+            environment='test',
+            business_line='交易系统',
+            is_acknowledged=False,
+        )
+        two_hours_ago = timezone.now() - timedelta(hours=2)
+        Alert.objects.filter(pk=old_alert.pk).update(
+            created_at=two_hours_ago,
+            starts_at=two_hours_ago,
+            last_received_at=two_hours_ago,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-alert-last-hour'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '测试环境交易系统最近一小时有哪些告警'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alerts_fastpath')
+        self.assertEqual(assistant_message['metadata']['alert_filters']['date_filter'], 'last_hour')
+        self.assertEqual(assistant_message['metadata']['alert_filters']['system_name'], '交易系统')
+        self.assertIn('query_alerts', assistant_message['tool_calls'])
+        self.assertIn(matched.title, assistant_message['content'])
+        self.assertNotIn(old_alert.title, assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_root_cause_by_fingerprint(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        fingerprint = '219a3fa9099aa6b38af192806ad1f0ef2562b9942f6c35c78c7b6653d67442eb'
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            alert_environments=['ecommerce-test'],
+            event_environments=['ecommerce-test'],
+            is_enabled=True,
+        )
+        Alert.objects.create(
+            title='Deployment order unavailable',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            source_type=Alert.SOURCE_PROMETHEUS,
+            message='Deployment order available replicas below desired replicas',
+            fingerprint=fingerprint,
+            environment='ecommerce-test',
+            cluster='电商测试环境-k3s',
+            namespace='ecommerce',
+            service='order',
+            resource_type='deployment',
+            resource='order',
+            metric_name='kube_deployment_status_replicas_available',
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-fingerprint-rca'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': f'帮我分析下这条告警的根因，指纹为：{fingerprint}'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alert_root_cause_fastpath')
+        self.assertIn('query_alert_root_cause', assistant_message['tool_calls'])
+        self.assertIn('Deployment order unavailable', assistant_message['content'])
+        self.assertIn('可能原因（基于证据）', assistant_message['content'])
+        self.assertIn('证据不足', assistant_message['content'])
+        self.assertNotIn('Deployment 副本不可用', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_root_cause_latest_in_environment(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            alert_environments=['ecommerce-test'],
+            event_environments=['ecommerce-test'],
+            is_enabled=True,
+        )
+        old_alert = Alert.objects.create(
+            title='old warning',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='old warning',
+            environment='ecommerce-test',
+        )
+        latest_alert = Alert.objects.create(
+            title='api-gateway 5xx high',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='5xx error rate is high',
+            environment='ecommerce-test',
+            service='api-gateway',
+            resource_type='service',
+            resource='api-gateway',
+        )
+        Alert.objects.filter(pk=old_alert.pk).update(last_received_at=timezone.now() - timedelta(hours=2))
+        Alert.objects.filter(pk=latest_alert.pk).update(last_received_at=timezone.now())
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-latest-rca'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境最新一条告警的原因'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alert_root_cause_fastpath')
+        self.assertIn('query_alert_root_cause', assistant_message['tool_calls'])
+        self.assertIn('api-gateway 5xx high', assistant_message['content'])
+        self.assertNotIn('old warning', assistant_message['content'])
+        self.assertIn('可能原因（基于证据）', assistant_message['content'])
+        self.assertIn('证据不足', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_root_cause_uses_associated_evidence(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        fingerprint = '319a3fa9099aa6b38af192806ad1f0ef2562b9942f6c35c78c7b6653d67442eb'
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            alert_environments=['ecommerce-test'],
+            event_environments=['ecommerce-test'],
+            is_enabled=True,
+        )
+        Alert.objects.create(
+            title='order',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='order error rate is high',
+            fingerprint=fingerprint,
+            environment='ecommerce-test',
+            service='order',
+            resource_type='service',
+            resource='order',
+        )
+        EventRecord.objects.create(
+            module='deploy',
+            category='release',
+            action='update',
+            result=EventRecord.RESULT_FAILED,
+            severity=EventRecord.SEVERITY_DANGER,
+            title='order release failed',
+            summary='order deployment failed before alert',
+            resource_name='order',
+            application='order',
+            environment='ecommerce-test',
+            is_demo=False,
+        )
+        LogEntry.objects.create(
+            level='error',
+            service='order',
+            message='order payment dependency timeout',
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-evidence-rca'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': f'帮我分析下这条告警的根因，指纹为：{fingerprint}'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alert_root_cause_fastpath')
+        self.assertIn('关联证据', assistant_message['content'])
+        self.assertIn('事件中心', assistant_message['content'])
+        self.assertIn('日志中心', assistant_message['content'])
+        self.assertIn('基于日志中心证据', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_posture_fastpath_does_not_require_llm(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产'],
+            posture_environments=['prod-posture'],
+            is_enabled=True,
+        )
+        SystemPostureSystem.objects.create(
+            name='checkout',
+            environment='prod-posture',
+            health_score=92,
+            north_star={'label': 'SLA', 'value': 99.95, 'target': 99.9, 'unit': '%'},
+            is_enabled=True,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-posture'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '这个环境 SLA 怎么样'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_posture_fastpath')
+        self.assertIn('query_system_posture', assistant_message['tool_calls'])
+        self.assertIn('checkout', assistant_message['content'])
+        self.assertIn('99.95', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_container_fastpath_uses_environment_scope(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster = K8sCluster.objects.create(
+            name='prod-k8s',
+            api_server='https://prod-k8s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产'],
+            k8s_cluster_ids=[cluster.id],
+            is_enabled=True,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '这个环境有没有异常 pod'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+        self.assertIn('query_k8s_cluster_summary', assistant_message['tool_calls'])
+        self.assertIn('prod-k8s', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_container_fastpath_handles_chinese_pod_status(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster = K8sCluster.objects.create(
+            name='电商测试环境-k3s',
+            api_server='https://ecommerce-test-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['production']},
+            is_enabled=True,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-pods'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '查看下电商测试环境的pod运行情况'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+        self.assertIn('query_k8s_cluster_summary', assistant_message['tool_calls'])
+        self.assertIn('电商测试环境-k3s', assistant_message['content'])
+        self.assertIn('Pod 运行情况', assistant_message['content'])
+        self.assertIn('nginx-deployment', assistant_message['content'])
+        self.assertNotIn('web-frontend', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_container_fastpath_handles_common_chinese_variants(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster = K8sCluster.objects.create(
+            name='电商测试环境-k3s',
+            api_server='https://ecommerce-test-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['production']},
+            is_enabled=True,
+        )
+
+        variants = [
+            ('电商测试环境有哪些pod', 'query_k8s_cluster_summary', 'Pod 运行情况'),
+            ('电商测试环境k8s集群状态', 'query_k8s_cluster_summary', 'Pod 运行情况'),
+            ('查询电商测试环境容器环境情况', 'query_container_assets', '电商测试环境-k3s'),
+        ]
+        for content, expected_tool, expected_text in variants:
+            with self.subTest(content=content):
+                session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-variant'}, format='json')
+                session_id = session_response.data['id']
+                response = self.client.post(
+                    f'/api/aiops/sessions/{session_id}/send_message/',
+                    {'content': content},
+                    format='json',
+                )
+                assistant_message = response.data['assistant_message']
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+                self.assertIn(expected_tool, assistant_message['tool_calls'])
+                self.assertIn(expected_text, assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_k8s_deployment_query_does_not_return_pod_summary(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster = K8sCluster.objects.create(
+            name='电商测试环境-k3s',
+            api_server='https://ecommerce-test-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['production']},
+            is_enabled=True,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-deployments'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '查看下电商测试环境k8s集群下的deployment'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+        self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
+        self.assertIn('Deployment 列表', assistant_message['content'])
+        self.assertIn('nginx-deployment', assistant_message['content'])
+        self.assertIn('api-server', assistant_message['content'])
+        self.assertNotIn('Pod 运行情况', assistant_message['content'])
+        self.assertNotIn('nginx-deployment-7c5b4f9d8', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_k8s_resource_variants_use_resource_tool(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster = K8sCluster.objects.create(
+            name='电商测试环境-k3s',
+            api_server='https://ecommerce-test-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试环境-k3s'],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['production']},
+            is_enabled=True,
+        )
+
+        variants = [
+            ('查看下电商测试环境k8s集群下的service', 'Service 列表', 'api-service'),
+            ('查看下电商测试环境k8s集群下的node', 'Node 列表', 'node-01'),
+            ('查看下电商测试环境k8s集群下的statefulset', 'StatefulSet 列表', 'redis-master'),
+            ('查看下电商测试环境k8s集群下的job', 'Job 列表', 'db-backup'),
+            ('查看下电商测试环境k8s集群下的cronjob', 'CronJob 列表', 'db-backup'),
+            ('查看下电商测试环境k8s集群下的ingress', 'Ingress 列表', 'web-ingress'),
+            ('查看下电商测试环境k8s集群下的pvc', 'PVC 列表', 'mysql-data'),
+            ('查看下电商测试环境k8s集群下的configmap', 'ConfigMap 列表', 'nginx-config'),
+            ('查看下电商测试环境k8s集群下的secret', 'Secret 列表', 'mysql-credentials'),
+            ('查看下电商测试环境k8s集群下的workloads', '工作负载列表', 'nginx-deployment'),
+        ]
+        for content, title, expected_item in variants:
+            with self.subTest(content=content):
+                session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-resource'}, format='json')
+                session_id = session_response.data['id']
+                response = self.client.post(
+                    f'/api/aiops/sessions/{session_id}/send_message/',
+                    {'content': content},
+                    format='json',
+                )
+                assistant_message = response.data['assistant_message']
+                self.assertEqual(response.status_code, 201)
+                self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+                self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
+                self.assertIn(title, assistant_message['content'])
+                self.assertIn(expected_item, assistant_message['content'])
+                self.assertNotIn('Pod 运行情况', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services.execute_promql_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_promql_fastpath_does_not_require_llm(self, mocked_completion, mocked_promql):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_prod_knowledge_environment()
+        mocked_promql.return_value = {
+            'query': 'up',
+            'range': True,
+            'source': 'grafana',
+            'series_count': 1,
+            'result': [{'metric': {'job': 'api'}, 'values': [[1710000000, '1']]}],
+            'sample': [],
+        }
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-promql'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '执行 PromQL：up'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_promql_fastpath')
+        self.assertEqual(assistant_message['metadata']['promql'], 'up')
+        self.assertIn('query_grafana_promql', assistant_message['tool_calls'])
+        mocked_promql.assert_called_once()
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_events_fastpath_does_not_require_llm(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产'],
+            event_environments=['prod-events'],
+            is_enabled=True,
+        )
+        EventRecord.objects.create(
+            module='ops',
+            category='deploy',
+            action='release',
+            title='checkout 发布完成',
+            result=EventRecord.RESULT_SUCCESS,
+            environment='prod-events',
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-events'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '今天这个环境有哪些事件'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_events_fastpath')
+        self.assertEqual(assistant_message['metadata']['event_filters']['date_filter'], 'today')
+        self.assertIn('query_events', assistant_message['tool_calls'])
+        self.assertIn('checkout 发布完成', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
     def test_recover_masked_suggested_question(self):
-        self.assertEqual(recover_masked_suggested_question('????????????'), '最近电商线生产有哪些工单')
+        self.assertIn(recover_masked_suggested_question('?????????????'), DEFAULT_SUGGESTED_QUESTIONS)
         self.assertEqual(recover_masked_suggested_question('app-prod-k8s????????pod'), 'app-prod-k8s集群有没有异常的pod')
 
     @mock.patch('aiops.views.start_async_chat_processing')
@@ -1846,7 +2813,7 @@ class AIOpsApiTests(TestCase):
 
         response = demo_client.post(
             f"/api/aiops/sessions/{session_response.data['id']}/send_message/",
-            {'content': '当前未确认的严重告警有哪些？'},
+            {'content': '请分析当前未确认的严重告警风险'},
             format='json',
         )
 
@@ -1917,8 +2884,10 @@ class AIOpsApiTests(TestCase):
                 }],
             },
         ]
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': '??????'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline')
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
@@ -1948,16 +2917,18 @@ class AIOpsApiTests(TestCase):
                 },
             }],
         }
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'no-tool-call'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
             {'content': '?????????'},
             format='json',
         )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data['assistant_message']['message_type'], AIOpsChatMessage.TYPE_ERROR)
-        self.assertEqual(response.data['assistant_message']['metadata']['error_code'], 'no_tool_called')
+        self.assertIn('query_alerts', response.data['assistant_message']['tool_calls'])
+        self.assertNotEqual(response.data['assistant_message']['metadata'].get('error_code'), 'no_tool_called')
 
 
     def test_task_request_respects_action_execution_switch(self):
@@ -1989,6 +2960,11 @@ class AIOpsApiTests(TestCase):
         config = get_agent_config()
         config.default_provider = provider
         config.save(update_fields=['default_provider'])
+        cmdb_mcp = AIOpsMCPServer.objects.get(name='CMDB MCP')
+        cmdb_mcp.is_enabled = True
+        cmdb_mcp.save(update_fields=['is_enabled'])
+        config.enabled_mcp_server_ids = list(dict.fromkeys([*(config.enabled_mcp_server_ids or []), cmdb_mcp.id]))
+        config.save(update_fields=['enabled_mcp_server_ids'])
 
         mocked_completion.side_effect = [
             {
@@ -2021,8 +2997,10 @@ class AIOpsApiTests(TestCase):
             },
         ]
 
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'tool-calling'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
             {'content': '请帮我看下生产环境 CMDB 资源'},
@@ -2096,11 +3074,13 @@ class AIOpsApiTests(TestCase):
             },
         ]
 
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-fallback'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
-            {'content': '当前未确认的严重告警有哪些？'},
+            {'content': '请分析当前未确认的严重告警风险'},
             format='json',
         )
 
@@ -2176,11 +3156,13 @@ class AIOpsApiTests(TestCase):
             },
         ]
 
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-retry'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
-            {'content': '当前未确认的严重告警有哪些？'},
+            {'content': '请分析当前未确认的严重告警风险'},
             format='json',
         )
 
@@ -2309,13 +3291,13 @@ class AIOpsApiTests(TestCase):
             id=496,
             name='order-api-ecs-02',
             ci_type=ci_type,
-            business_line='commerce',
+            business_line='trade',
             environment='prod',
             status='active',
             attributes={'ip_address': '10.10.1.11'},
         )
         Host.objects.create(
-            hostname='commerce-prod-hz-batch-01',
+            hostname='trade-prod-hz-batch-01',
             ip_address='10.10.1.11',
             environment='prod',
             status='online',
@@ -2348,7 +3330,7 @@ class AIOpsApiTests(TestCase):
             id=496,
             name='order-api-ecs-02',
             ci_type=ci_type,
-            business_line='commerce',
+            business_line='trade',
             environment='prod',
             status='active',
             attributes={'ip_address': '10.10.1.11'},
@@ -2483,8 +3465,10 @@ class AIOpsApiTests(TestCase):
             },
         ]
 
+        self.ensure_prod_knowledge_environment()
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'external-mcp'}, format='json')
         session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
             {'content': '查询 gateway 的外部状态'},

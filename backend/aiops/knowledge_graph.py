@@ -19,6 +19,7 @@ from ops.models import (
     LogDataSource,
     LogEntry,
     ObservabilityDataSourceLink,
+    SystemPostureEnvironment,
     SystemPostureSystem,
     TracingDataSource,
 )
@@ -359,6 +360,7 @@ def _empty_graph(filters=None):
             {'key': 'system_dependency', 'label': '系统依赖'},
             {'key': 'capability_datasource', 'label': '能力接入数据源'},
             {'key': 'capability_event_source', 'label': '能力接入事件源'},
+            {'key': 'environment_observability', 'label': '环境关联可观测性'},
             {'key': 'environment_infrastructure', 'label': '环境运行于基础设施'},
             {'key': 'service_deployment', 'label': '部署在'},
             {'key': 'infrastructure_member', 'label': '集群包含主机'},
@@ -401,14 +403,23 @@ def resolve_knowledge_environment(name):
         return None
     config = AIOpsKnowledgeEnvironment.objects.filter(is_enabled=True, name=text).first()
     if not config:
+        for item in _enabled_knowledge_environments():
+            aliases = _clean_list(getattr(item, 'aliases', []) or [])
+            if text in aliases:
+                config = item
+                break
+    if not config:
         return None
     return {
         'name': config.name,
+        'aliases': _clean_list(getattr(config, 'aliases', []) or []),
         'event_environments': _clean_list(config.event_environments),
         'grafana_folder_keys': _clean_list(config.grafana_folder_keys),
         'log_datasource_ids': _int_list(config.log_datasource_ids),
         'tracing_datasource_ids': _int_list(config.tracing_datasource_ids),
+        'observability_link_ids': _int_list(getattr(config, 'observability_link_ids', []) or []),
         'alert_environments': _clean_list(config.alert_environments),
+        'posture_environments': _clean_list(getattr(config, 'posture_environments', []) or []),
         'k8s_cluster_ids': _int_list(config.k8s_cluster_ids),
         'k8s_namespaces': config.k8s_namespaces if isinstance(config.k8s_namespaces, dict) else {},
         'docker_host_ids': _int_list(config.docker_host_ids),
@@ -419,7 +430,9 @@ def resolve_knowledge_environments_from_text(text):
     query = str(text or '')
     matches = []
     for config in _enabled_knowledge_environments():
-        if config.name and config.name in query:
+        aliases = _clean_list(getattr(config, 'aliases', []) or [])
+        candidates = [config.name, *aliases]
+        if any(candidate and candidate in query for candidate in candidates):
             resolved = resolve_knowledge_environment(config.name)
             if resolved:
                 matches.append(resolved)
@@ -1480,9 +1493,11 @@ def build_knowledge_graph(params=None):
     source_env_to_graph = {}
     selected_event_environments = set()
     selected_alert_environments = set()
+    selected_posture_environments = set()
     selected_grafana_folders = set()
     selected_log_datasource_ids = set()
     selected_tracing_datasource_ids = set()
+    selected_observability_link_ids = set()
     selected_k8s_cluster_ids = set()
     selected_k8s_namespaces = defaultdict(set)
     selected_docker_host_ids = set()
@@ -1497,14 +1512,23 @@ def build_knowledge_graph(params=None):
                 selected_alert_environments.add(environment)
                 alert_env_to_graph[environment] = config.name
                 source_env_to_graph.setdefault(environment, config.name)
+            for environment in _clean_list(getattr(config, 'posture_environments', []) or []):
+                selected_posture_environments.add(environment)
+                source_env_to_graph.setdefault(environment, config.name)
             selected_grafana_folders.update(_clean_list(config.grafana_folder_keys))
             selected_log_datasource_ids.update(_int_list(config.log_datasource_ids))
             selected_tracing_datasource_ids.update(_int_list(config.tracing_datasource_ids))
+            selected_observability_link_ids.update(_int_list(getattr(config, 'observability_link_ids', []) or []))
             config_k8s_cluster_ids = _int_list(config.k8s_cluster_ids)
             selected_k8s_cluster_ids.update(config_k8s_cluster_ids)
             for cluster_id in config_k8s_cluster_ids:
                 selected_k8s_namespaces[cluster_id].update(_namespaces_for_cluster(config, cluster_id))
             selected_docker_host_ids.update(_int_list(config.docker_host_ids))
+
+    if use_knowledge_env and selected_observability_link_ids:
+        for link in ObservabilityDataSourceLink.objects.filter(id__in=selected_observability_link_ids, is_enabled=True):
+            selected_log_datasource_ids.add(link.log_datasource_id)
+            selected_tracing_datasource_ids.add(link.tracing_datasource_id)
 
     def graph_environment(source_environment, kind=''):
         environment = _clean(source_environment, UNKNOWN_ENV)
@@ -1690,7 +1714,7 @@ def build_knowledge_graph(params=None):
     if use_knowledge_env:
         alert_queryset = alert_queryset.filter(environment__in=selected_alert_environments) if selected_alert_environments else Alert.objects.none()
         event_queryset = event_queryset.filter(environment__in=selected_event_environments) if selected_event_environments else EventRecord.objects.none()
-        source_environments = set(source_env_to_graph)
+        source_environments = selected_posture_environments or set(source_env_to_graph)
         posture_queryset = posture_queryset.filter(environment__in=source_environments) if source_environments else SystemPostureSystem.objects.none()
     alert_records = list(alert_queryset[:200])
     event_records = list(event_queryset[:240])
@@ -2043,6 +2067,30 @@ def build_knowledge_graph(params=None):
         environment = config.name
         env_id = _node_key('environment', environment)
         add_node(env_id, environment, 'environment', '环境', environment=environment)
+
+        posture_keys = _clean_list(getattr(config, 'posture_environments', []) or [])
+        posture_environment_map = {
+            item.key: item
+            for item in SystemPostureEnvironment.objects.filter(key__in=posture_keys).order_by('sort_order', 'id')
+        } if posture_keys else {}
+        for posture_key in posture_keys:
+            posture_env = posture_environment_map.get(posture_key)
+            label = posture_env.name if posture_env else posture_key
+            node_id = _node_key('posture_env', posture_key)
+            system_count = sum(1 for system in posture_systems if _clean(system.environment) == posture_key)
+            add_node(
+                node_id,
+                label,
+                'posture',
+                '系统态势',
+                route='/observability/system-posture',
+                status='enabled' if (not posture_env or posture_env.is_enabled) else 'disabled',
+                metric=system_count,
+                description=f'系统态势环境：{label}，关联 {system_count} 个系统',
+                environment=environment,
+                source_environment=posture_key,
+            )
+            add_edge(env_id, node_id, '关联系统态势', 'environment_observability', max(system_count, 1))
 
         for cluster in k8s_clusters:
             node_id = _node_key('infrastructure', 'k8s', cluster.id)
@@ -2508,12 +2556,13 @@ def build_knowledge_graph(params=None):
 
     link_queryset = ObservabilityDataSourceLink.objects.select_related('log_datasource', 'tracing_datasource').filter(is_enabled=True).order_by('-is_default', 'name')
     if use_knowledge_env:
-        if selected_log_datasource_ids:
-            link_queryset = link_queryset.filter(log_datasource_id__in=selected_log_datasource_ids)
-        else:
-            link_queryset = link_queryset.none()
-        if selected_tracing_datasource_ids:
-            link_queryset = link_queryset.filter(tracing_datasource_id__in=selected_tracing_datasource_ids)
+        if selected_observability_link_ids:
+            link_queryset = link_queryset.filter(id__in=selected_observability_link_ids)
+        elif selected_log_datasource_ids and selected_tracing_datasource_ids:
+            link_queryset = link_queryset.filter(
+                log_datasource_id__in=selected_log_datasource_ids,
+                tracing_datasource_id__in=selected_tracing_datasource_ids,
+            )
         else:
             link_queryset = link_queryset.none()
     for link in link_queryset:
@@ -2528,8 +2577,15 @@ def build_knowledge_graph(params=None):
         trace_id = _node_key('trace_ds', link.tracing_datasource_id)
         if link.log_to_trace_enabled or link.trace_to_log_enabled:
             add_edge(log_id, trace_id, 'Trace ID 关联', 'observability_link', 3 if link.is_default else 1)
+            if use_knowledge_env:
+                for environment in selected_env:
+                    add_edge(_node_key('environment', environment), log_id, '关联可观测性', 'environment_observability')
+                    add_edge(_node_key('environment', environment), trace_id, '关联可观测性', 'environment_observability')
         dashboard_id = dashboard_nodes.get(link.grafana_dashboard_key)
         if dashboard_id:
+            if use_knowledge_env:
+                for environment in selected_env:
+                    add_edge(_node_key('environment', environment), dashboard_id, '关联可观测性', 'environment_observability')
             if link.log_to_grafana_enabled or link.grafana_to_log_enabled:
                 add_edge(log_id, dashboard_id, '日志看板跳转', 'observability_link')
             if link.trace_to_grafana_enabled or link.grafana_to_trace_enabled:
@@ -2772,8 +2828,19 @@ def build_knowledge_graph(params=None):
                 if edge['source'] not in removable_unassigned_system_ids and edge['target'] not in removable_unassigned_system_ids
             }
 
+    visible_capability_ids = set()
+    if use_knowledge_env:
+        for edge in edges.values():
+            if edge.get('relation') in {'capability_datasource', 'capability_dashboard'}:
+                for endpoint in [edge.get('source'), edge.get('target')]:
+                    if str(endpoint or '').startswith('capability:'):
+                        visible_capability_ids.add(endpoint)
+
     filtered_nodes = sorted(
-        [node for node in nodes.values() if not str(node.get('id', '')).startswith('capability:')],
+        [
+            node for node in nodes.values()
+            if not str(node.get('id', '')).startswith('capability:') or node.get('id') in visible_capability_ids
+        ],
         key=lambda item: (item['kind'], item['label'], item['id']),
     )
     visible_ids = {node['id'] for node in filtered_nodes}
@@ -2828,6 +2895,7 @@ def build_knowledge_graph(params=None):
             {'key': 'system_dependency', 'label': '系统依赖'},
             {'key': 'capability_datasource', 'label': '能力接入数据源'},
             {'key': 'capability_event_source', 'label': '能力接入事件源'},
+            {'key': 'environment_observability', 'label': '环境关联可观测性'},
             {'key': 'environment_infrastructure', 'label': '环境运行于基础设施'},
             {'key': 'service_deployment', 'label': '部署在'},
             {'key': 'infrastructure_member', 'label': '集群包含主机'},

@@ -7,7 +7,7 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from cmdb.demo_seed import BIZ_COMMERCE, BIZ_DATA, BIZ_INFRA, seed_cmdb_demo
+from cmdb.demo_seed import BIZ_DATA, BIZ_INFRA, seed_cmdb_demo
 from marketplace.models import ServiceDeployment, ServiceTemplate
 from ops.deployer import sync_current_deployments_to_cmdb
 from sqlaudit.models import DataSource, QueryOrder, SqlCheckResult, SqlOrder
@@ -27,6 +27,9 @@ from ops.models import (
     K8sCluster,
     LogEntry,
 )
+
+
+SYSTEM_TRADE = '交易系统'
 
 
 def seed_marketplace_demo(stdout, hosts):
@@ -374,7 +377,7 @@ def seed_app_release_demo(stdout, hosts, docker_hosts):
     release_items = [
         {
             'app_name': 'erp-platform',
-            'business_line': BIZ_COMMERCE,
+            'business_line': SYSTEM_TRADE,
             'version': 'v5.2.0',
             'image': 'registry.demo.local/erp-platform:v5.2.0',
             'environment': 'prod',
@@ -407,7 +410,7 @@ def seed_app_release_demo(stdout, hosts, docker_hosts):
         },
         {
             'app_name': 'gateway-service',
-            'business_line': BIZ_COMMERCE,
+            'business_line': SYSTEM_TRADE,
             'version': 'v3.8.1',
             'image': 'registry.demo.local/gateway-service:v3.8.1',
             'environment': 'prod',
@@ -441,7 +444,7 @@ def seed_app_release_demo(stdout, hosts, docker_hosts):
         },
         {
             'app_name': 'order-center',
-            'business_line': BIZ_COMMERCE,
+            'business_line': SYSTEM_TRADE,
             'version': 'v2.6.0',
             'image': 'registry.demo.local/order-center:v2.6.0',
             'environment': 'test',
@@ -474,7 +477,7 @@ def seed_app_release_demo(stdout, hosts, docker_hosts):
         },
         {
             'app_name': 'order-center',
-            'business_line': BIZ_COMMERCE,
+            'business_line': SYSTEM_TRADE,
             'version': 'v2.6.3',
             'image': 'registry.demo.local/order-center:v2.6.3',
             'environment': 'prod',
@@ -646,7 +649,7 @@ def seed_host_task_demo(stdout, hosts):
             'status': HostTask.STATUS_SUCCESS,
             'description': '\u6279\u91cf\u786e\u8ba4\u751f\u4ea7\u4e3b\u673a SSH \u53ef\u7528\u6027',
             'payload': {},
-            'selection_filters': {'business_line': '\u7535\u5546', 'environment': 'prod'},
+            'selection_filters': {'business_line': SYSTEM_TRADE, 'environment': 'prod'},
             'execution_mode': HostTask.EXECUTION_MODE_SSH,
             'execution_strategy': HostTask.STRATEGY_CONTINUE,
             'timeout_seconds': 15,
@@ -667,7 +670,7 @@ def seed_host_task_demo(stdout, hosts):
             'status': HostTask.STATUS_PARTIAL,
             'description': '\u5237\u65b0 CPU / \u5185\u5b58 / \u78c1\u76d8 \u6307\u6807\u5e76\u66f4\u65b0\u5728\u7ebf\u72b6\u6001',
             'payload': {},
-            'selection_filters': {'business_line': '\u7535\u5546'},
+            'selection_filters': {'business_line': SYSTEM_TRADE},
             'execution_mode': HostTask.EXECUTION_MODE_SSH,
             'execution_strategy': HostTask.STRATEGY_CONTINUE,
             'timeout_seconds': 20,
@@ -702,7 +705,7 @@ def seed_host_task_demo(stdout, hosts):
                     '      changed_when: false\n'
                 ),
             },
-            'selection_filters': {'business_line': '\u7535\u5546', 'environment': 'prod'},
+            'selection_filters': {'business_line': SYSTEM_TRADE, 'environment': 'prod'},
             'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
             'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
             'timeout_seconds': 45,
@@ -1134,7 +1137,7 @@ class Command(BaseCommand):
                 'hostname': 'order-api-ecs-01',
                 'ip_address': '10.10.1.10',
                 'os_type': 'Alibaba Cloud Linux 3',
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'prod',
                 'admin_user': '\u5e94\u7528\u8fd0\u7ef4-\u674e\u4fca',
                 'description': '\u8ba2\u5355\u670d\u52a1\u751f\u4ea7\u8282\u70b9 A\uff0c\u5bf9\u5e94 CMDB \u4e91\u4e3b\u673a\u914d\u7f6e\u9879',
@@ -1147,7 +1150,7 @@ class Command(BaseCommand):
                 'hostname': 'order-api-ecs-02',
                 'ip_address': '10.10.1.11',
                 'os_type': 'Alibaba Cloud Linux 3',
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'prod',
                 'admin_user': '\u5e94\u7528\u8fd0\u7ef4-\u674e\u4fca',
                 'description': '\u8ba2\u5355\u670d\u52a1\u751f\u4ea7\u8282\u70b9 B\uff0c\u5bf9\u5e94 CMDB \u4e91\u4e3b\u673a\u914d\u7f6e\u9879',
@@ -1160,7 +1163,7 @@ class Command(BaseCommand):
                 'hostname': 'order-perf-test-ecs',
                 'ip_address': '10.10.20.10',
                 'os_type': 'Ubuntu 22.04',
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'test',
                 'admin_user': '\u6d4b\u8bd5\u5e73\u53f0-\u9648\u82b3',
                 'description': '\u538b\u6d4b\u73af\u5883\u4e3b\u673a\uff0c\u538b\u6d4b\u7ed3\u675f\u540e\u5e94\u53ca\u65f6\u56de\u6536\u6216\u964d\u914d',
@@ -1173,7 +1176,7 @@ class Command(BaseCommand):
                 'hostname': 'feature-x-dev-ecs',
                 'ip_address': '10.10.30.30',
                 'os_type': 'Ubuntu 22.04',
-                'business_line': BIZ_COMMERCE,
+                'business_line': SYSTEM_TRADE,
                 'environment': 'dev',
                 'admin_user': '\u7814\u53d1-\u5f20\u6668',
                 'description': '\u529f\u80fd\u8054\u8c03\u5f00\u53d1\u4e3b\u673a\uff0c\u5f53\u524d\u5229\u7528\u7387\u504f\u4f4e',
