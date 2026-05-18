@@ -1777,7 +1777,7 @@ def query_alerts(session, user_message, user, query='', level='', only_unacknowl
     sections = [{
         'title': '告警明细',
         'items': [
-            f'{alert.get_level_display()} / {alert.title} / {alert.source} / {alert.host.hostname if alert.host else "无主机关联"}'
+            f'ID {alert.id} / {alert.get_level_display()} / {alert.title} / {alert.source} / {alert.host.hostname if alert.host else "无主机关联"}'
             + f' / {alert.get_status_display()} / {timezone.localtime(alert.last_received_at).strftime("%m-%d %H:%M") if alert.last_received_at else "-"}'
             for alert in alerts
         ],
@@ -2016,9 +2016,10 @@ def _infer_alert_root_cause(
     return {'evidence': evidence, 'causes': causes[:5], 'pending': pending[:8]}
 
 
-def query_alert_root_cause(session, user_message, user, query='', fingerprint='', latest=False, limit=6):
+def query_alert_root_cause(session, user_message, user, query='', fingerprint='', alert_id=None, latest=False, limit=6):
     started_at = time.time()
     knowledge_environment = _resolve_knowledge_environment_for_query(query)
+    alert_id = _safe_int(alert_id, 0) or _extract_alert_id(query)
     fingerprint = (fingerprint or _extract_alert_fingerprint(query)).strip().lower()
     latest = bool(latest) or any(keyword in str(query or '').lower() for keyword in ['最新', '最后一条', '最近一条', 'latest', 'last'])
     invocation = _create_tool_invocation(
@@ -2028,6 +2029,7 @@ def query_alert_root_cause(session, user_message, user, query='', fingerprint=''
         {
             'query': query,
             'fingerprint': fingerprint,
+            'alert_id': alert_id,
             'latest': latest,
             'knowledge_environment': knowledge_environment.get('name') if knowledge_environment else '',
             'limit': limit,
@@ -2038,16 +2040,20 @@ def query_alert_root_cause(session, user_message, user, query='', fingerprint=''
         return {'error': '当前账号无权查看告警。', 'sections': [], 'citations': []}
 
     queryset = _alert_scope_queryset(knowledge_environment)
-    if fingerprint:
+    if alert_id:
+        alert = queryset.filter(id=alert_id).order_by('-last_received_at', '-created_at', '-id').first()
+        if not alert:
+            alert = Alert.objects.select_related('host').filter(id=alert_id).order_by('-last_received_at', '-created_at', '-id').first()
+    elif fingerprint:
         alert = queryset.filter(fingerprint=fingerprint).order_by('-last_received_at', '-created_at', '-id').first()
         if not alert:
             alert = Alert.objects.select_related('host').filter(fingerprint=fingerprint).order_by('-last_received_at', '-created_at', '-id').first()
     else:
         alert = queryset.order_by('-last_received_at', '-created_at', '-id').first() if latest else None
     if not alert:
-        _finish_tool_invocation(invocation, {'count': 0, 'fingerprint': fingerprint}, started_at, success=True)
+        _finish_tool_invocation(invocation, {'count': 0, 'fingerprint': fingerprint, 'alert_id': alert_id}, started_at, success=True)
         return {
-            'summary': {'count': 0, 'fingerprint': fingerprint, 'latest': latest},
+            'summary': {'count': 0, 'fingerprint': fingerprint, 'alert_id': alert_id, 'latest': latest},
             'sections': [{'title': '告警根因分析', 'items': ['没有找到可分析的告警。请确认环境、指纹或告警中心数据是否存在。']}],
             'citations': [{'title': '告警中心', 'path': '/alerts'}],
             'alert': None,
@@ -2124,7 +2130,7 @@ def query_alert_root_cause(session, user_message, user, query='', fingerprint=''
             'items': [
                 f"{alert.get_level_display()} / {alert.title} / {alert.get_status_display()} / {alert.source}",
                 f"环境 {alert.environment or '-'} / 集群 {alert.cluster or '-'} / 命名空间 {alert.namespace or '-'} / 服务 {alert.service or '-'} / 资源 {alert.resource_type or '-'}:{alert.resource or '-'}",
-                f"指纹 {alert.fingerprint or '-'} / 最近接收 {_alert_display_time(alert)} / 出现次数 {alert.occurrence_count}",
+                f"告警ID {alert.id} / 指纹 {alert.fingerprint or '-'} / 最近接收 {_alert_display_time(alert)} / 出现次数 {alert.occurrence_count}",
                 f"详情：{(alert.message or '-')[:180]}",
             ],
         },
@@ -2703,11 +2709,24 @@ def _extract_alert_fingerprint(text):
     return match.group(0).lower() if match else ''
 
 
+def _extract_alert_id(text):
+    value = str(text or '')
+    patterns = [
+        r'(?:告警|alert)\s*(?:id|ID|编号)?\s*(?:为|是|[:：#])?\s*(\d{1,10})',
+        r'(?:id|ID|编号)\s*(?:为|是|[:：#])\s*(\d{1,10})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, value, flags=re.IGNORECASE)
+        if match:
+            return _safe_int(match.group(1), 0)
+    return 0
+
+
 def _is_direct_alert_analysis_question(question):
     lowered = str(question or '').lower()
     if not any(keyword in lowered for keyword in ['告警', 'alert', 'alerts']):
         return False
-    return bool(_extract_alert_fingerprint(question)) or (
+    return bool(_extract_alert_fingerprint(question) or _extract_alert_id(question)) or (
         any(keyword in lowered for keyword in ['分析', '根因', '原因', '为什么', '排查', '怎么处理', '鍒嗘瀽', '鏍瑰洜', '鍘熷洜'])
         and any(keyword in lowered for keyword in ['最新', '最后一条', '最近一条', 'latest', 'last', '这条'])
     )
@@ -6027,8 +6046,8 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'level': {'type': 'string', 'enum': ['critical', 'warning', 'info']}, 'only_unacknowledged': {'type': 'boolean'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_alert_root_cause': {
-            'description': '分析单条告警根因。用户给出告警指纹，或询问某环境最新/最近一条告警的原因、根因、为什么、怎么处理时必须使用本工具。',
-            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'fingerprint': {'type': 'string'}, 'latest': {'type': 'boolean'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
+            'description': '分析单条告警根因。用户给出告警 ID、告警指纹，或询问某环境最新/最近一条告警的原因、根因、为什么、怎么处理时必须使用本工具。',
+            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'alert_id': {'type': 'integer', 'minimum': 1}, 'fingerprint': {'type': 'string'}, 'latest': {'type': 'boolean'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_events': {
             'description': '查询事件墙中的关键事件。',
@@ -6410,6 +6429,7 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
             user,
             query=arguments.get('query', ''),
             fingerprint=arguments.get('fingerprint', ''),
+            alert_id=arguments.get('alert_id'),
             latest=bool(arguments.get('latest')),
             limit=arguments.get('limit') or 6,
         )
@@ -6563,6 +6583,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             user,
             query=scoped_question,
             fingerprint=_extract_alert_fingerprint(question),
+            alert_id=_extract_alert_id(question),
             latest=any(keyword in str(question or '').lower() for keyword in ['最新', '最后一条', '最近一条', 'latest', 'last']),
             limit=6,
         )
@@ -6575,7 +6596,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             'direct_alert_root_cause_fastpath',
             extra_metadata={
                 'alert_fingerprint': (root_cause_result.get('summary') or {}).get('fingerprint') or _extract_alert_fingerprint(question),
-                'alert_id': (root_cause_result.get('summary') or {}).get('alert_id'),
+                'alert_id': (root_cause_result.get('summary') or {}).get('alert_id') or _extract_alert_id(question),
             },
         )
     if _is_direct_alert_list_question(question):

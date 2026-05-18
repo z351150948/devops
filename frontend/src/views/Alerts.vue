@@ -91,6 +91,11 @@
 
         <el-table v-if="eventMode === 'list'" :data="alerts" stripe size="small" v-loading="loading" class="data-table" @selection-change="handleSelectionChange">
           <el-table-column type="selection" width="42" />
+          <el-table-column prop="id" label="告警ID" width="86">
+            <template #default="{ row }">
+              <span class="alert-id-cell">{{ row.id }}</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="title" label="&#x544A;&#x8B66;&#x6807;&#x9898;" min-width="240">
             <template #default="{ row }">
               <button class="link-title" type="button" @click="openDetail(row)">{{ row.title }}</button>
@@ -418,13 +423,14 @@
       </section>
     </template>
 
-    <el-drawer v-model="detailVisible" class="alert-detail-drawer" size="520px" title="&#x544A;&#x8B66;&#x8BE6;&#x60C5;">
+    <el-drawer v-model="detailVisible" class="alert-detail-drawer" size="640px" title="&#x544A;&#x8B66;&#x8BE6;&#x60C5;">
       <template v-if="selectedAlert">
         <div class="alert-detail-body">
           <div class="detail-head">
             <div class="detail-badges">
               <el-tag :type="levelType(selectedAlert.level)">{{ selectedAlert.level_display || levelText(selectedAlert.level) }}</el-tag>
               <el-tag :type="statusType(selectedAlert.status)">{{ selectedAlert.status_display || statusText(selectedAlert.status) }}</el-tag>
+              <span class="detail-alert-id">告警ID：{{ selectedAlert.id }}</span>
             </div>
             <span class="detail-title">{{ selectedAlert.title }}</span>
             <span class="detail-fingerprint">告警指纹：{{ selectedAlert.fingerprint || '-' }}</span>
@@ -1980,6 +1986,13 @@ onMounted(async () => {
   color: var(--alert-primary);
 }
 
+.alert-id-cell {
+  color: var(--alert-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .sub-line {
   color: var(--alert-subtle);
   margin-top: 3px;
@@ -2182,9 +2195,20 @@ onMounted(async () => {
 }
 
 .detail-badges {
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.detail-alert-id {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 999px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
+  padding: 0 9px;
 }
 
 .detail-title {

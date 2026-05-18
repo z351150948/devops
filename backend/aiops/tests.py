@@ -41,6 +41,7 @@ from .services import (
     query_hosts,
     query_k8s_cluster_summary,
     query_grafana_promql,
+    query_alert_root_cause,
     query_recent_changes,
     query_system_posture,
     query_traces,
@@ -1858,8 +1859,39 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(result['summary']['status'], Alert.STATUS_ACTIVE)
         self.assertEqual(result['summary']['date_filter'], 'today')
         self.assertEqual(result['alerts'][0].id, active_today.id)
+        self.assertIn(f'ID {active_today.id}', result['sections'][0]['items'][0])
         self.assertNotEqual(result['alerts'][0].id, active_yesterday.id)
         self.assertNotEqual(result['alerts'][0].id, resolved_today.id)
+
+    def test_query_alert_root_cause_supports_alert_id(self):
+        self.ensure_prod_knowledge_environment()
+        matched = Alert.objects.create(
+            title='prod checkout id alert',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='checkout error rate high',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        Alert.objects.create(
+            title='prod checkout other alert',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='other warning',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-id-rca')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {matched.id} 的原因')
+
+        result = query_alert_root_cause(session, user_message, self.user, query=f'prod 分析告警ID {matched.id} 的原因')
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['summary']['alert_id'], matched.id)
+        self.assertEqual(result['alert']['id'], matched.id)
+        self.assertIn(f'告警ID {matched.id}', result['sections'][0]['items'][2])
 
     def test_query_alerts_filters_system_test_environment_last_hour(self):
         matched = Alert.objects.create(
@@ -2374,6 +2406,39 @@ class AIOpsApiTests(TestCase):
         self.assertIn('可能原因（基于证据）', assistant_message['content'])
         self.assertIn('证据不足', assistant_message['content'])
         self.assertNotIn('Deployment 副本不可用', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_alert_root_cause_by_alert_id(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_prod_knowledge_environment()
+        alert = Alert.objects.create(
+            title='prod checkout id alert',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='checkout error rate high',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-id-rca'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': f'帮我分析告警ID {alert.id} 的原因'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_alert_root_cause_fastpath')
+        self.assertEqual(assistant_message['metadata']['alert_id'], alert.id)
+        self.assertIn('query_alert_root_cause', assistant_message['tool_calls'])
+        self.assertIn(f'告警ID {alert.id}', assistant_message['content'])
+        self.assertIn('prod checkout id alert', assistant_message['content'])
         mocked_completion.assert_not_called()
 
     @mock.patch('aiops.services._request_model_completion')
