@@ -36,22 +36,22 @@ const routes = [
       },
       {
         path: 'hosts',
-        redirect: '/tasks?tab=assets',
+        redirect: '/tasks/resources',
         meta: { hidden: true },
       },
       {
         path: 'hosts/assets',
-        redirect: '/tasks?tab=assets',
+        redirect: '/tasks/resources',
         meta: { hidden: true, title: '主机资产', icon: 'Monitor', anyPermissions: ['ops.host.view', 'ops.host.manage', 'ops.host.terminal'] },
       },
       {
         path: 'hosts/schedules',
-        redirect: '/tasks?tab=schedules',
+        redirect: '/tasks/schedules',
         meta: { hidden: true, title: '定时任务', icon: 'Timer', anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'] },
       },
       {
         path: 'hosts/tasks',
-        redirect: '/tasks',
+        redirect: '/tasks/workbench',
         meta: { hidden: true, title: '任务中心', icon: 'Operation', permission: 'ops.task.execute' },
       },
       {
@@ -73,6 +73,36 @@ const routes = [
             'ops.host.schedule.manage',
             'ops.host.schedule.execute',
           ],
+        },
+      },
+      {
+        path: 'tasks/resources',
+        name: 'TaskResources',
+        component: () => import('@/views/TaskResources.vue'),
+        meta: {
+          title: '资源底座',
+          icon: 'Monitor',
+          anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage'],
+        },
+      },
+      {
+        path: 'tasks/workbench',
+        name: 'TaskWorkbench',
+        component: () => import('@/views/TaskWorkbench.vue'),
+        meta: {
+          title: '任务工作台',
+          icon: 'Operation',
+          anyPermissions: ['ops.task.execute', 'ops.host.execute'],
+        },
+      },
+      {
+        path: 'tasks/schedules',
+        name: 'TaskSchedules',
+        component: () => import('@/views/TaskSchedules.vue'),
+        meta: {
+          title: '计划任务',
+          icon: 'Timer',
+          anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
         },
       },
       {

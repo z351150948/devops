@@ -241,10 +241,28 @@ const legacyMenuItems = [
     ],
   },
   {
-    path: '/tasks',
     title: '任务中心',
     icon: 'Operation',
-    anyPermissions: ['ops.task.execute', 'ops.task.resource.view', 'ops.task.resource.manage', 'ops.host.execute', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal', 'ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+    children: [
+      {
+        path: '/tasks/resources',
+        title: '资源底座',
+        icon: 'Monitor',
+        anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage'],
+      },
+      {
+        path: '/tasks/workbench',
+        title: '任务工作台',
+        icon: 'Operation',
+        anyPermissions: ['ops.task.execute', 'ops.host.execute'],
+      },
+      {
+        path: '/tasks/schedules',
+        title: '计划任务',
+        icon: 'Timer',
+        anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+      },
+    ],
   },
   {
     title: '多云管理',
@@ -400,10 +418,28 @@ const menuItems = [
     ],
   },
   {
-    path: '/tasks',
     title: '任务中心',
     icon: 'Operation',
-    anyPermissions: ['ops.task.execute', 'ops.task.resource.view', 'ops.task.resource.manage', 'ops.host.execute', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal', 'ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+    children: [
+      {
+        path: '/tasks/resources',
+        title: '资源底座',
+        icon: 'Monitor',
+        anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage'],
+      },
+      {
+        path: '/tasks/workbench',
+        title: '任务工作台',
+        icon: 'Operation',
+        anyPermissions: ['ops.task.execute', 'ops.host.execute'],
+      },
+      {
+        path: '/tasks/schedules',
+        title: '计划任务',
+        icon: 'Timer',
+        anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
+      },
+    ],
   },
   {
     title: '工单系统',

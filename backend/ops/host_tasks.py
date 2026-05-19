@@ -628,7 +628,7 @@ def build_k8s_target_snapshot(targets):
     for item in targets:
         cluster_id = int(item.get('cluster_id'))
         cluster = clusters.get(cluster_id)
-        namespace = item.get('namespace') or 'default'
+        namespace = item.get('namespace') or ''
         name = item.get('name') or ''
         kind = item.get('kind') or ''
         snapshot.append({
@@ -642,6 +642,48 @@ def build_k8s_target_snapshot(targets):
             'status': cluster.status if cluster else 'unknown',
         })
     return snapshot
+
+
+def _run_k8s_cluster_command(task, cluster):
+    from . import k8s_views
+
+    command = ((task.payload or {}).get('command') or '').strip() or 'kubectl get pods -A | head -20'
+    rendered_command = command if command.startswith('kubectl') else f'kubectl {command}'
+    if k8s_views._is_demo(cluster):
+        return '\n'.join([
+            f'$ {rendered_command}',
+            f'demo-cluster: {cluster.name}',
+            'NAME                           READY   STATUS    RESTARTS   AGE',
+            'api-server-5f8b7c6d4-r9p2w    1/1     Running   1          2d',
+            'web-frontend-6d9f8b7c5-j2m4n  1/1     Running   0          1d',
+        ])
+    from .k8s_views import _prepare_kubeconfig
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as tmp:
+        tmp.write(_prepare_kubeconfig(cluster))
+        kubeconfig_path = tmp.name
+    try:
+        kubectl_args = shlex.split(command)
+        if kubectl_args and kubectl_args[0] == 'kubectl':
+            kubectl_args = kubectl_args[1:]
+        process = subprocess.run(
+            ['kubectl', '--kubeconfig', kubeconfig_path, *kubectl_args],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=max(int(task.timeout_seconds or 30), 5),
+        )
+        output = (process.stdout or '').strip()
+        error_output = (process.stderr or '').strip()
+        if process.returncode != 0:
+            raise RuntimeError(error_output or output or f'kubectl exited with code {process.returncode}')
+        return output or error_output or '命令执行完成'
+    finally:
+        try:
+            os.unlink(kubeconfig_path)
+        except OSError:
+            pass
 
 
 def _create_k8s_execution(task, target, status_value, command, output='', error_message='', started_at=None, finished_at=None):
@@ -685,6 +727,9 @@ def _run_k8s_restart_pod(task, cluster, target):
 
 def _run_k8s_pod_exec(task, cluster, target):
     from . import k8s_views
+
+    if not (target.get('name') or '').strip():
+        return _run_k8s_cluster_command(task, cluster)
 
     namespace = target.get('namespace') or 'default'
     pod_name = target.get('name') or ''
@@ -759,6 +804,11 @@ def _k8s_command_text(task, target):
     if task.task_type == HostTask.TASK_K8S_RESTART_POD:
         return f"kubectl delete pod {target.get('name')} -n {target.get('namespace') or 'default'}"
     if task.task_type == HostTask.TASK_K8S_POD_EXEC:
+        if not (target.get('name') or '').strip():
+            command = str(payload.get('command') or '').strip()
+            if command.startswith('kubectl'):
+                return command
+            return f"kubectl {command}".strip()
         return f"kubectl exec {target.get('name')} -n {target.get('namespace') or 'default'} -- {payload.get('command') or ''}"
     if task.task_type == HostTask.TASK_K8S_SCALE_WORKLOAD:
         return f"kubectl scale {payload.get('workload_type')}/{target.get('name')} -n {target.get('namespace') or 'default'} --replicas={payload.get('replicas')}"

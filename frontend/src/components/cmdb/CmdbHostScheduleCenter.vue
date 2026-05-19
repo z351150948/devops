@@ -1,7 +1,8 @@
 <template>
   <div class="schedule-center-page">
-    <div class="inner-tabs">
-      <button v-for="tab in innerTabs" :key="tab.key" class="inner-tab-btn" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">
+    <div class="neo-tabs theme-blue log-center-tabs trace-center-tabs event-tabs-shell schedule-inner-tabs">
+      <button v-for="tab in innerTabs" :key="tab.key" class="neo-tab-btn event-tab schedule-inner-tab-btn" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">
+        <el-icon><component :is="tabIcons[tab.key]" /></el-icon>
         <span class="inner-tab-title">{{ tab.label }}</span>
       </button>
     </div>
@@ -37,7 +38,7 @@
           </div>
           <div class="task-inline-tip">定时任务不会直接连主机，而是在触发时创建真实任务，任务历史和明细链路保持一致。</div>
 
-          <el-form :model="scheduleForm" label-width="92px" class="task-form">
+          <el-form :model="scheduleForm" label-width="88px" class="task-form schedule-form-compact">
             <div class="form-row">
               <el-form-item label="编排名称" class="form-col"><el-input v-model="scheduleForm.name" placeholder="例如：生产主机夜间健康巡检" /></el-form-item>
               <el-form-item label="任务类型" class="form-col">
@@ -155,7 +156,7 @@
               <span class="selection-pill warning">告警 {{ selectedStats.warning }}</span>
               <span class="selection-pill danger">离线 {{ selectedStats.offline }}</span>
             </div>
-            <el-table ref="hostTableRef" :data="availableHosts" v-loading="targetLoading" row-key="id" max-height="300" @selection-change="handleSelectionChange">
+            <el-table size="small" ref="hostTableRef" :data="availableHosts" v-loading="targetLoading" row-key="id" max-height="300" @selection-change="handleSelectionChange">
               <el-table-column type="selection" width="44" reserve-selection />
               <el-table-column prop="hostname" label="主机名" min-width="140" />
               <el-table-column prop="ip_address" label="IP 地址" width="140" />
@@ -191,7 +192,7 @@
           </div>
           <div class="toolbar-right"><el-button size="small" @click="resetScheduleFilters">重置筛选</el-button></div>
         </div>
-        <el-table :data="schedules" v-loading="scheduleLoading" row-key="id">
+        <el-table size="small" :data="schedules" v-loading="scheduleLoading" row-key="id">
           <el-table-column prop="name" label="编排名称" min-width="180" />
           <el-table-column prop="task_type_display" label="任务类型" width="150" />
           <el-table-column prop="schedule_type_display" label="调度类型" width="110" />
@@ -225,7 +226,7 @@
           </div>
           <div class="toolbar-right"><el-button size="small" @click="resetExecutionFilters">重置筛选</el-button></div>
         </div>
-        <el-table :data="executions" v-loading="executionLoading" row-key="id">
+        <el-table size="small" :data="executions" v-loading="executionLoading" row-key="id">
           <el-table-column prop="schedule_name" label="编排名称" min-width="180" />
           <el-table-column prop="trigger_source_display" label="触发方式" width="110" />
           <el-table-column label="执行结果" width="110"><template #default="{ row }"><el-tag size="small" :type="statusTagType(row.status)">{{ row.status_display }}</el-tag></template></el-table-column>
@@ -249,7 +250,7 @@
         <div class="pagination-row"><el-pagination v-model:current-page="executionPage" :page-size="20" :total="executionTotal" layout="total, prev, pager, next" @current-change="fetchExecutions" /></div>
       </div>
     </template>
-    <el-drawer v-model="detailVisible" title="执行记录详情" size="68%">
+    <el-drawer v-model="detailVisible" class="schedule-center-drawer" title="执行记录详情" size="68%" append-to-body>
       <div v-loading="detailLoading" class="schedule-detail-shell">
         <template v-if="detailExecution">
           <div class="detail-summary">
@@ -280,7 +281,7 @@
               <div class="detail-chip">成功率：{{ taskSuccessRate(detailTask) }}%</div>
             </div>
             <div class="detail-kv">{{ detailTask.summary || detailTask.description || "暂无任务说明" }}</div>
-            <el-table :data="detailTask.executions || []" max-height="420" empty-text="暂无执行明细">
+            <el-table size="small" :data="detailTask.executions || []" max-height="420" empty-text="暂无执行明细">
               <el-table-column prop="host_name" label="主机名" min-width="140" />
               <el-table-column prop="host_ip" label="IP" width="140" />
               <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" :type="statusTagType(row.status)">{{ row.status_display }}</el-tag></template></el-table-column>
@@ -302,7 +303,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search } from '@element-plus/icons-vue'
+import { Calendar, Clock, List, Search } from '@element-plus/icons-vue'
 import {
   createHostTaskSchedule,
   deleteHostTaskSchedule,
@@ -323,6 +324,12 @@ const innerTabs = [
   { key: 'list', label: '编排列表', desc: '查看启停状态与即时操作' },
   { key: 'history', label: '执行记录', desc: '查看触发结果与关联任务' },
 ]
+const tabIcons = {
+  planner: Calendar,
+  list: List,
+  history: Clock,
+}
+
 const taskTypeOptions = [
   { label: '批量命令执行', value: 'run_command' },
   { label: 'Ansible Playbook 执行', value: 'run_playbook' },
@@ -434,6 +441,529 @@ onMounted(async () => { applyPreset(presets[0]); await Promise.all([fetchTargets
 </script>
 
 <style scoped>
-.schedule-center-page{display:flex;flex-direction:column;gap:4px}.inner-tabs{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;align-self:flex-start;margin-bottom:4px;padding:4px;border:1px solid rgba(148,163,184,.16);border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.95) 0%,rgba(248,250,252,.92) 100%);box-shadow:0 10px 24px rgba(15,23,42,.04)}.inner-tab-btn{min-width:0;flex:0 0 auto;height:34px;padding:0 16px;border:none;border-radius:10px;background:transparent;display:inline-flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;transition:.18s ease background,.18s ease box-shadow,.18s ease color;color:#64748b}.inner-tab-btn:hover{background:rgba(255,255,255,.76);color:#1d4ed8}.inner-tab-btn.active{background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.08),0 0 0 1px rgba(59,130,246,.14) inset;color:#1d4ed8}.inner-tab-title{font-size:13px;font-weight:700;color:inherit;line-height:1.1}.glass-card{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 16px 34px rgba(15,23,42,.07);padding:14px 16px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-weight:600;color:#0f172a}.compact-head{margin-bottom:8px}.planner-grid{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}.side-card{display:flex;flex-direction:column;gap:8px}.head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.preset-grid{display:grid;gap:10px}.preset-card{padding:14px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);box-shadow:0 10px 24px rgba(15,23,42,.04);text-align:left;cursor:pointer;transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease}.preset-card:hover{border-color:rgba(96,165,250,.35);box-shadow:0 16px 30px rgba(37,99,235,.1);transform:translateY(-2px)}.preset-card.active{border-color:#3b82f6;box-shadow:0 18px 32px rgba(59,130,246,.14)}.preset-title{color:#0f172a;font-weight:600}.preset-desc,.task-inline-tip{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}.task-inline-tip{margin-bottom:8px;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg, rgba(59,130,246,.08) 0%, rgba(14,165,233,.04) 100%);border:1px solid rgba(59,130,246,.14)}.mini-panel{padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.mini-panel-title{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:10px}.mini-bullet{position:relative;padding-left:14px;color:#64748b;font-size:12px;line-height:1.7}.mini-bullet::before{content:'';position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:#60a5fa}.task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}.submit-row{margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.preview-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}.preview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.preview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.compact-kv{padding:7px 0;min-height:32px;color:#475569;font-size:13px;line-height:1.6}.history-toolbar{margin:8px 0}.pagination-row{display:flex;justify-content:flex-end;margin-top:8px}.schedule-detail-shell{display:flex;flex-direction:column;gap:8px}.detail-summary{display:flex;flex-wrap:wrap;gap:8px}.detail-chip{padding:7px 12px;border-radius:999px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.14);color:#1e3a8a;font-size:12px;line-height:1.4}.schedule-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.schedule-metric-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.schedule-metric-card.success{background:linear-gradient(180deg,#f0fdf4 0%,#f7fee7 100%)}.schedule-metric-card.danger{background:linear-gradient(180deg,#fff1f2 0%,#fef2f2 100%)}.schedule-metric-card.warning{background:linear-gradient(180deg,#fffbeb 0%,#fefce8 100%)}.schedule-metric-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.detail-section{display:flex;flex-direction:column;gap:8px}.detail-section-title{font-size:13px;font-weight:700;color:#0f172a}.detail-kv{color:#475569;font-size:13px;line-height:1.7}.danger-text{color:#b91c1c}.output-block{max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px 12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6}@media (max-width:1100px){.planner-grid,.preview-strip,.schedule-metric-grid{grid-template-columns:1fr}}@media (max-width:900px){.form-row,.submit-row{flex-direction:column;align-items:stretch}}
+.schedule-center-page {
+  --sc-border: rgba(15, 23, 42, 0.08);
+  --sc-border-strong: rgba(59, 130, 246, 0.18);
+  --sc-panel: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+  --sc-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  --sc-shadow-hover: 0 14px 30px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schedule-inner-tabs {
+  display: flex;
+  width: 100%;
+  align-self: stretch;
+  margin-bottom: 2px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.9));
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.04);
+}
+
+.schedule-inner-tab-btn {
+  min-height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  gap: 6px;
+}
+
+.schedule-inner-tab-btn:hover {
+  background: rgba(51, 112, 255, 0.06);
+}
+
+.schedule-inner-tab-btn.active {
+  background: #e8f0ff;
+  color: #245bdb;
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.08);
+}
+
+.inner-tab-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: inherit;
+  line-height: 1.1;
+}
+
+.glass-card {
+  background: var(--sc-panel);
+  border: 1px solid var(--sc-border);
+  border-radius: 20px;
+  box-shadow: var(--sc-shadow);
+  padding: 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.compact-head {
+  margin-bottom: 8px;
+}
+
+.planner-grid {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.side-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.preset-card {
+  padding: 12px;
+  border: 1px solid var(--sc-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.preset-card:hover {
+  border-color: var(--sc-border-strong);
+  box-shadow: var(--sc-shadow-hover);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  transform: translateY(-1px);
+}
+
+.preset-card.active {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.08);
+}
+
+.preset-title {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.preset-desc,
+.task-inline-tip {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.task-inline-tip {
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.06) 0%, rgba(14, 165, 233, 0.03) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+.mini-panel {
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.mini-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.mini-bullet {
+  position: relative;
+  padding-left: 14px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.mini-bullet::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #60a5fa;
+}
+
+.task-form {
+  margin-top: 2px;
+}
+
+.schedule-form-compact :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-col {
+  flex: 1;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.toolbar :deep(.el-input__wrapper),
+.toolbar :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.12) inset;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.toolbar :deep(.el-tag) {
+  height: 26px;
+  border-radius: 8px;
+}
+
+.toolbar :deep(.el-input__wrapper:hover),
+.toolbar :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16) inset;
+}
+
+.toolbar-right :deep(.el-button),
+.head-actions :deep(.el-button) {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.toolbar-right :deep(.el-button:not(.el-button--primary)),
+.head-actions :deep(.el-button:not(.el-button--primary)) {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  box-shadow: none;
+}
+
+.toolbar-right :deep(.el-button:not(.is-link):hover),
+.head-actions :deep(.el-button:not(.is-link):hover) {
+  border-color: rgba(59, 130, 246, 0.18);
+  color: #1d4ed8;
+  background: #f8fbff;
+}
+
+.selection-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.selection-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 11px;
+}
+
+.selection-pill.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.selection-pill.warning {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.selection-pill.danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.submit-row {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.submit-tip {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.submit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.template-payload-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.preview-card {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.preview-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.compact-kv {
+  padding: 5px 0;
+  min-height: 28px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.history-toolbar {
+  margin: 6px 0;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.schedule-detail-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.detail-chip {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.12);
+  color: #1e3a8a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.schedule-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-metric-card {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.schedule-metric-card.success {
+  background: linear-gradient(180deg, #f0fdf4 0%, #f7fee7 100%);
+}
+
+.schedule-metric-card.danger {
+  background: linear-gradient(180deg, #fff1f2 0%, #fef2f2 100%);
+}
+
+.schedule-metric-card.warning {
+  background: linear-gradient(180deg, #fffbeb 0%, #fefce8 100%);
+}
+
+.schedule-metric-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.detail-kv {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.danger-text {
+  color: #b91c1c;
+}
+
+.output-block {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.schedule-center-page :deep(.el-input__wrapper),
+.schedule-center-page :deep(.el-textarea__inner),
+.schedule-center-page :deep(.el-select__wrapper) {
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.16) inset;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.schedule-center-page :deep(.el-input__wrapper:hover),
+.schedule-center-page :deep(.el-select__wrapper:hover),
+.schedule-center-page :deep(.el-textarea__inner:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18) inset;
+}
+
+.schedule-center-page :deep(.el-input__wrapper.is-focus),
+.schedule-center-page :deep(.el-select__wrapper.is-focused),
+.schedule-center-page :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.22) inset;
+}
+
+.schedule-center-page :deep(.el-button) {
+  border-radius: 10px;
+}
+
+.schedule-center-page :deep(.el-table) {
+  --el-table-border-color: rgba(148, 163, 184, 0.16);
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f8fbff;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.schedule-center-page :deep(.el-table th.el-table__cell) {
+  color: #475569;
+  font-weight: 600;
+  background: #f8fafc;
+}
+
+.schedule-center-page :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.schedule-center-page :deep(.schedule-center-drawer) {
+  height: 100vh;
+  max-height: 100vh;
+}
+
+.schedule-center-page :deep(.schedule-center-drawer .el-drawer__header) {
+  padding: 14px 18px 10px;
+}
+
+.schedule-center-page :deep(.schedule-center-drawer .el-drawer__body) {
+  min-height: calc(100vh - 56px);
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  background: #f8fafc;
+}
+
+@media (max-width: 1100px) {
+  .planner-grid,
+  .preview-strip,
+  .schedule-metric-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .form-row,
+  .submit-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
 </style>
 

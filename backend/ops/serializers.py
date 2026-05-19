@@ -436,7 +436,10 @@ class HostTaskTemplateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         task_type = attrs.get('task_type') or getattr(self.instance, 'task_type', '')
         target_type = attrs.get('target_type') or getattr(self.instance, 'target_type', HostTask.TARGET_HOST)
+        execution_mode = attrs.get('execution_mode') or getattr(self.instance, 'execution_mode', HostTask.EXECUTION_MODE_SSH)
         validate_host_task_payload(task_type, attrs.get('payload') or {})
+        if execution_mode == HostTask.EXECUTION_MODE_K8S_API and not str(task_type).startswith('k8s_'):
+            raise serializers.ValidationError({'execution_mode': '只有 K8s 命令可以使用 K8s API'})
         if task_type.startswith('k8s_'):
             attrs['target_type'] = HostTask.TARGET_K8S
             attrs['execution_mode'] = HostTask.EXECUTION_MODE_K8S_API
@@ -475,7 +478,10 @@ class HostTaskSubmitSerializer(serializers.Serializer):
     def validate(self, attrs):
         task_type = attrs.get('task_type')
         target_type = attrs.get('target_type') or HostTask.TARGET_HOST
+        execution_mode = attrs.get('execution_mode') or HostTask.EXECUTION_MODE_SSH
         validate_host_task_payload(task_type, attrs.get('payload') or {})
+        if execution_mode == HostTask.EXECUTION_MODE_K8S_API and not str(task_type).startswith('k8s_'):
+            raise serializers.ValidationError({'execution_mode': '只有 K8s 命令可以使用 K8s API'})
         if target_type == HostTask.TARGET_HOST:
             if task_type.startswith('k8s_'):
                 raise serializers.ValidationError({'task_type': '主机资源不支持 K8s 类型任务'})
@@ -490,19 +496,22 @@ class HostTaskSubmitSerializer(serializers.Serializer):
             normalized_targets = []
             for item in targets:
                 cluster_id = item.get('cluster_id')
-                namespace = (item.get('namespace') or 'default').strip() or 'default'
                 name = (item.get('name') or item.get('pod_name') or '').strip()
+                namespace = (item.get('namespace') or '').strip()
+                kind = (item.get('kind') or item.get('resource_type') or '').strip()
                 if not cluster_id:
                     raise serializers.ValidationError({'k8s_targets': '请选择 K8s 集群'})
-                if task_type in [HostTask.TASK_K8S_RESTART_POD, HostTask.TASK_K8S_POD_EXEC] and not name:
+                if task_type == HostTask.TASK_K8S_RESTART_POD and not name:
                     raise serializers.ValidationError({'k8s_targets': '请填写 Pod 名称'})
                 if task_type == HostTask.TASK_K8S_SCALE_WORKLOAD and not name:
                     raise serializers.ValidationError({'k8s_targets': '请填写工作负载名称'})
+                if task_type in [HostTask.TASK_K8S_RESTART_POD, HostTask.TASK_K8S_SCALE_WORKLOAD]:
+                    namespace = namespace or 'default'
                 normalized_targets.append({
                     'cluster_id': int(cluster_id),
                     'namespace': namespace,
                     'name': name,
-                    'kind': (item.get('kind') or item.get('resource_type') or '').strip(),
+                    'kind': kind or ('cluster' if task_type == HostTask.TASK_K8S_POD_EXEC and not name else ''),
                     'container': (item.get('container') or '').strip(),
                 })
             attrs['k8s_targets'] = normalized_targets

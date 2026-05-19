@@ -12,7 +12,7 @@
 
     <div v-if="canViewHosts" class="cmdb-host-entry-strip">
       <span>主机资产已作为任务中心的资源底座，CMDB 继续承载关系、拓扑、成本、优化与申请流转。</span>
-      <el-button link type="primary" size="small" @click="router.push('/tasks?tab=assets')">查看任务中心资源底座</el-button>
+      <el-button link type="primary" size="small" @click="router.push('/tasks/resources')">查看任务中心资源底座</el-button>
     </div>
 
     <!-- 主 Tab 栏 (Pill Tab Theme: Purple) -->
@@ -1451,10 +1451,10 @@ function syncTabStateFromRoute() {
   const routeHostTab = typeof route.query.hostTab === 'string' ? route.query.hostTab : ''
   if (routeTab === 'host-manage' || routeTab === 'hosts') {
     const legacyTarget = routeHostTab === 'task-center'
-      ? '/tasks'
+      ? '/tasks/workbench'
       : routeHostTab === 'requests'
         ? '/cmdb?tab=requests'
-        : '/tasks?tab=assets'
+        : '/tasks/resources'
     router.replace(legacyTarget)
     return
   }

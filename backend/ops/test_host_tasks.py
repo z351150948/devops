@@ -220,6 +220,78 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(payload['executions'][0]['target_namespace'], 'production')
         self.assertIn('demo-exec', payload['executions'][0]['output'])
 
+    def test_k8s_cluster_command_task_records_cluster_level_execution(self):
+        cluster = K8sCluster.objects.create(name='demo-k8s-cluster', kubeconfig='demo', status='connected')
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'cluster-diagnostic',
+                'target_type': HostTask.TARGET_K8S,
+                'task_type': HostTask.TASK_K8S_POD_EXEC,
+                'k8s_targets': [
+                    {
+                        'cluster_id': cluster.id,
+                        'kind': 'cluster',
+                    },
+                ],
+                'payload': {'command': 'get pods -A | head -5'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['status'], HostTask.STATUS_SUCCESS)
+        self.assertEqual(payload['success_count'], 1)
+        self.assertEqual(payload['executions'][0]['target_name'], cluster.name)
+        self.assertEqual(payload['executions'][0]['target_kind'], 'cluster')
+        self.assertEqual(payload['executions'][0]['target_namespace'], '')
+        self.assertEqual(payload['executions'][0]['command'], 'kubectl get pods -A | head -5')
+        self.assertIn('kubectl get pods -A', payload['executions'][0]['output'])
+
+    def test_k8s_cluster_command_accepts_cluster_target_without_pod_name(self):
+        cluster = K8sCluster.objects.create(name='demo-k8s-submit', kubeconfig='demo', status='connected')
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'cluster-submit',
+                'target_type': HostTask.TARGET_K8S,
+                'task_type': HostTask.TASK_K8S_POD_EXEC,
+                'k8s_targets': [
+                    {
+                        'cluster_id': cluster.id,
+                        'kind': 'cluster',
+                    },
+                ],
+                'payload': {'command': 'kubectl get ns'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['executions'][0]['target_kind'], 'cluster')
+        self.assertEqual(payload['executions'][0]['target_name'], cluster.name)
+
+    def test_non_k8s_task_cannot_use_k8s_api_execution_mode(self):
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'invalid-k8s-api-mode',
+                'task_type': 'run_command',
+                'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
+                'host_ids': [self.host.id],
+                'payload': {'command': 'uptime'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('execution_mode', response.json())
+
     @patch('ops.host_tasks.open_ssh_client')
     def test_rerun_reuses_original_targets_and_mode(self, mock_open_ssh_client):
         mock_open_ssh_client.return_value = self._mock_client({
@@ -302,6 +374,22 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         payload = response.json()
         self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_ANSIBLE)
+
+    def test_non_k8s_template_cannot_use_k8s_api_execution_mode(self):
+        response = self.client.post(
+            '/api/host-task-templates/',
+            {
+                'name': 'invalid-k8s-api-template',
+                'task_type': 'run_command',
+                'target_type': HostTask.TARGET_HOST,
+                'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
+                'payload': {'command': 'uptime'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('execution_mode', response.json())
 
     def test_cannot_update_builtin_template(self):
         template = HostTaskTemplate.objects.create(

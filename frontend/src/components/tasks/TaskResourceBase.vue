@@ -1,15 +1,15 @@
 <template>
   <div class="tab-content cmdb-items-layout task-resource-cmdb-layout">
     <div class="cmdb-resource-tree-panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div class="tree-panel-head">
         <span
-          style="font-weight:600;color:var(--text-primary,#e2e8f0);font-size:14px;cursor:pointer;"
+          class="tree-panel-title"
           title="点击查看全部"
           @click="clearTreeFilter"
         >
           <el-icon style="margin-right:4px;vertical-align:-2px;"><Connection /></el-icon>资源树
         </span>
-        <el-button v-if="canManage" link type="primary" size="small" @click="openNodeDialog()">
+        <el-button v-if="canManage" link type="primary" size="small" class="tree-head-btn" @click="openNodeDialog()">
           <el-icon><Plus /></el-icon>
         </el-button>
       </div>
@@ -22,14 +22,11 @@
         highlight-current
         default-expand-all
         :expand-on-click-node="false"
-        style="background:transparent;flex:1;overflow-y:auto;"
+        class="resource-tree"
         @node-click="onNodeClick"
       >
         <template #default="{ node, data }">
-          <div
-            class="custom-tree-node"
-            style="flex:1;display:flex;justify-content:space-between;align-items:center;font-size:13px;padding-right:8px;"
-          >
+          <div class="custom-tree-node tree-node-content">
             <span class="tree-node-label">
               <el-icon v-if="data.group_type === 'environment'" style="color:#10b981;margin-right:4px;"><Monitor /></el-icon>
               <el-icon v-else style="color:#8b5cf6;margin-right:4px;"><Files /></el-icon>
@@ -40,7 +37,7 @@
                 v-if="canManage && data.group_type === 'environment'"
                 link
                 type="success"
-                style="padding:0;height:auto;"
+                class="tree-action-btn"
                 title="新增系统"
                 @click="openNodeDialog(null, data)"
               >
@@ -50,7 +47,7 @@
                 v-if="canManage"
                 link
                 type="primary"
-                style="padding:0;margin-left:8px;height:auto;"
+                class="tree-action-btn"
                 title="编辑"
                 @click="openNodeDialog(data)"
               >
@@ -58,7 +55,7 @@
               </el-button>
               <el-popconfirm v-if="canManage" title="确定删除?" @confirm="delNode(data)">
                 <template #reference>
-                  <el-button link type="danger" style="padding:0;margin-left:8px;height:auto;" title="删除">
+                  <el-button link type="danger" class="tree-action-btn" title="删除">
                     <el-icon><Delete /></el-icon>
                   </el-button>
                 </template>
@@ -72,13 +69,13 @@
         v-if="!loading.tree && !treeData.length"
         description="暂无环境"
         :image-size="72"
-        style="padding:16px 0;"
+        class="tree-empty"
       />
     </div>
 
     <div class="cmdb-items-main">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div class="resource-toolbar">
+        <div class="resource-toolbar-left">
           <el-select v-model="filters.resource_type" placeholder="资源类型" clearable style="width:120px" size="small" @change="fetchResources">
             <el-option label="主机" value="host" />
             <el-option label="K8s" value="k8s" />
@@ -106,7 +103,7 @@
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;">
+        <div class="resource-toolbar-right">
           <el-button size="small" @click="resetFilters">重置</el-button>
           <el-button size="small" :loading="loading.resources" @click="reloadAll">刷新</el-button>
           <el-button v-if="canManage" type="primary" size="small" @click="openResourceDialog()">新增资源</el-button>
@@ -129,48 +126,60 @@
         </div>
       </div>
 
-      <el-table :data="resources" stripe v-loading="loading.resources" row-key="id" style="width:100%" :empty-text="emptyText">
-        <el-table-column prop="name" label="名称" min-width="170" show-overflow-tooltip />
-        <el-table-column label="类型" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.resource_type === 'host' ? 'success' : 'info'">
-              {{ row.resource_type_display || resourceTypeLabel(row.resource_type) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="environment_name" label="环境" width="120" show-overflow-tooltip />
-        <el-table-column prop="system_name" label="系统" width="130" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.system_name || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="执行入口" min-width="190" show-overflow-tooltip>
-          <template #default="{ row }">{{ resourceEndpoint(row) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="statusType(row.status)">
-              {{ row.status_display || statusLabel(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
-        <el-table-column v-if="canManage" label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button link size="small" @click="openResourceDialog(row)">编辑</el-button>
-            <el-button link size="small" type="danger" @click="removeResource(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="resource-table-wrap">
+        <el-table
+          size="small"
+          :data="resources"
+          stripe
+          v-loading="loading.resources"
+          row-key="id"
+          class="resource-table"
+          height="100%"
+          :empty-text="emptyText"
+        >
+          <el-table-column prop="name" label="名称" min-width="170" show-overflow-tooltip />
+          <el-table-column label="类型" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.resource_type === 'host' ? 'success' : 'info'">
+                {{ row.resource_type_display || resourceTypeLabel(row.resource_type) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="environment_name" label="环境" width="120" show-overflow-tooltip />
+          <el-table-column prop="system_name" label="系统" width="108" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.system_name || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="执行入口" min-width="190" show-overflow-tooltip>
+            <template #default="{ row }">{{ resourceEndpoint(row) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusType(row.status)">
+                {{ row.status_display || statusLabel(row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="description" label="说明" min-width="160" show-overflow-tooltip />
+          <el-table-column v-if="canManage" label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button link size="small" @click="openResourceDialog(row)">编辑</el-button>
+              <el-button link size="small" type="danger" @click="removeResource(row)">删除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
     </div>
 
     <el-dialog
       v-model="nodeDialogVisible"
       :title="nodeDialogTitle"
+      class="resource-dialog"
       width="400px"
       top="15vh"
       append-to-body
       destroy-on-close
     >
-      <el-form :model="nodeForm" label-width="82px">
+      <el-form :model="nodeForm" label-width="78px" class="resource-compact-form">
         <el-form-item v-if="!editingNodeId" label="节点类型">
           <el-radio-group v-model="nodeForm.group_type">
             <el-radio label="environment">环境</el-radio>
@@ -209,12 +218,13 @@
     <el-dialog
       v-model="resourceDialogVisible"
       :title="resourceDialogTitle"
+      class="resource-dialog"
       width="620px"
       top="10vh"
       append-to-body
       destroy-on-close
     >
-      <el-form :model="resourceForm" label-width="90px">
+      <el-form :model="resourceForm" label-width="86px" class="resource-compact-form">
         <div class="form-row">
           <el-form-item label="资源类型" required class="form-col">
             <el-radio-group v-model="resourceForm.resource_type" :disabled="editingResourceId !== null">
@@ -626,7 +636,18 @@ onMounted(reloadAll)
 <style scoped>
 .custom-tree-node {
   transition: background 0.2s;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+.tree-node-content {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  font-size: 12px;
+  padding-right: 2px;
 }
 
 .custom-tree-node:hover {
@@ -634,9 +655,21 @@ onMounted(reloadAll)
 }
 
 .tree-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
   opacity: 0;
   transition: opacity 0.2s;
   white-space: nowrap;
+}
+
+.tree-action-btn {
+  min-height: 18px;
+  height: 18px;
+  min-width: 18px;
+  padding: 0;
+  margin-left: 0 !important;
+  font-size: 11px;
 }
 
 .el-tree-node__content:hover .tree-actions {
@@ -649,28 +682,126 @@ onMounted(reloadAll)
   min-width: 0;
 }
 
+.tree-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 4px 0;
+}
+
+.tree-panel-title {
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tree-head-btn {
+  min-height: 24px;
+  padding: 0 4px;
+}
+
 .cmdb-items-layout {
   display: flex;
   gap: 8px;
+  min-height: 0;
 }
 
 .task-resource-cmdb-layout {
   display: flex;
   gap: 8px;
+  align-items: stretch;
+  min-height: clamp(560px, calc(100vh - 230px), 980px);
 }
 
 .cmdb-resource-tree-panel {
-  width: 188px;
-  flex: 0 0 188px;
-  border-right: 1px solid rgba(139, 92, 246, 0.15);
+  width: 228px;
+  flex: 0 0 228px;
+  border-right: 1px solid rgba(148, 163, 184, 0.14);
   padding-right: 12px;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .cmdb-items-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.resource-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: transparent;
+}
+
+.tree-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.resource-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.resource-toolbar-left,
+.resource-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.resource-toolbar :deep(.el-input__wrapper),
+.resource-toolbar :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.12) inset;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.resource-toolbar :deep(.el-input__wrapper:hover),
+.resource-toolbar :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16) inset;
+}
+
+.resource-toolbar-right :deep(.el-button) {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.resource-toolbar-right :deep(.el-button:not(.el-button--primary)) {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  box-shadow: none;
+}
+
+.resource-toolbar-right :deep(.el-button:not(.is-link):hover) {
+  border-color: rgba(59, 130, 246, 0.18);
+  color: #1d4ed8;
+  background: #f8fbff;
 }
 
 .cmdb-stats-row {
@@ -682,15 +813,40 @@ onMounted(reloadAll)
   padding-bottom: 2px;
 }
 
+.resource-table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.resource-table {
+  width: 100%;
+}
+
+.resource-table :deep(.el-table) {
+  --el-table-border-color: rgba(148, 163, 184, 0.16);
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f8fbff;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.resource-table :deep(.el-table th.el-table__cell) {
+  color: #475569;
+  font-weight: 600;
+  background: #f8fafc;
+}
+
 .cmdb-stat-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: var(--card-bg, #1e293b);
+  gap: 8px;
+  background: #ffffff;
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 7px 10px;
   min-width: 88px;
-  border: 1px solid rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.14);
   flex: 0 0 auto;
   cursor: pointer;
   transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
@@ -698,13 +854,13 @@ onMounted(reloadAll)
 
 .cmdb-stat-card:hover {
   transform: translateY(-1px);
-  border-color: rgba(139, 92, 246, 0.32);
+  border-color: rgba(59, 130, 246, 0.24);
 }
 
 .cmdb-stat-card.active {
-  background: rgba(139, 92, 246, 0.12);
-  border-color: rgba(139, 92, 246, 0.5);
-  box-shadow: 0 10px 20px rgba(139, 92, 246, 0.12);
+  background: #e8f0ff;
+  border-color: rgba(51, 112, 255, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.06);
 }
 
 .stat-dot {
@@ -719,22 +875,22 @@ onMounted(reloadAll)
 }
 
 .stat-val {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  color: var(--text-primary, #e2e8f0);
+  color: #0f172a;
   line-height: 1;
 }
 
 .stat-label {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--text-secondary, #94a3b8);
+  margin-top: 2px;
+  font-size: 11px;
+  color: #64748b;
   white-space: nowrap;
 }
 
 .form-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .form-col {
@@ -742,22 +898,63 @@ onMounted(reloadAll)
 }
 
 .field-hint {
-  margin-top: 6px;
+  margin-top: 4px;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
+}
+
+.resource-compact-form :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+
+.resource-compact-form :deep(.el-input__wrapper),
+.resource-compact-form :deep(.el-textarea__inner),
+.resource-compact-form :deep(.el-select__wrapper) {
+  min-height: 32px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.16) inset;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.resource-compact-form :deep(.el-input__wrapper:hover),
+.resource-compact-form :deep(.el-textarea__inner:hover),
+.resource-compact-form :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18) inset;
+}
+
+.resource-dialog :deep(.el-dialog__header) {
+  margin-right: 0;
+  padding: 16px 18px 10px;
+}
+
+.resource-dialog :deep(.el-dialog__body) {
+  padding: 10px 18px 14px;
+}
+
+.resource-dialog :deep(.el-dialog__footer) {
+  padding: 10px 18px 16px;
+}
+
+.resource-dialog :deep(.el-button) {
+  min-height: 30px;
+  border-radius: 9px;
 }
 
 @media (max-width: 1200px) {
   .cmdb-resource-tree-panel {
-    width: 176px;
-    flex-basis: 176px;
+    width: 208px;
+    flex-basis: 208px;
   }
 }
 
 @media (max-width: 900px) {
   .cmdb-items-layout {
     flex-direction: column;
+  }
+
+  .task-resource-cmdb-layout {
+    min-height: auto;
   }
 
   .cmdb-resource-tree-panel {

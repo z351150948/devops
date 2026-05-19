@@ -707,7 +707,7 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         return [
             {
                 'cluster_id': item.get('cluster_id'),
-                'namespace': item.get('namespace') or 'default',
+                'namespace': item.get('namespace') or '',
                 'name': item.get('name') or '',
                 'kind': item.get('kind') or '',
                 'container': item.get('container') or '',

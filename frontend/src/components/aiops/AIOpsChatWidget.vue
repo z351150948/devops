@@ -1302,7 +1302,7 @@ function resolveReusablePrompt(index, message) {
 }
 
 function openTaskCenter() {
-  router.push('/tasks')
+  router.push('/tasks/workbench')
   closePanel()
 }
 

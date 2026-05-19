@@ -1,14 +1,15 @@
 ﻿<template>
   <div class="task-center-page">
-    <div class="inner-tabs">
+    <div class="neo-tabs theme-blue log-center-tabs trace-center-tabs event-tabs-shell task-inner-tabs">
       <button
         v-for="tab in innerTabs"
         :key="tab.key"
         type="button"
-        class="inner-tab-btn"
+        class="neo-tab-btn event-tab task-inner-tab-btn"
         :class="{ active: activeTab === tab.key }"
         @click="activeTab = tab.key"
       >
+        <el-icon><component :is="tab.icon" /></el-icon>
         <span class="inner-tab-title">{{ tab.label }}</span>
       </button>
     </div>
@@ -29,43 +30,15 @@
     </div>
 
     <template v-if="activeTab === 'dispatch'">
-      <div class="dispatch-overview">
-        <div class="dispatch-overview-main">
-          <div class="dispatch-step dispatch-step--target">
-            <span class="dispatch-step-label">执行对象</span>
-            <div class="target-type-segment">
-              <button
-                v-for="option in targetTypeOptions"
-                :key="option.value"
-                type="button"
-                class="target-type-btn"
-                :class="{ active: taskForm.target_type === option.value }"
-                @click="selectTargetType(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </div>
-          <div class="dispatch-step">
-            <span class="dispatch-step-label">执行类型</span>
-            <strong>{{ currentExecutionKindLabel }}</strong>
-          </div>
-          <div class="dispatch-step">
-            <span class="dispatch-step-label">已选目标</span>
-            <strong>{{ selectedTargetCount }} 个</strong>
-          </div>
-        </div>
-        <div class="dispatch-overview-tip">先选择执行对象，再确定执行类型并填写参数，最后执行任务。</div>
-      </div>
       <div class="composer-grid">
         <div class="glass-card side-stack">
           <div class="card-head compact-head">
             <span>{{ ui.executionType }}</span>
-            <el-tag size="small" type="info">基础类型</el-tag>
+            <el-tag size="small" type="info">{{ currentExecutionKindLabel }}</el-tag>
           </div>
           <div class="preset-grid execution-type-grid">
             <button
-              v-for="option in activeExecutionTypeOptions"
+              v-for="option in executionTypeOptions"
               :key="option.value"
               type="button"
               class="preset-card"
@@ -76,10 +49,6 @@
               <div class="preset-desc">{{ option.desc }}</div>
             </button>
           </div>
-          <div class="mini-panel">
-            <div class="mini-panel-title">{{ ui.dispatchAdvice }}</div>
-            <div v-for="item in dispatchAdvice" :key="item" class="mini-bullet">{{ item }}</div>
-          </div>
         </div>
         <div class="glass-card">
           <div class="card-head">
@@ -89,8 +58,8 @@
               <el-button size="small" @click="saveCurrentAsTemplate">{{ ui.saveAsTemplate }}</el-button>
             </div>
           </div>
-          <div class="task-inline-tip">{{ ui.tip }}</div>
-          <el-form :model="taskForm" label-width="92px" class="task-form">
+          <div class="task-inline-tip">{{ taskForm.target_type === 'k8s' ? ui.k8sTip : ui.tip }}</div>
+          <el-form :model="taskForm" label-width="88px" class="task-form task-dispatch-form">
             <div class="form-row">
               <el-form-item :label="ui.taskName" class="form-col wide">
                 <el-input v-model="taskForm.name" :placeholder="ui.taskNamePlaceholder" />
@@ -99,12 +68,12 @@
             <div class="form-row">
               <el-form-item :label="ui.executionType" class="form-col">
                 <el-select v-model="executionKind" style="width: 100%" @change="applyExecutionKind">
-                  <el-option v-for="option in activeExecutionTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                  <el-option v-for="option in executionTypeOptions" :key="option.value" :label="option.label" :value="option.value" />
                 </el-select>
               </el-form-item>
               <el-form-item :label="ui.executionMode" class="form-col">
                 <el-select v-model="taskForm.execution_mode" style="width: 100%" :disabled="taskForm.task_type === 'run_playbook' || taskForm.target_type === 'k8s'">
-                  <el-option v-for="option in executionModeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                  <el-option v-for="option in availableExecutionModeOptions" :key="option.value" :label="option.label" :value="option.value" />
                 </el-select>
               </el-form-item>
             </div>
@@ -112,53 +81,9 @@
               <el-input v-model="taskForm.description" :placeholder="ui.taskDescPlaceholder" />
             </el-form-item>
             <div v-if="taskForm.target_type === 'k8s'" class="template-payload-stack">
-              <div class="task-inline-tip k8s-cluster-tip">资源底座只负责选择 K8s 集群；命名空间、Pod 名称或工作负载名称在任务参数里填写。</div>
-              <el-form-item label="K8s 资源">
-                <el-select v-model="selectedK8sResourceId" clearable filterable placeholder="选择资源底座中的 K8s 集群，自动带出集群" style="width:100%" @change="applyK8sResource">
-                  <el-option
-                    v-for="resource in availableK8sResources"
-                    :key="resource.id"
-                    :label="k8sResourceLabel(resource)"
-                    :value="resource.id"
-                  />
-                </el-select>
+              <el-form-item :label="ui.command">
+                <el-input v-model="taskForm.payload.command" type="textarea" :rows="5" placeholder="例如：kubectl get deployment -A" />
               </el-form-item>
-              <div class="form-row">
-                <el-form-item label="K8s 集群" class="form-col">
-                  <el-select v-model="k8sForm.cluster_id" filterable placeholder="选择目标集群" style="width:100%">
-                    <el-option v-for="cluster in k8sClusters" :key="cluster.id" :label="cluster.name" :value="cluster.id" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="命名空间" class="form-col">
-                  <el-input v-model="k8sForm.namespace" placeholder="default / production" />
-                </el-form-item>
-              </div>
-              <div v-if="taskForm.task_type === 'k8s_scale_workload'" class="form-row">
-                <el-form-item label="负载类型" class="form-col">
-                  <el-select v-model="taskForm.payload.workload_type" style="width:100%">
-                    <el-option label="Deployment" value="deployment" />
-                    <el-option label="StatefulSet" value="statefulset" />
-                  </el-select>
-                </el-form-item>
-                <el-form-item label="负载名称" class="form-col">
-                  <el-input v-model="k8sForm.name" placeholder="例如 api-server" />
-                </el-form-item>
-                <el-form-item label="副本数" class="form-col">
-                  <el-input-number v-model="taskForm.payload.replicas" :min="0" :max="200" style="width:100%" />
-                </el-form-item>
-              </div>
-              <div v-else class="form-row">
-                <el-form-item label="Pod 名称" class="form-col">
-                  <el-input v-model="k8sForm.name" placeholder="例如 api-server-5f8b7c6d4-r9p2w" />
-                </el-form-item>
-                <el-form-item label="容器" class="form-col">
-                  <el-input v-model="k8sForm.container" placeholder="多容器 Pod 可填写，单容器可留空" />
-                </el-form-item>
-              </div>
-              <el-form-item v-if="taskForm.task_type === 'k8s_pod_exec'" :label="ui.command">
-                <el-input v-model="taskForm.payload.command" type="textarea" :rows="4" placeholder="例如：pwd && ls -lah /app" />
-              </el-form-item>
-              <div class="task-inline-tip">{{ ui.k8sTip }}</div>
             </div>
             <div v-if="taskForm.target_type === 'host'" class="form-row">
               <el-form-item :label="ui.modeHint" class="form-col">
@@ -263,6 +188,46 @@
               <el-table-column prop="status_display" :label="ui.status" width="90" />
             </el-table>
             </template>
+            <template v-else-if="taskForm.target_type === 'k8s'">
+            <el-divider content-position="left">{{ ui.selectTargets }}</el-divider>
+            <div class="toolbar">
+              <div class="toolbar-left">
+                <el-input v-model="targetFilters.search" :placeholder="ui.searchK8sPlaceholder" clearable style="width: 220px" @keyup.enter="fetchTargets">
+                  <template #prefix><el-icon><Search /></el-icon></template>
+                </el-input>
+                <el-select v-model="targetFilters.environment" clearable filterable :placeholder="ui.environment" style="width: 140px" @change="handleEnvironmentChange">
+                  <el-option v-for="node in envNodes" :key="node.id" :label="node.name" :value="node.id" />
+                </el-select>
+                <el-select v-model="targetFilters.system" clearable :placeholder="ui.businessLine" style="width: 140px" :disabled="!targetFilters.environment">
+                  <el-option v-for="system in currentSystemOptions" :key="system.id" :label="system.name" :value="system.id" />
+                </el-select>
+                <el-select v-model="targetFilters.status" clearable :placeholder="ui.status" style="width: 110px">
+                  <el-option v-for="option in k8sStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
+                </el-select>
+                <el-tag size="small" effect="plain" type="info">{{ ui.matchedK8s }} {{ availableK8sTargets.length }} {{ ui.unitCluster }}</el-tag>
+              </div>
+              <div class="toolbar-right">
+                <el-button size="small" @click="fetchTargets">{{ ui.queryHosts }}</el-button>
+                <el-button size="small" @click="resetTargetFilters">{{ ui.resetFilters }}</el-button>
+                <el-button size="small" @click="selectAllCurrent">{{ ui.selectCurrent }}</el-button>
+                <el-button size="small" @click="clearSelection">{{ ui.clearSelection }}</el-button>
+              </div>
+            </div>
+            <div v-if="selectedK8sRows.length" class="selection-strip">
+              <span class="selection-pill">{{ ui.selectedClusters }} {{ selectedK8sRows.length }} {{ ui.unitCluster }}</span>
+              <span class="selection-pill success">{{ ui.activeClusters }} {{ selectedK8sStats.active }}</span>
+              <span class="selection-pill warning">{{ ui.warningHosts }} {{ selectedK8sStats.warning }}</span>
+              <span class="selection-pill danger">{{ ui.inactiveClusters }} {{ selectedK8sStats.inactive }}</span>
+            </div>
+            <el-table ref="k8sTargetTableRef" :data="availableK8sTargets" v-loading="targetLoading" row-key="id" max-height="320" :empty-text="ui.emptyK8sTargets" @selection-change="handleK8sSelectionChange">
+              <el-table-column type="selection" width="44" reserve-selection />
+              <el-table-column prop="name" label="集群" min-width="160" />
+              <el-table-column prop="environment_name" :label="ui.environment" width="110" />
+              <el-table-column prop="system_name" :label="ui.businessLine" width="120" />
+              <el-table-column prop="status_display" :label="ui.status" width="90" />
+              <el-table-column prop="description" label="说明" min-width="220" show-overflow-tooltip />
+            </el-table>
+            </template>
             <div class="submit-row">
               <div class="submit-tip">{{ ui.submitTip }}</div>
               <div class="submit-actions">
@@ -301,7 +266,7 @@
             <el-button size="small" @click="resetTemplateFilters">{{ ui.resetFilters }}</el-button>
           </div>
         </div>
-        <el-table :data="filteredTemplates" v-loading="templateLoading" row-key="id" :empty-text="templates.length ? ui.noTemplateMatch : ui.noTemplates">
+        <el-table size="small" :data="filteredTemplates" v-loading="templateLoading" row-key="id" :empty-text="templates.length ? ui.noTemplateMatch : ui.noTemplates">
           <el-table-column prop="name" :label="ui.taskName" min-width="180" show-overflow-tooltip />
           <el-table-column :label="ui.executionType" width="130">
             <template #default="{ row }">
@@ -366,33 +331,32 @@
             </el-select>
           </div>
         </div>
-        <el-table :data="tasks" v-loading="taskLoading" row-key="id" :empty-text="ui.emptyTasks" @selection-change="handleTaskHistorySelectionChange">
+        <el-table size="small" :data="tasks" v-loading="taskLoading" row-key="id" :empty-text="ui.emptyTasks" @selection-change="handleTaskHistorySelectionChange">
           <el-table-column type="selection" width="44" reserve-selection />
-          <el-table-column prop="name" :label="ui.taskName" min-width="180" />
-          <el-table-column prop="target_type_display" :label="ui.targetType" width="100" />
-          <el-table-column prop="trigger_source_display" :label="ui.triggerSource" width="118" />
+          <el-table-column :label="ui.taskName" min-width="260">
+            <template #default="{ row }">
+              <div class="history-name-cell">
+                <strong>{{ row.name }}</strong>
+                <div class="history-name-meta">
+                  <span>{{ row.target_type_display || ui.hostResource }}</span>
+                  <span>{{ row.trigger_source_display || '-' }}</span>
+                  <span>{{ row.risk_level_display || '-' }}</span>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column :label="ui.executionType" width="130">
             <template #default="{ row }">{{ templateExecutionKindLabel(row) }}</template>
-          </el-table-column>
-          <el-table-column :label="ui.riskLevel" width="88">
-            <template #default="{ row }"><el-tag size="small" :type="riskTagType(row.risk_level)">{{ row.risk_level_display || '-' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column :label="ui.executionMode" width="110">
-            <template #default="{ row }">{{ executionModeLabel(row.execution_mode, row.execution_mode_display) }}</template>
           </el-table-column>
           <el-table-column prop="created_by" :label="ui.executor" width="100" />
           <el-table-column prop="target_count" :label="ui.targetCount" width="84" />
           <el-table-column :label="ui.result" width="120">
             <template #default="{ row }"><el-tag size="small" :type="taskStatusType(row.status)">{{ row.lifecycle_status_display || row.status_display }}</el-tag></template>
           </el-table-column>
-          <el-table-column :label="ui.successFailed" width="120">
-            <template #default="{ row }">{{ row.success_count }}/{{ row.failed_count }}</template>
-          </el-table-column>
-          <el-table-column prop="summary" :label="ui.summary" min-width="240" show-overflow-tooltip />
           <el-table-column :label="ui.finishedAt" width="170">
             <template #default="{ row }">{{ formatDateTime(row.finished_at || row.created_at) }}</template>
           </el-table-column>
-          <el-table-column :label="ui.actions" width="260" fixed="right">
+          <el-table-column :label="ui.actions" width="220" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="openDetail(row)">{{ ui.detail }}</el-button>
               <el-button v-if="canExecuteTask(row)" link type="primary" size="small" @click="handleExecuteTask(row)">{{ ui.startTask }}</el-button>
@@ -448,7 +412,7 @@
               <div class="form-row">
                 <el-form-item :label="ui.executionMode" class="form-col">
                   <el-select v-model="templateDraft.execution_mode" style="width: 100%" :disabled="templateDraft.task_type === 'run_playbook' || templateDraft.target_type === 'k8s'">
-                    <el-option v-for="option in executionModeOptions" :key="option.value" :label="option.label" :value="option.value" />
+                    <el-option v-for="option in availableTemplateExecutionModeOptions" :key="option.value" :label="option.label" :value="option.value" />
                   </el-select>
                 </el-form-item>
                 <el-form-item :label="ui.modeHint" class="form-col">
@@ -514,7 +478,7 @@
               </div>
               <div v-else-if="templateDraft.task_type === 'k8s_pod_exec'" class="template-payload-stack">
                 <el-form-item :label="ui.command" class="form-col wide">
-                  <el-input v-model="templateDraft.payload.command" type="textarea" :rows="8" placeholder="例如：pwd && ls -lah /app" />
+                  <el-input v-model="templateDraft.payload.command" type="textarea" :rows="8" placeholder="例如：kubectl get deployment -A" />
                 </el-form-item>
                 <div class="task-inline-tip">{{ ui.k8sTip }}</div>
               </div>
@@ -564,7 +528,7 @@
         </div>
       </template>
     </el-dialog>
-    <el-drawer v-model="templateDetailVisible" :title="ui.templateDetailTitle" size="42%">
+    <el-drawer v-model="templateDetailVisible" class="task-center-drawer" :title="ui.templateDetailTitle" size="42%" append-to-body>
       <template v-if="currentTemplate">
         <div class="detail-summary">
           <div class="detail-chip"><strong>{{ currentTemplate.name }}</strong></div>
@@ -599,22 +563,30 @@
         </div>
       </template>
     </el-drawer>
-    <el-drawer v-model="detailVisible" :title="ui.detailTitle" size="68%">
+    <el-drawer v-model="detailVisible" class="task-center-drawer" :title="ui.detailTitle" size="68%" append-to-body>
       <div v-loading="detailLoading" class="task-detail-shell">
         <template v-if="detailTask">
-          <div class="detail-summary">
-            <div class="detail-chip"><strong>{{ detailTask.name }}</strong></div>
-            <div class="detail-chip">{{ detailTask.target_type_display || ui.hostResource }}</div>
-            <div class="detail-chip">{{ detailTask.task_type_display }}</div>
-            <div class="detail-chip">{{ ui.executionMode }}: {{ executionModeLabel(detailTask.execution_mode, detailTask.execution_mode_display) }}</div>
-            <div class="detail-chip">{{ ui.status }}: {{ detailTask.lifecycle_status_display || detailTask.status_display }}</div>
-            <div class="detail-chip">{{ ui.triggerSource }}: {{ detailTask.trigger_source_display || '-' }}</div>
-            <div class="detail-chip">{{ ui.riskLevel }}: {{ detailTask.risk_level_display || '-' }}</div>
-            <div class="detail-chip">{{ ui.successRate }}: {{ detailTask.success_rate }}%</div>
-            <div class="detail-chip">{{ ui.executor }}: {{ detailTask.created_by || '-' }}</div>
-            <div class="detail-chip">{{ ui.createdAt }}: {{ formatDateTime(detailTask.created_at) }}</div>
+          <div class="detail-heading">
+            <div class="detail-heading-main">
+              <div class="detail-title-row">
+                <strong class="detail-main-title">{{ detailTask.name }}</strong>
+                <el-tag size="small" :type="taskStatusType(detailTask.status)">{{ detailTask.lifecycle_status_display || detailTask.status_display }}</el-tag>
+              </div>
+              <div class="detail-subline">
+                <span>{{ detailTask.task_type_display }}</span>
+                <span>{{ executionModeLabel(detailTask.execution_mode, detailTask.execution_mode_display) }}</span>
+                <span>{{ ui.executor }}: {{ detailTask.created_by || '-' }}</span>
+                <span>{{ formatDateTime(detailTask.created_at) }}</span>
+              </div>
+            </div>
+            <div class="detail-summary compact">
+              <div class="detail-chip">{{ detailTask.target_type_display || ui.hostResource }}</div>
+              <div class="detail-chip">{{ ui.riskLevel }}: {{ detailTask.risk_level_display || '-' }}</div>
+              <div class="detail-chip">{{ ui.successRate }}: {{ detailTask.success_rate }}%</div>
+              <div class="detail-chip">{{ ui.targetCount }}: {{ detailTask.target_count || 0 }}</div>
+            </div>
           </div>
-          <div class="task-metric-grid">
+          <div class="task-metric-grid compact">
             <div class="task-metric-card">
               <span class="task-metric-label">{{ ui.targetCount }}</span>
               <strong>{{ detailTask.target_count || 0 }}</strong>
@@ -632,24 +604,23 @@
               <strong>{{ detailTask.skipped_count || 0 }}</strong>
             </div>
           </div>
-          <div class="detail-section">
-            <div class="detail-section-title">{{ ui.summary }}</div>
-            <div class="detail-kv">{{ detailTask.summary || detailTask.description || ui.emptyDesc }}</div>
-            <div v-if="detailTask.cancel_requested" class="detail-kv danger-text">{{ ui.cancelRequestedBy }}: {{ detailTask.cancel_requested_by || '-' }} | {{ ui.cancelRequestedAt }}: {{ formatDateTime(detailTask.cancel_requested_at) }}</div>
-          </div>
-          <div class="detail-grid">
+          <div class="detail-grid compact">
             <div class="detail-section">
-              <div class="detail-section-title">{{ ui.executionOverview }}</div>
-              <div class="detail-kv">{{ ui.strategy }}: {{ executionStrategyLabel(detailTask.execution_strategy) }}</div>
-              <div class="detail-kv">{{ ui.timeout }}: {{ detailTask.timeout_seconds || 0 }}s</div>
-              <div class="detail-kv">{{ ui.triggerSource }}: {{ detailTask.trigger_source_display || '-' }}</div>
-              <div class="detail-kv">{{ ui.startedAt }}: {{ formatDateTime(detailTask.started_at) }}</div>
-              <div class="detail-kv">{{ ui.finishedAt }}: {{ formatDateTime(detailTask.finished_at) }}</div>
+              <div class="detail-section-title">{{ ui.summary }}</div>
+              <div class="detail-kv">{{ detailTask.summary || detailTask.description || ui.emptyDesc }}</div>
+              <div class="detail-kv compact-stack">
+                <span>{{ ui.strategy }}: {{ executionStrategyLabel(detailTask.execution_strategy) }}</span>
+                <span>{{ ui.timeout }}: {{ detailTask.timeout_seconds || 0 }}s</span>
+                <span>{{ ui.triggerSource }}: {{ detailTask.trigger_source_display || '-' }}</span>
+                <span>{{ ui.startedAt }}: {{ formatDateTime(detailTask.started_at) }}</span>
+                <span>{{ ui.finishedAt }}: {{ formatDateTime(detailTask.finished_at) }}</span>
+              </div>
+              <div v-if="detailTask.cancel_requested" class="detail-kv danger-text">{{ ui.cancelRequestedBy }}: {{ detailTask.cancel_requested_by || '-' }} | {{ ui.cancelRequestedAt }}: {{ formatDateTime(detailTask.cancel_requested_at) }}</div>
             </div>
             <div class="detail-section">
               <div class="detail-section-title">{{ detailTask.target_type === 'k8s' ? ui.targetResources : ui.targetHosts }}</div>
-              <div v-if="detailTask.target_snapshot?.length" class="target-chip-grid">
-                <div v-for="host in detailTask.target_snapshot" :key="`${detailTask.id}-${host.id || host.hostname}`" class="target-host-chip">
+              <div v-if="detailTask.target_snapshot?.length" class="target-list">
+                <div v-for="host in detailTask.target_snapshot" :key="`${detailTask.id}-${host.id || host.hostname}`" class="target-list-item">
                   <strong>{{ host.hostname || host.name || '-' }}</strong>
                   <span>{{ host.ip_address || host.cluster_name || '-' }}</span>
                   <span v-if="host.namespace">{{ host.namespace }}</span>
@@ -658,16 +629,6 @@
               <div v-else class="detail-kv">{{ ui.emptyTargets }}</div>
             </div>
           </div>
-          <div class="detail-section">
-            <div class="detail-section-title">{{ ui.taskPayload }}</div>
-            <pre v-if="detailTask.task_type === 'run_command'" class="detail-code-block">{{ detailTask.payload?.command || '-' }}</pre>
-            <template v-else-if="detailTask.task_type === 'run_playbook'">
-              <div class="detail-kv">{{ ui.playbookName }}: {{ detailTask.payload?.playbook_name || '-' }}</div>
-              <pre class="detail-code-block template-code-block">{{ detailTask.payload?.playbook_content || '-' }}</pre>
-            </template>
-            <div v-else-if="detailTask.task_type === 'service_status'" class="detail-kv">{{ ui.serviceDetail }}: {{ detailTask.payload?.service_name || '-' }}</div>
-            <div v-else class="detail-kv">{{ ui.noExtraParams }}</div>
-          </div>
           <div v-if="Object.keys(detailTask.payload || {}).length" class="detail-section">
             <div class="detail-section-title">{{ ui.taskPayload }} JSON</div>
             <pre class="detail-code-block">{{ formatPayloadJson(detailTask.payload) }}</pre>
@@ -675,17 +636,14 @@
           <div class="detail-section">
             <div class="detail-section-title">{{ ui.executionDetails }}</div>
             <el-table :data="detailTask.executions || []" max-height="520" :empty-text="ui.emptyExecutions">
-              <el-table-column prop="host_name" :label="ui.host" min-width="140" />
-              <el-table-column prop="target_name" :label="ui.targetResource" min-width="140" />
-              <el-table-column prop="host_ip" label="IP" width="140" />
-              <el-table-column :label="ui.status" width="100">
+              <el-table-column prop="target_name" :label="ui.targetResource" min-width="160" />
+              <el-table-column :label="ui.status" width="88">
                 <template #default="{ row }"><el-tag size="small" :type="executionStatusType(row.status)">{{ row.status_display }}</el-tag></template>
               </el-table-column>
-              <el-table-column :label="ui.duration" width="90">
+              <el-table-column :label="ui.duration" width="76">
                 <template #default="{ row }">{{ row.duration_ms }}ms</template>
               </el-table-column>
-              <el-table-column prop="command" :label="ui.command" min-width="200" show-overflow-tooltip />
-              <el-table-column :label="ui.output" min-width="280">
+              <el-table-column :label="ui.output" min-width="560">
                 <template #default="{ row }"><div class="output-block">{{ row.error_message || row.output || '-' }}</div></template>
               </el-table-column>
             </el-table>
@@ -699,7 +657,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, VideoPlay } from '@element-plus/icons-vue'
+import { Clock, Collection, Promotion, Search, VideoPlay } from '@element-plus/icons-vue'
 import {
   batchCancelHostTasks,
   cancelHostTask,
@@ -715,7 +673,6 @@ import {
   getHostTasks,
   rerunHostTask,
 } from '@/api/modules/ops'
-import { getK8sClusters } from '@/api/modules/container'
 const route = useRoute()
 const ui = {
 
@@ -724,7 +681,7 @@ const ui = {
   quickStart: '\u5feb\u901f\u8d77\u6b65',
   dispatchAdvice: '\u4e0b\u53d1\u5efa\u8bae',
   templateLibrary: '\u6a21\u677f\u5e93',
-  templateLibraryTip: '将常用巡检、变更和诊断编排沉淀为模板；任务执行类型只保留 Shell、Python、Ansible Playbook 和 K8s 命令。',
+  templateLibraryTip: '将常用巡检、变更和诊断编排沉淀为模板；任务执行类型只保留 Shell、Python、Ansible Playbook 和 K8s API。',
   commandLibrary: '\u5e38\u7528\u547d\u4ee4\u5e93',
   commandTip: '\u5efa\u8bae\u5148\u5728\u6d4b\u8bd5\u73af\u5883\u9a8c\u8bc1',
   libraryAdvice: '\u6a21\u677f\u6cbb\u7406\u5efa\u8bae',
@@ -804,10 +761,12 @@ const ui = {
   selectTargets: '选择执行资源',
   k8sTip: 'K8s 任务会通过集群 API 执行，适合 Pod 重启、Pod 内诊断命令和工作负载伸缩。',
   searchHostPlaceholder: '搜索资源名称 / IP',
+  searchK8sPlaceholder: '搜索集群名称 / 描述',
   businessLine: '系统',
   environment: '\u73af\u5883',
   status: '\u72b6\u6001',
   matchedHosts: '\u547d\u4e2d',
+  matchedK8s: '命中',
   queryHosts: '查询资源',
   resetFilters: '\u91cd\u7f6e\u7b5b\u9009',
   selectCurrent: '\u5168\u9009\u5f53\u524d',
@@ -815,6 +774,10 @@ const ui = {
   onlineHosts: '\u5728\u7ebf',
   warningHosts: '\u544a\u8b66',
   offlineHosts: '\u79bb\u7ebf',
+  activeClusters: '可用',
+  inactiveClusters: '停用',
+  selectedClusters: '已选',
+  unitCluster: '个集群',
   hostName: '资源名称',
   ipAddress: 'IP \u5730\u5740',
   submitTip: '下发前请确认执行账号、维护窗口与目标资源范围。',
@@ -843,7 +806,7 @@ const ui = {
   duration: '\u8017\u65f6',
   output: '\u7ed3\u679c\u8f93\u51fa',
   executionOverview: '\u6267\u884c\u6982\u89c8',
-  executionDetails: '\u4e3b\u673a\u6267\u884c\u660e\u7ec6',
+  executionDetails: '执行明细',
   triggerSource: '\u89e6\u53d1\u6765\u6e90',
   riskLevel: '\u98ce\u9669',
   startTask: '\u6267\u884c',
@@ -856,6 +819,7 @@ const ui = {
   cancelRequestedBy: '\u7ec8\u6b62\u53d1\u8d77\u4eba',
   cancelRequestedAt: '\u7ec8\u6b62\u7533\u8bf7\u65f6\u95f4',
   emptyHosts: '暂无匹配执行资源',
+  emptyK8sTargets: '暂无匹配 K8s 集群',
   emptyTasks: '\u6682\u65e0\u4efb\u52a1\u8bb0\u5f55',
   emptyExecutions: '\u6682\u65e0\u6267\u884c\u660e\u7ec6',
   saveTemplateTitle: '\u4fdd\u5b58\u4e3a\u6a21\u677f',
@@ -879,6 +843,7 @@ const ui = {
   deleteTemplateFailed: '\u5220\u9664\u4efb\u52a1\u6a21\u677f\u5931\u8d25',
   taskNameRequired: '\u8bf7\u586b\u5199\u4efb\u52a1\u540d\u79f0',
   hostRequired: '请至少选择一个主机资源',
+  k8sRequired: '请至少选择一个 K8s 集群',
   runCommandConfirm: '\u5c06\u6267\u884c\u6279\u91cf\u547d\u4ee4\uff0c\u8bf7\u786e\u8ba4\u547d\u4ee4\u5185\u5bb9\u548c\u7ef4\u62a4\u7a97\u53e3\u3002',
   overLimitConfirm: '\u76ee\u6807\u4e3b\u673a\u8d85\u8fc7 20 \u53f0\uff0c\u5efa\u8bae\u518d\u6b21\u786e\u8ba4\u5f71\u54cd\u8303\u56f4\u3002',
   confirmExecuteTitle: '\u786e\u8ba4\u6267\u884c\u4efb\u52a1',
@@ -890,28 +855,16 @@ const ui = {
   cancel: '\u53d6\u6d88',
 }
 const innerTabs = [
-  { key: 'dispatch', label: '\u4efb\u52a1\u4e0b\u53d1', desc: '\u9009\u62e9\u76ee\u6807\u4e3b\u673a\u5e76\u7acb\u5373\u6267\u884c' },
-  { key: 'library', label: '\u6a21\u677f\u5e93', desc: '维护可复用执行模板' },
-  { key: 'history', label: '\u4efb\u52a1\u5386\u53f2', desc: '\u67e5\u770b\u7ed3\u679c\u3001\u91cd\u8dd1\u4e0e\u7ec8\u6b62\u4efb\u52a1' },
-]
-const taskTypeOptions = [
-  { label: '\u6279\u91cf\u547d\u4ee4\u6267\u884c', value: 'run_command' },
-  { label: 'Ansible Playbook \u6267\u884c', value: 'run_playbook' },
-  { label: 'SSH \u8fde\u901a\u6027\u6821\u9a8c', value: 'check_connection' },
-  { label: '\u4e3b\u673a\u4fe1\u606f\u5237\u65b0', value: 'refresh_metrics' },
-  { label: '\u670d\u52a1\u72b6\u6001\u5de1\u68c0', value: 'service_status' },
-  { label: 'K8s Pod 重启', value: 'k8s_restart_pod' },
-  { label: 'K8s Pod 命令执行', value: 'k8s_pod_exec' },
-  { label: 'K8s 工作负载伸缩', value: 'k8s_scale_workload' },
+  { key: 'dispatch', label: '\u4efb\u52a1\u4e0b\u53d1', icon: Promotion, desc: '\u9009\u62e9\u76ee\u6807\u4e3b\u673a\u5e76\u7acb\u5373\u6267\u884c' },
+  { key: 'library', label: '\u6a21\u677f\u5e93', icon: Collection, desc: '维护可复用执行模板' },
+  { key: 'history', label: '\u4efb\u52a1\u5386\u53f2', icon: Clock, desc: '\u67e5\u770b\u7ed3\u679c\u3001\u91cd\u8dd1\u4e0e\u7ec8\u6b62\u4efb\u52a1' },
 ]
 const executionTypeOptions = [
   { label: 'Shell 脚本', value: 'shell', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '在主机资源上执行 Shell 命令或脚本片段。' },
   { label: 'Python 脚本', value: 'python', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '通过 Python 解释器执行诊断、巡检或自动化脚本。' },
   { label: 'Ansible Playbook', value: 'playbook', targetType: 'host', taskType: 'run_playbook', executionMode: 'ansible', desc: '执行结构化 Playbook，适合固化编排流程。' },
-  { label: 'K8s 命令', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群或 Pod 内执行操作。' },
+  { label: 'K8s API', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群执行 kubectl 命令。' },
 ]
-const hostTaskTypeOptions = taskTypeOptions.filter(item => !item.value.startsWith('k8s_'))
-const k8sTaskTypeOptions = taskTypeOptions.filter(item => item.value.startsWith('k8s_'))
 const targetTypeOptions = [
   { label: ui.hostResource, value: 'host' },
   { label: ui.k8sResource, value: 'k8s' },
@@ -925,6 +878,11 @@ const hostStatusOptions = [
   { label: '\u5728\u7ebf', value: 'online' },
   { label: '\u79bb\u7ebf', value: 'offline' },
   { label: '\u544a\u8b66', value: 'warning' },
+]
+const k8sStatusOptions = [
+  { label: '可用', value: 'active' },
+  { label: '停用', value: 'inactive' },
+  { label: '异常', value: 'warning' },
 ]
 const taskStatusOptions = [
   { label: '\u6392\u961f\u4e2d', value: 'pending' },
@@ -947,18 +905,12 @@ const riskLevelOptions = [
   { label: '\u9ad8', value: 'high' },
   { label: '\u6781\u9ad8', value: 'critical' },
 ]
-const commandSnippets = [
-  { key: 'health', title: '\u5065\u5eb7\u5ea6\u5feb\u901f\u6821\u9a8c', scene: '\u53d1\u5e03\u524d', desc: '\u67e5\u770b\u8d1f\u8f7d\u3001\u78c1\u76d8\u3001\u5185\u5b58\u4e0e\u767b\u5f55\u7528\u6237', command: 'hostname && uptime && df -h && free -m && who', name: '\u53d1\u5e03\u524d\u5065\u5eb7\u5ea6\u6821\u9a8c', description: '\u9002\u5408\u53d1\u5e03\u524d\u5feb\u901f\u6838\u67e5\u4e3b\u673a\u5065\u5eb7\u72b6\u6001\u3002', execution_mode: 'ansible', timeout_seconds: 30, execution_strategy: 'stop_on_error' },
-  { key: 'network', title: '\u7f51\u7edc\u94fe\u8def\u8bca\u65ad', scene: '\u6545\u969c\u6392\u67e5', desc: '\u67e5\u770b IP\u3001\u8def\u7531\u548c\u7aef\u53e3\u76d1\u542c\u60c5\u51b5', command: 'ip addr && ip route && ss -tunlp | head -20', name: '\u7f51\u7edc\u8fde\u901a\u6392\u67e5', description: '\u9002\u5408\u7f51\u7edc\u6296\u52a8\u3001IP \u6216\u7aef\u53e3\u95ee\u9898\u6392\u67e5\u3002', execution_mode: 'ansible', timeout_seconds: 30, execution_strategy: 'continue' },
-  { key: 'logs', title: '\u65e5\u5fd7\u4e0e\u8fdb\u7a0b\u5de1\u68c0', scene: '\u53d1\u5e03\u540e', desc: '\u67e5\u770b\u8fdb\u7a0b\u548c systemd \u6700\u8fd1\u65e5\u5fd7', command: 'ps -ef | head -20 && journalctl -n 100 --no-pager', name: '\u8fdb\u7a0b\u4e0e\u65e5\u5fd7\u5de1\u68c0', description: '\u9002\u5408\u53d1\u5e03\u540e\u5feb\u901f\u786e\u8ba4\u8fdb\u7a0b\u4e0e\u65e5\u5fd7\u3002', execution_mode: 'ansible', timeout_seconds: 45, execution_strategy: 'continue' },
-]
-const dispatchAdvice = ['\u9ad8\u98ce\u9669\u547d\u4ee4\u5efa\u8bae\u5148\u6309\u4e1a\u52a1\u7ebf\u6216\u73af\u5883\u5206\u6279\u4e0b\u53d1\u3002', '\u547d\u4ee4\u578b\u4efb\u52a1\u4f18\u5148\u4f7f\u7528\u5931\u8d25\u5373\u505c\uff0c\u51cf\u5c11\u653e\u5927\u5f71\u54cd\u3002', '\u4efb\u52a1\u540d\u79f0\u5c3d\u91cf\u5e26\u4e0a\u7a97\u53e3\u3001\u8303\u56f4\u4e0e\u64cd\u4f5c\u76ee\u6807\u3002']
-const libraryAdvice = ['\u6a21\u677f\u8bf4\u660e\u91cc\u5199\u6e05\u9002\u7528\u573a\u666f\u3001\u56de\u6eda\u65b9\u6cd5\u548c\u7ef4\u62a4\u7a97\u53e3\u3002', '\u9ad8\u9891\u547d\u4ee4\u4f18\u5148\u6c89\u6dc0\u6210\u6a21\u677f\uff0c\u907f\u514d\u4eba\u5de5\u590d\u5236\u7c98\u8d34\u51fa\u9519\u3002', '\u6279\u91cf\u547d\u4ee4\u5efa\u8bae\u4f18\u5148\u4fdd\u6301\u53ea\u8bfb\uff0c\u53d8\u66f4\u547d\u4ee4\u5355\u72ec\u5ba1\u6279\u3002']
 const templateEditorAdvice = ['\u6a21\u677f\u540d\u79f0\u5efa\u8bae\u5e26\u4e0a\u573a\u666f\u3001\u670d\u52a1\u6216\u7a97\u53e3\u4fe1\u606f\uff0c\u65b9\u4fbf\u641c\u7d22\u590d\u7528\u3002', '\u547d\u4ee4\u6a21\u677f\u9002\u5408\u505a\u5feb\u901f\u5de1\u68c0\uff1bPlaybook \u6a21\u677f\u66f4\u9002\u5408\u56fa\u5316\u68c0\u67e5\u6b65\u9aa4\u3002', 'Playbook \u5185\u5bb9\u5efa\u8bae\u4f18\u5148\u4fdd\u6301 gather_facts: false \u548c changed_when: false\uff0c\u51cf\u5c11\u5bf9\u76ee\u6807\u4e3b\u673a\u7684\u6253\u6270\u3002']
 const playbookExample = '- hosts: targets\n  gather_facts: false\n  tasks:\n    - name: check app process\n      shell: ps -ef | grep myapp | grep -v grep\n      changed_when: false\n    - name: tail recent log\n      shell: journalctl -u myapp -n 50 --no-pager\n      changed_when: false'
 const props = defineProps({ resourceTree: { type: Array, default: () => [] } })
 const activeTab = ref('dispatch')
 const hostTableRef = ref(null)
+const k8sTargetTableRef = ref(null)
 const targetLoading = ref(false)
 const taskLoading = ref(false)
 const templateLoading = ref(false)
@@ -975,11 +927,9 @@ const detailLoading = ref(false)
 const detailTask = ref(null)
 const currentTemplate = ref(null)
 const availableHosts = ref([])
-const availableK8sResources = ref([])
-const k8sClusters = ref([])
-const k8sForm = ref({ cluster_id: '', namespace: 'default', name: '', container: '' })
-const selectedK8sResourceId = ref('')
+const availableK8sTargets = ref([])
 const selectedRows = ref([])
+const selectedK8sRows = ref([])
 const selectedTaskRows = ref([])
 const tasks = ref([])
 const templates = ref([])
@@ -993,16 +943,6 @@ const taskForm = ref(defaultTaskForm())
 const templateDraft = ref(defaultTemplateDraft())
 const executionKind = ref('shell')
 const templateExecutionKind = ref('shell')
-const presets = [
-  { key: 'run_command', title: '\u6279\u91cf\u547d\u4ee4\u6267\u884c', desc: '\u9762\u5411\u8fd0\u7ef4\u53d8\u66f4\u548c\u4e34\u65f6\u5de1\u68c0\u7684\u4e00\u6b21\u6027\u4e0b\u53d1\u3002' },
-  { key: 'run_playbook', title: 'Ansible Playbook \u6267\u884c', desc: '\u9002\u5408\u56fa\u5316\u5de1\u68c0\u6b65\u9aa4\u3001\u6279\u91cf\u9884\u68c0\u548c\u7edf\u4e00\u6267\u884c Playbook \u5267\u672c\u3002' },
-  { key: 'check_connection', title: 'SSH \u8fde\u901a\u6027\u6821\u9a8c', desc: '\u6279\u91cf\u68c0\u67e5\u8d26\u53f7\u3001\u7aef\u53e3\u548c\u7f51\u7edc\u8fde\u901a\u72b6\u6001\u3002' },
-  { key: 'refresh_metrics', title: '\u4e3b\u673a\u4fe1\u606f\u5237\u65b0', desc: '\u7edf\u4e00\u5237\u65b0 CPU\u3001\u5185\u5b58\u3001\u78c1\u76d8\u4e0e\u5728\u7ebf\u72b6\u6001\u3002' },
-  { key: 'service_status', title: '\u670d\u52a1\u72b6\u6001\u5de1\u68c0', desc: '\u6309\u670d\u52a1\u540d\u6279\u91cf\u67e5\u770b systemd \u8fd0\u884c\u72b6\u6001\u3002' },
-  { key: 'k8s_restart_pod', title: 'K8s Pod 重启', desc: '通过删除 Pod 触发控制器自动重建，适合异常 Pod 快速恢复。' },
-  { key: 'k8s_pod_exec', title: 'K8s Pod 命令执行', desc: '在指定 Pod 内执行诊断命令，适合容器内状态排查。' },
-  { key: 'k8s_scale_workload', title: 'K8s 工作负载伸缩', desc: '统一调整 Deployment 或 StatefulSet 副本数。' },
-]
 const envNodes = computed(() => props.resourceTree.filter(item => item.group_type === 'environment'))
 const currentSystemOptions = computed(() => (envNodes.value.find(item => item.id === targetFilters.value.environment)?.children || []))
 const filteredTemplates = computed(() => {
@@ -1013,13 +953,25 @@ const filteredTemplates = computed(() => {
     return matchKeyword && matchType
   })
 })
+const availableExecutionModeOptions = computed(() => {
+  if (taskForm.value.target_type === 'k8s' || executionKind.value === 'k8s_command') {
+    return executionModeOptions.filter(item => item.value === 'k8s_api')
+  }
+  return executionModeOptions.filter(item => item.value !== 'k8s_api')
+})
+const availableTemplateExecutionModeOptions = computed(() => {
+  if (templateDraft.value.target_type === 'k8s' || templateExecutionKind.value === 'k8s_command') {
+    return executionModeOptions.filter(item => item.value === 'k8s_api')
+  }
+  return executionModeOptions.filter(item => item.value !== 'k8s_api')
+})
 const templateDialogTitle = computed(() => (templateEditorMode.value === 'edit' ? ui.editTemplateTitle : ui.createTemplateTitle))
 const templateDialogSubmitText = computed(() => (templateEditorMode.value === 'edit' ? ui.updateTemplateSubmit : ui.createTemplateSubmit))
 const templateDraftTypeLabel = computed(() => executionKindLabel(templateExecutionKind.value))
 const selectedResourceIds = computed(() => selectedRows.value.map(item => item.id))
 const selectedHostIds = selectedResourceIds
-const selectedTargetCount = computed(() => taskForm.value.target_type === 'k8s' ? (k8sForm.value.cluster_id && k8sForm.value.name ? 1 : 0) : selectedHostIds.value.length)
-const currentTaskTypeLabel = computed(() => taskTypeLabel(taskForm.value.task_type))
+const selectedK8sClusterIds = computed(() => selectedK8sRows.value.map(item => item.cluster || item.cluster_id || item.id).filter(Boolean))
+const selectedTargetCount = computed(() => taskForm.value.target_type === 'k8s' ? selectedK8sClusterIds.value.length : selectedHostIds.value.length)
 const currentExecutionKindLabel = computed(() => executionKindLabel(executionKind.value))
 const selectedCancelableTaskIds = computed(() => selectedTaskRows.value.filter(canCancelTask).map(item => item.id))
 const selectedStats = computed(() => selectedRows.value.reduce((summary, item) => {
@@ -1028,6 +980,12 @@ const selectedStats = computed(() => selectedRows.value.reduce((summary, item) =
   if (item.status === 'offline') summary.offline += 1
   return summary
 }, { online: 0, offline: 0, warning: 0 }))
+const selectedK8sStats = computed(() => selectedK8sRows.value.reduce((summary, item) => {
+  if (item.status === 'active') summary.active += 1
+  if (item.status === 'warning') summary.warning += 1
+  if (item.status === 'inactive') summary.inactive += 1
+  return summary
+}, { active: 0, inactive: 0, warning: 0 }))
 const sourceCards = computed(() => {
   const bySource = taskStats.value.by_source || {}
   const byTargetType = taskStats.value.by_target_type || {}
@@ -1039,9 +997,6 @@ const sourceCards = computed(() => {
     { key: 'manual', label: '\u4eba\u5de5\u4e0b\u53d1', source: 'manual', value: bySource.manual || 0, desc: '\u9875\u9762\u76f4\u63a5\u521b\u5efa' },
   ]
 })
-const activeTaskTypeOptions = computed(() => taskForm.value.target_type === 'k8s' ? k8sTaskTypeOptions : hostTaskTypeOptions)
-const activePresets = computed(() => presets.filter(item => taskForm.value.target_type === 'k8s' ? item.key.startsWith('k8s_') : !item.key.startsWith('k8s_')))
-const activeExecutionTypeOptions = computed(() => executionTypeOptions.filter(item => taskForm.value.target_type === 'k8s' ? item.targetType === 'k8s' : item.targetType === 'host'))
 function defaultPayload() { return { command: '', script_kind: 'shell', service_name: '', playbook_name: '', playbook_content: '', workload_type: 'deployment', replicas: 1 } }
 function defaultTaskForm() { return { name: '', target_type: 'host', task_type: 'run_command', description: '', execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, payload: buildPayloadByExecutionKind('shell') } }
 function defaultTemplateDraft() { return { name: '', target_type: 'host', task_type: 'run_command', description: '', execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, payload: buildPayloadByExecutionKind('shell') } }
@@ -1049,7 +1004,7 @@ function buildPresetPayload(taskType) {
   if (taskType === 'run_command') return { ...defaultPayload(), command: 'uptime && df -h && free -m' }
   if (taskType === 'run_playbook') return { ...defaultPayload(), playbook_name: 'service-health.yml', playbook_content: playbookExample }
   if (taskType === 'service_status') return { ...defaultPayload(), service_name: 'nginx' }
-  if (taskType === 'k8s_pod_exec') return { ...defaultPayload(), command: 'pwd && ls -lah /app' }
+  if (taskType === 'k8s_pod_exec') return { ...defaultPayload(), command: 'kubectl get deployment -A' }
   if (taskType === 'k8s_scale_workload') return { ...defaultPayload(), workload_type: 'deployment', replicas: 2 }
   return defaultPayload()
 }
@@ -1060,13 +1015,11 @@ function buildPayloadByExecutionKind(kind) {
   return { ...defaultPayload(), script_kind: 'shell', command: 'uptime && df -h' }
 }
 function handleSelectionChange(rows) { selectedRows.value = rows }
+function handleK8sSelectionChange(rows) { selectedK8sRows.value = rows }
 function handleTaskHistorySelectionChange(rows) { selectedTaskRows.value = rows }
 function executionStrategyLabel(strategy) { return strategy === 'stop_on_error' ? ui.stopOnError : ui.continueOnError }
 function executionModeLabel(mode, display) { return display || executionModeOptions.find(item => item.value === mode)?.label || mode || '-' }
 function executionModeHint(mode, taskType) { if (taskType === 'run_playbook') return ui.playbookOnlyAnsible; return mode === 'ansible' ? ui.ansibleMode : ui.sshMode }
-function k8sResourceLabel(resource) {
-  return [resource.cluster_name || resource.name, resource.environment_name, resource.system_name].filter(Boolean).join(' / ')
-}
 function detectExecutionKind(source = {}) {
   const taskType = source.task_type || ''
   if (taskType.startsWith('k8s_') || source.target_type === 'k8s') return 'k8s_command'
@@ -1084,7 +1037,7 @@ function normalizePayloadByType(taskType, source = {}) {
   if (taskType === 'run_command') return { command: (source.command || '').trim(), script_kind: source.script_kind === 'python' ? 'python' : 'shell' }
   if (taskType === 'run_playbook') return { playbook_name: (source.playbook_name || '').trim(), playbook_content: (source.playbook_content || '').trim() }
   if (taskType === 'service_status') return { service_name: (source.service_name || '').trim() }
-  if (taskType === 'k8s_pod_exec') return { command: (source.command || '').trim(), container: (k8sForm.value.container || '').trim() }
+  if (taskType === 'k8s_pod_exec') return { command: (source.command || '').trim() }
   if (taskType === 'k8s_scale_workload') return { workload_type: source.workload_type || 'deployment', replicas: Number(source.replicas || 0) }
   return {}
 }
@@ -1093,8 +1046,6 @@ function validatePayloadByType(taskType, payload) {
   if (taskType === 'run_playbook' && !payload.playbook_content) return ElMessage.warning(ui.playbookRequired), false
   if (taskType === 'service_status' && !payload.service_name) return ElMessage.warning(ui.serviceRequired), false
   if (taskType === 'k8s_pod_exec' && !payload.command) return ElMessage.warning(ui.commandRequired), false
-  if (taskType.startsWith('k8s_') && !k8sForm.value.cluster_id) return ElMessage.warning('请选择 K8s 集群'), false
-  if (taskType.startsWith('k8s_') && !k8sForm.value.name) return ElMessage.warning(taskType === 'k8s_scale_workload' ? '请填写工作负载名称' : '请填写 Pod 名称'), false
   return true
 }
 function normalizePayload() { return normalizePayloadByType(taskForm.value.task_type, taskForm.value.payload || {}) }
@@ -1111,9 +1062,8 @@ function templatePreviewLabel(template) {
   return ui.serviceDetail
 }
 function formatPayloadJson(payload) { return JSON.stringify(payload || {}, null, 2) }
-function taskTypeLabel(taskType) { return taskTypeOptions.find(item => item.value === taskType)?.label || taskType || '-' }
 function buildTemplateDraft(source = {}) {
-  const taskType = source.task_type || 'check_connection'
+  const taskType = source.task_type || 'run_command'
   const targetType = source.target_type || (taskType.startsWith('k8s_') ? 'k8s' : 'host')
   return {
     name: source.name || '',
@@ -1156,33 +1106,20 @@ function applyTemplate(template) {
       replicas: template.payload?.replicas ?? 1,
     },
   }
+  clearSelection()
+  fetchTargets()
   activeTab.value = 'dispatch'
   templateDetailVisible.value = false
   ElMessage.success(ui.templateApplySuccess)
-}
-function applyCommandSnippet(snippet) {
-  taskForm.value.task_type = 'run_command'
-  taskForm.value.name = snippet.name
-  taskForm.value.description = snippet.description
-  taskForm.value.execution_mode = snippet.execution_mode || 'ansible'
-  taskForm.value.execution_strategy = snippet.execution_strategy
-  taskForm.value.timeout_seconds = snippet.timeout_seconds
-  taskForm.value.payload = { ...defaultPayload(), command: snippet.command }
-  activeTab.value = 'dispatch'
-  ElMessage.success(ui.snippetApplySuccess)
 }
 function canCancelTask(task) { return ['pending', 'running'].includes(task.status) && !task.cancel_requested }
 function canExecuteTask(task) { return task.status === 'pending' && !task.cancel_requested }
 function riskTagType(risk) { if (risk === 'critical' || risk === 'high') return 'danger'; if (risk === 'medium') return 'warning'; return 'success' }
 function applySourceFilter(source, targetType = '') { taskFilters.value.trigger_source = source; taskFilters.value.target_type = targetType; taskPage.value = 1; activeTab.value = 'history'; fetchTasks() }
 function handleEnvironmentChange() { targetFilters.value.system = '' }
-function selectTargetType(targetType) {
-  if (taskForm.value.target_type === targetType) return
-  taskForm.value.target_type = targetType
-  handleTargetTypeChange()
-}
-function applyExecutionKind(kind) {
+async function applyExecutionKind(kind) {
   const option = executionTypeOptions.find(item => item.value === kind) || executionTypeOptions[0]
+  const previousTargetType = taskForm.value.target_type
   executionKind.value = option.value
   taskForm.value.target_type = option.targetType
   taskForm.value.task_type = option.taskType
@@ -1192,47 +1129,8 @@ function applyExecutionKind(kind) {
   taskForm.value.timeout_seconds = option.value === 'playbook' ? 60 : 30
   taskForm.value.execution_strategy = option.value === 'shell' || option.value === 'python' || option.value === 'playbook' ? 'stop_on_error' : 'continue'
   taskForm.value.payload = buildPayloadByExecutionKind(option.value)
-  if (option.targetType === 'k8s') {
-    k8sForm.value = { cluster_id: '', namespace: 'default', name: '', container: '' }
-  } else {
-    selectedK8sResourceId.value = ''
-  }
-}
-function handleTargetTypeChange() {
-  clearSelection()
-  if (taskForm.value.target_type === 'k8s') {
-    applyExecutionKind('k8s_command')
-  } else {
-    applyExecutionKind('shell')
-  }
-}
-function handleTaskTypeChange() {
-  if (taskForm.value.task_type.startsWith('k8s_')) {
-    taskForm.value.target_type = 'k8s'
-    taskForm.value.execution_mode = 'k8s_api'
-    taskForm.value.payload = { ...defaultPayload(), ...buildPresetPayload(taskForm.value.task_type), ...taskForm.value.payload }
-    return
-  }
-  if (['run_command', 'run_playbook'].includes(taskForm.value.task_type)) taskForm.value.execution_mode = 'ansible'
-  if (taskForm.value.task_type !== 'run_command') taskForm.value.payload.command = ''
-  if (taskForm.value.task_type !== 'run_playbook') { taskForm.value.payload.playbook_name = ''; taskForm.value.payload.playbook_content = '' }
-  if (taskForm.value.task_type !== 'service_status') taskForm.value.payload.service_name = ''
-}
-function handleTemplateDraftTypeChange() {
-  const nextType = templateDraft.value.task_type
-  const previousPreset = presets.find(item => item.key === lastTemplateDraftType.value)
-  const nextPreset = presets.find(item => item.key === nextType)
-  if (nextPreset) {
-    if (!templateDraft.value.name || templateDraft.value.name === previousPreset?.title) templateDraft.value.name = nextPreset.title
-    if (!templateDraft.value.description || templateDraft.value.description === previousPreset?.desc) templateDraft.value.description = nextPreset.desc
-  }
-  templateDraft.value.target_type = nextType.startsWith('k8s_') ? 'k8s' : 'host'
-  if (['run_command', 'run_playbook'].includes(nextType)) templateDraft.value.execution_mode = 'ansible'
-  if (nextType.startsWith('k8s_')) templateDraft.value.execution_mode = 'k8s_api'
-  if (nextType !== 'run_command') templateDraft.value.payload.command = ''
-  if (nextType !== 'run_playbook') { templateDraft.value.payload.playbook_name = ''; templateDraft.value.payload.playbook_content = '' }
-  if (nextType !== 'service_status') templateDraft.value.payload.service_name = ''
-  lastTemplateDraftType.value = nextType
+  if (previousTargetType !== option.targetType) clearSelection()
+  await fetchTargets()
 }
 function handleTemplateExecutionKindChange(kind) {
   const option = executionTypeOptions.find(item => item.value === kind) || executionTypeOptions[0]
@@ -1250,17 +1148,6 @@ function handleTemplateExecutionKindChange(kind) {
     templateDraft.value.description = option.desc
   }
   lastTemplateDraftType.value = option.taskType
-}
-function applyTemplatePresetToDraft(preset) {
-  templateDraft.value.task_type = preset.key
-  templateDraft.value.target_type = preset.key.startsWith('k8s_') ? 'k8s' : 'host'
-  templateDraft.value.name = preset.title
-  templateDraft.value.description = preset.desc
-  templateDraft.value.execution_mode = preset.key.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(preset.key) ? 'ansible' : 'ssh')
-  templateDraft.value.timeout_seconds = preset.key === 'run_playbook' ? 60 : preset.key === 'run_command' ? 30 : 15
-  templateDraft.value.execution_strategy = ['run_command', 'run_playbook'].includes(preset.key) ? 'stop_on_error' : 'continue'
-  templateDraft.value.payload = buildPresetPayload(preset.key)
-  lastTemplateDraftType.value = preset.key
 }
 function openTemplateCreateDialog() {
   templateEditorMode.value = 'create'
@@ -1291,20 +1178,10 @@ function openTemplateDetail(template) {
   templateDetailVisible.value = true
 }
 function resetTemplateFilters() { templateFilters.value = { search: '', execution_kind: '' } }
-function applyPreset(preset) {
-  taskForm.value.task_type = preset.key
-  taskForm.value.target_type = preset.key.startsWith('k8s_') ? 'k8s' : 'host'
-  taskForm.value.name = preset.title
-  taskForm.value.description = preset.desc
-  taskForm.value.execution_mode = preset.key.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(preset.key) ? 'ansible' : 'ssh')
-  taskForm.value.timeout_seconds = preset.key === 'run_playbook' ? 60 : preset.key === 'run_command' ? 30 : 15
-  taskForm.value.execution_strategy = ['run_command', 'run_playbook'].includes(preset.key) ? 'stop_on_error' : 'continue'
-  taskForm.value.payload = buildPresetPayload(preset.key)
-}
 function taskStatusType(status) { if (status === 'success') return 'success'; if (status === 'partial') return 'warning'; if (status === 'failed' || status === 'canceled') return 'danger'; return 'info' }
 function executionStatusType(status) { if (status === 'success') return 'success'; if (status === 'failed' || status === 'canceled') return 'danger'; if (status === 'running' || status === 'partial') return 'warning'; return 'info' }
 function formatDateTime(value) { return value ? value.replace('T', ' ').slice(0, 19) : '-' }
-async function fetchTargets() {
+async function fetchHostTargets() {
   targetLoading.value = true
   try {
     const res = await getTaskResourceOptions({ ...targetFilters.value, resource_type: 'host' })
@@ -1314,6 +1191,21 @@ async function fetchTargets() {
   } finally {
     targetLoading.value = false
   }
+}
+async function fetchK8sTargets() {
+  targetLoading.value = true
+  try {
+    const res = await getTaskResourceOptions({ ...targetFilters.value, resource_type: 'k8s' })
+    availableK8sTargets.value = Array.isArray(res) ? res : (res.results || [])
+  } catch (error) {
+    ElMessage.error(ui.loadTargetsFailed)
+  } finally {
+    targetLoading.value = false
+  }
+}
+async function fetchTargets() {
+  if (taskForm.value.target_type === 'k8s') return fetchK8sTargets()
+  return fetchHostTargets()
 }
 async function fetchStats() {
   try {
@@ -1330,23 +1222,6 @@ async function fetchStats() {
       by_target_type: res?.by_target_type || {},
     }
   } catch (error) {}
-}
-async function fetchK8sClusters() {
-  try { k8sClusters.value = await getK8sClusters() } catch (error) { k8sClusters.value = [] }
-}
-async function fetchK8sResources() {
-  try {
-    const res = await getTaskResourceOptions({ resource_type: 'k8s', status: 'active' })
-    availableK8sResources.value = Array.isArray(res) ? res : (res.results || [])
-  } catch (error) {
-    availableK8sResources.value = []
-  }
-}
-function applyK8sResource(resourceId) {
-  const resource = availableK8sResources.value.find(item => item.id === resourceId)
-  if (!resource) return
-  k8sForm.value.cluster_id = resource.cluster || ''
-  k8sForm.value.namespace = k8sForm.value.namespace || 'default'
 }
 async function fetchTemplates() {
   templateLoading.value = true
@@ -1380,8 +1255,21 @@ async function fetchTasks() {
     taskLoading.value = false
   }
 }
-function selectAllCurrent() { hostTableRef.value?.clearSelection(); availableHosts.value.forEach(row => hostTableRef.value?.toggleRowSelection(row, true)) }
-function clearSelection() { hostTableRef.value?.clearSelection(); selectedRows.value = [] }
+function selectAllCurrent() {
+  if (taskForm.value.target_type === 'k8s') {
+    k8sTargetTableRef.value?.clearSelection()
+    availableK8sTargets.value.forEach(row => k8sTargetTableRef.value?.toggleRowSelection(row, true))
+    return
+  }
+  hostTableRef.value?.clearSelection()
+  availableHosts.value.forEach(row => hostTableRef.value?.toggleRowSelection(row, true))
+}
+function clearSelection() {
+  hostTableRef.value?.clearSelection()
+  k8sTargetTableRef.value?.clearSelection()
+  selectedRows.value = []
+  selectedK8sRows.value = []
+}
 function resetTargetFilters() { targetFilters.value = { search: '', environment: '', system: '', status: '' }; clearSelection(); fetchTargets() }
 function resetTaskFilters() { taskFilters.value = { search: '', target_type: '', execution_kind: '', status: '', trigger_source: '', risk_level: '' }; taskPage.value = 1; selectedTaskRows.value = []; fetchTasks() }
 async function submitTemplateDraft() {
@@ -1462,10 +1350,12 @@ async function removeTemplate(template) {
 async function submitTask() {
   if (!taskForm.value.name) return ElMessage.warning(ui.taskNameRequired)
   if (taskForm.value.target_type === 'host' && !selectedHostIds.value.length) return ElMessage.warning(ui.hostRequired)
+  if (taskForm.value.target_type === 'k8s' && !selectedK8sClusterIds.value.length) return ElMessage.warning(ui.k8sRequired)
   const payload = normalizePayload()
   if (!validateTaskPayload(payload)) return
+  const k8sTargetNames = selectedK8sRows.value.map(item => item.name).filter(Boolean)
   const targetSummary = taskForm.value.target_type === 'k8s'
-    ? `K8s：${k8sClusters.value.find(item => item.id === k8sForm.value.cluster_id)?.name || k8sForm.value.cluster_id}/${k8sForm.value.namespace || 'default'}/${k8sForm.value.name}`
+    ? `K8s 集群：${k8sTargetNames.length ? `${k8sTargetNames.slice(0, 3).join('、')}${k8sTargetNames.length > 3 ? ` 等 ${k8sTargetNames.length} 个` : ''}` : `${selectedK8sClusterIds.value.length} 个`}`
     : `目标资源：${selectedHostIds.value.length} 个`
   const confirmLines = [`\u4efb\u52a1\u540d\u79f0\uff1a${taskForm.value.name}`, targetSummary, `\u6267\u884c\u7c7b\u578b\uff1a${currentExecutionKindLabel.value}`, `\u6267\u884c\u65b9\u5f0f\uff1a${executionModeLabel(taskForm.value.execution_mode)}`]
   if (taskForm.value.task_type === 'run_command') confirmLines.push(ui.runCommandConfirm)
@@ -1487,13 +1377,10 @@ async function submitTask() {
       payload,
     }
     if (taskForm.value.target_type === 'k8s') {
-      submitPayload.k8s_targets = [{
-        cluster_id: k8sForm.value.cluster_id,
-        namespace: k8sForm.value.namespace || 'default',
-        name: k8sForm.value.name,
-        kind: taskForm.value.task_type === 'k8s_scale_workload' ? taskForm.value.payload.workload_type : 'pod',
-        container: k8sForm.value.container || '',
-      }]
+      submitPayload.k8s_targets = selectedK8sClusterIds.value.map(clusterId => ({
+        cluster_id: clusterId,
+        kind: 'cluster',
+      }))
     } else {
       submitPayload.resource_ids = selectedHostIds.value
     }
@@ -1501,8 +1388,7 @@ async function submitTask() {
     ElMessage.success(ui.taskExecuted)
     detailTask.value = task
     detailVisible.value = true
-    taskForm.value = defaultTaskForm()
-    applyPreset(presets.find(item => item.key === 'check_connection') || presets[0])
+    applyExecutionKind('shell')
     clearSelection()
     activeTab.value = 'history'
     await Promise.all([fetchStats(), fetchTasks()])
@@ -1555,32 +1441,963 @@ async function handleBatchCancel() {
   } catch (error) { ElMessage.error(error?.response?.data?.detail || ui.batchCancelFailed) }
 }
 async function reloadAll() {
-  await Promise.all([fetchStats(), fetchTargets(), fetchTasks(), fetchTemplates(), fetchK8sClusters(), fetchK8sResources()])
+  await Promise.all([fetchStats(), fetchTasks(), fetchTemplates()])
 }
 onMounted(async () => {
   if (route.query.target === 'k8s') {
-    applyExecutionKind('k8s_command')
+    await applyExecutionKind('k8s_command')
   } else {
-    applyExecutionKind('shell')
+    await applyExecutionKind('shell')
   }
   await reloadAll()
 })
 </script>
 <style scoped>
-.task-center-page{display:flex;flex-direction:column;gap:4px}
+.task-center-page {
+  --tc-border: rgba(15, 23, 42, 0.08);
+  --tc-border-strong: rgba(59, 130, 246, 0.18);
+  --tc-bg-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.94) 100%);
+  --tc-bg-panel: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+  --tc-bg-subtle: rgba(248, 250, 252, 0.92);
+  --tc-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  --tc-shadow-hover: 0 14px 30px rgba(15, 23, 42, 0.08);
+  --tc-primary: #2563eb;
+  --tc-primary-soft: rgba(37, 99, 235, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 
-.inner-tabs{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;align-self:flex-start;margin-bottom:4px;padding:4px;border:1px solid rgba(148,163,184,.16);border-radius:14px;background:linear-gradient(180deg,rgba(255,255,255,.95) 0%,rgba(248,250,252,.92) 100%);box-shadow:0 10px 24px rgba(15,23,42,.04)}.inner-tab-btn{min-width:0;flex:0 0 auto;height:34px;padding:0 16px;border:none;border-radius:10px;background:transparent;display:inline-flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;transition:.18s ease background,.18s ease box-shadow,.18s ease color;color:#64748b}.inner-tab-btn:hover{background:rgba(255,255,255,.76);color:#1d4ed8}.inner-tab-btn.active{background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.08),0 0 0 1px rgba(59,130,246,.14) inset;color:#1d4ed8}.inner-tab-title{font-size:13px;font-weight:700;line-height:1.1}
-.task-source-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:4px 0}.task-source-card{min-height:74px;padding:10px 12px;border:1px solid rgba(148,163,184,.16);border-radius:12px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);display:flex;flex-direction:column;align-items:flex-start;gap:4px;cursor:pointer;text-align:left;box-shadow:0 10px 22px rgba(15,23,42,.04);transition:.2s ease border-color,.2s ease transform,.2s ease box-shadow}.task-source-card:hover,.task-source-card.active{border-color:rgba(37,99,235,.32);box-shadow:0 14px 26px rgba(37,99,235,.08);transform:translateY(-1px)}.task-source-card span{color:#64748b;font-size:12px}.task-source-card strong{color:#0f172a;font-size:22px;line-height:1}.task-source-card small{color:#94a3b8;font-size:11px;line-height:1.35}
-.dispatch-overview{display:flex;flex-direction:column;gap:6px;margin:0 0 10px;padding:8px 10px;border:1px solid rgba(148,163,184,.14);border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,.96) 0%,rgba(248,250,252,.88) 100%);box-shadow:0 8px 18px rgba(15,23,42,.03)}.dispatch-overview-main{display:grid;grid-template-columns:1.3fr .85fr .85fr;gap:6px;align-items:stretch}.dispatch-step{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:7px 10px;border-radius:10px;background:rgba(255,255,255,.72);border:1px solid rgba(148,163,184,.12)}.dispatch-step--target{flex-direction:column;align-items:flex-start;justify-content:center;background:linear-gradient(180deg,rgba(255,255,255,.94) 0%,rgba(243,248,255,.9) 100%)}.dispatch-step-label{color:#64748b;font-size:11px;line-height:1.2;white-space:nowrap}.dispatch-step strong{color:#0f172a;font-size:13px;line-height:1.35}.dispatch-overview-tip{padding-left:2px;color:#94a3b8;font-size:11px;line-height:1.45}.target-type-segment{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.target-type-btn{height:28px;padding:0 12px;border:1px solid rgba(148,163,184,.2);border-radius:999px;background:rgba(255,255,255,.9);color:#475569;font-size:12px;cursor:pointer;transition:.18s ease border-color,.18s ease background,.18s ease color,.18s ease box-shadow}.target-type-btn:hover{border-color:rgba(37,99,235,.28);background:#fff;color:#1d4ed8}.target-type-btn.active{border-color:#2563eb;background:#2563eb;color:#fff;box-shadow:0 6px 14px rgba(37,99,235,.16)}.k8s-cluster-tip{margin-bottom:0}
-.glass-card{background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.18);border-radius:18px;box-shadow:0 16px 34px rgba(15,23,42,.07);padding:14px 16px}.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;font-weight:600;color:#0f172a}.compact-head{margin-bottom:8px}
-.composer-grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px}.library-grid{grid-template-columns:minmax(0,1.2fr) minmax(320px,.8fr)}.side-stack{display:flex;flex-direction:column;gap:8px}.task-form-head-actions,.history-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.preset-grid,.template-grid,.snippet-grid{display:grid;gap:10px}.preset-card,.snippet-card,.template-card{padding:14px;border:1px solid rgba(148,163,184,.18);border-radius:14px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);box-shadow:0 10px 24px rgba(15,23,42,.04);text-align:left;transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease}.preset-card,.snippet-card{cursor:pointer}.preset-card:hover,.snippet-card:hover,.template-card:hover{border-color:rgba(96,165,250,.35);box-shadow:0 16px 30px rgba(37,99,235,.1);transform:translateY(-2px)}.preset-card.active{border-color:#3b82f6;box-shadow:0 18px 32px rgba(59,130,246,.14)}
-.preset-title{color:#0f172a;font-weight:600}.preset-desc,.template-desc,.section-tip{margin-top:6px;color:#64748b;font-size:12px;line-height:1.5}.section-gap{margin-bottom:10px}.template-title-row,.snippet-title-row,.template-action-row,.template-tag-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.template-meta-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:8px;color:#64748b;font-size:12px}.template-preview{margin-top:10px;padding:10px 12px;border-radius:12px;background:rgba(15,23,42,.03);border:1px dashed rgba(148,163,184,.26)}.template-preview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.template-preview-code{display:block;color:#0f172a;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all}.snippet-scene{color:#2563eb;font-size:12px;background:rgba(59,130,246,.12);border-radius:999px;padding:2px 8px}.snippet-command{display:block;margin-top:8px;padding:8px 10px;border-radius:10px;background:#0f172a;color:#e2e8f0;font-size:12px;white-space:pre-wrap;word-break:break-all}.inline-empty{padding:12px 4px;color:#94a3b8;font-size:12px;text-align:center}
-.mini-panel{padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.mini-panel-title{font-size:13px;font-weight:600;color:#0f172a;margin-bottom:10px}.mini-bullet{position:relative;padding-left:14px;color:#64748b;font-size:12px;line-height:1.7}.mini-bullet::before{content:'';position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:#60a5fa}.task-inline-tip{margin-bottom:8px;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg, rgba(59,130,246,.08) 0%, rgba(14,165,233,.04) 100%);border:1px solid rgba(59,130,246,.14);color:#64748b;font-size:12px;line-height:1.45}
-.task-form{margin-top:4px}.form-row{display:flex;gap:12px}.form-col{flex:1}.form-col.wide{flex:1 1 100%}.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}.toolbar-left,.toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.selection-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}.selection-pill{padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.1);color:#2563eb;font-size:12px}.selection-pill.success{background:rgba(16,185,129,.14);color:#047857}.selection-pill.warning{background:rgba(245,158,11,.14);color:#b45309}.selection-pill.danger{background:rgba(239,68,68,.14);color:#b91c1c}
-.submit-row{margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:12px}.submit-tip{color:#64748b;font-size:12px}.submit-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-toolbar{margin-bottom:8px}.template-editor-topbar{display:flex;flex-direction:column;gap:8px;margin-bottom:8px}.template-editor-presets{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.template-editor-label{color:#64748b;font-size:12px}.template-editor-chip{padding:6px 10px;border:none;border-radius:999px;background:rgba(59,130,246,.08);color:#2563eb;font-size:12px;cursor:pointer;transition:.2s ease background,.2s ease transform}.template-editor-chip:hover{background:rgba(59,130,246,.14);transform:translateY(-1px)}.template-editor-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:8px}.template-overview-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f4f8ff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.template-overview-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.template-editor-layout{display:grid;grid-template-columns:minmax(0,1.28fr) minmax(280px,.72fr);gap:14px}.template-editor-main{min-width:0}.template-editor-side{display:flex;flex-direction:column;gap:12px}.template-editor-panel{padding:14px;border-radius:16px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.14)}.template-editor-section + .template-editor-section{margin-top:8px}.template-editor-section-title{margin-bottom:8px;color:#0f172a;font-size:13px;font-weight:600}.template-payload-stack{display:flex;flex-direction:column;gap:12px}.template-editor-help{background:linear-gradient(180deg,#f8fbff 0%,#f3f7fd 100%)}.template-editor-preview{align-self:start}.template-code-block{margin-top:8px;max-height:320px;overflow:auto}.history-card{min-width:0}.history-head{margin-bottom:8px}.history-toolbar{margin:8px 0}
-.pagination-row{display:flex;justify-content:flex-end;margin-top:8px}.task-detail-shell{display:flex;flex-direction:column;gap:8px}.detail-summary{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:0}.detail-chip{padding:7px 12px;border-radius:999px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.14);color:#1e3a8a;font-size:12px;line-height:1.4}.detail-desc{margin-bottom:8px;color:#64748b;font-size:13px}.task-metric-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.task-metric-card{padding:12px 14px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 20px rgba(15,23,42,.04)}.task-metric-card.success{background:linear-gradient(180deg,#f0fdf4 0%,#f7fee7 100%)}.task-metric-card.danger{background:linear-gradient(180deg,#fff1f2 0%,#fef2f2 100%)}.task-metric-card.warning{background:linear-gradient(180deg,#fffbeb 0%,#fefce8 100%)}.task-metric-label{display:block;margin-bottom:6px;color:#64748b;font-size:12px}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.detail-section{display:flex;flex-direction:column;gap:8px;margin-bottom:0;padding:14px;border-radius:14px;background:rgba(248,250,252,.88);border:1px solid rgba(148,163,184,.16)}.detail-section-title{margin-bottom:0;color:#0f172a;font-size:13px;font-weight:600}.detail-kv{color:#475569;font-size:13px;line-height:1.7}.compact-kv{padding:7px 0;min-height:32px}.detail-code-block{margin:0;padding:12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word}.detail-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:8px}.danger-text{color:#b91c1c}.target-chip-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.target-host-chip{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid rgba(148,163,184,.16)}.target-host-chip strong{color:#0f172a;font-size:13px}.target-host-chip span{color:#64748b;font-size:12px}.output-block{max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px 12px;border-radius:12px;background:#0f172a;color:#e2e8f0;font-family:Consolas,Monaco,monospace;font-size:12px;line-height:1.6}
-@media (max-width: 1100px) { .composer-grid,.library-grid,.task-source-grid,.dispatch-overview-main,.template-editor-layout,.template-editor-overview,.task-metric-grid,.detail-grid,.target-chip-grid{grid-template-columns:1fr} }
-@media (max-width: 900px) { .form-row,.submit-row,.template-title-row,.template-action-row{flex-direction:column;align-items:stretch} }
+.task-inner-tabs {
+  display: flex;
+  width: 100%;
+  align-self: stretch;
+  margin-bottom: 2px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.9));
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.04);
+}
+
+.task-inner-tab-btn {
+  min-height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  gap: 6px;
+}
+
+.task-inner-tab-btn:hover {
+  background: rgba(51, 112, 255, 0.06);
+}
+
+.task-inner-tab-btn.active {
+  background: #e8f0ff;
+  color: #245bdb;
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.08);
+}
+
+.inner-tab-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.task-source-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 2px 0 0;
+}
+
+.task-source-card {
+  min-height: 78px;
+  padding: 12px 14px;
+  border: 1px solid var(--tc-border);
+  border-radius: 16px;
+  background: var(--tc-bg-panel);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+  transition: 0.2s ease border-color, 0.2s ease transform, 0.2s ease box-shadow, 0.2s ease background;
+}
+
+.task-source-card:hover,
+.task-source-card.active {
+  border-color: var(--tc-border-strong);
+  background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+  box-shadow: var(--tc-shadow-hover);
+  transform: translateY(-1px);
+}
+
+.task-source-card span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-source-card strong {
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.task-source-card small {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.k8s-cluster-tip {
+  margin-bottom: 0;
+}
+
+.glass-card {
+  background: var(--tc-bg-panel);
+  border: 1px solid var(--tc-border);
+  border-radius: 20px;
+  box-shadow: var(--tc-shadow);
+  padding: 14px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.compact-head {
+  margin-bottom: 8px;
+}
+
+.composer-grid {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.library-grid {
+  grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
+}
+
+.side-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-form-head-actions,
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.preset-grid,
+.template-grid,
+.snippet-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.preset-card,
+.snippet-card,
+.template-card {
+  padding: 12px;
+  border: 1px solid var(--tc-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #fafcff 100%);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.03);
+  text-align: left;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.preset-card,
+.snippet-card {
+  cursor: pointer;
+}
+
+.preset-card:hover,
+.snippet-card:hover,
+.template-card:hover {
+  border-color: var(--tc-border-strong);
+  box-shadow: var(--tc-shadow-hover);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  transform: translateY(-1px);
+}
+
+.preset-card.active {
+  border-color: rgba(37, 99, 235, 0.22);
+  background: linear-gradient(180deg, #f8fbff 0%, #eef5ff 100%);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.08);
+}
+
+.preset-title {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.preset-desc,
+.template-desc,
+.section-tip {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.section-gap {
+  margin-bottom: 10px;
+}
+
+.template-title-row,
+.snippet-title-row,
+.template-action-row,
+.template-tag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.template-preview {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.025);
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+}
+
+.template-preview-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.template-preview-code {
+  display: block;
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.snippet-scene {
+  color: #2563eb;
+  font-size: 12px;
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.snippet-command {
+  display: block;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.inline-empty {
+  padding: 12px 4px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+
+.mini-panel {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.mini-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 10px;
+}
+
+.mini-bullet {
+  position: relative;
+  padding-left: 14px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.mini-bullet::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #60a5fa;
+}
+
+.task-inline-tip {
+  margin-bottom: 8px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.06) 0%, rgba(14, 165, 233, 0.03) 100%);
+  border: 1px solid rgba(37, 99, 235, 0.1);
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-form {
+  margin-top: 2px;
+}
+
+.task-dispatch-form :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-col {
+  flex: 1;
+}
+
+.form-col.wide {
+  flex: 1 1 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.toolbar-left,
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.toolbar :deep(.el-input__wrapper),
+.toolbar :deep(.el-select__wrapper) {
+  min-height: 28px;
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.12) inset;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.toolbar :deep(.el-input__wrapper:hover),
+.toolbar :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.16) inset;
+}
+
+.toolbar :deep(.el-tag) {
+  height: 26px;
+  border-radius: 8px;
+}
+
+.toolbar-right :deep(.el-button),
+.history-actions :deep(.el-button),
+.task-form-head-actions :deep(.el-button),
+.head-actions :deep(.el-button) {
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.toolbar-right :deep(.el-button:not(.el-button--primary)),
+.history-actions :deep(.el-button:not(.el-button--primary)),
+.task-form-head-actions :deep(.el-button:not(.el-button--primary)),
+.head-actions :deep(.el-button:not(.el-button--primary)) {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  box-shadow: none;
+}
+
+.toolbar-right :deep(.el-button:not(.is-link):hover),
+.history-actions :deep(.el-button:not(.is-link):hover),
+.task-form-head-actions :deep(.el-button:not(.is-link):hover),
+.head-actions :deep(.el-button:not(.is-link):hover) {
+  border-color: rgba(59, 130, 246, 0.18);
+  color: #1d4ed8;
+  background: #f8fbff;
+}
+
+.selection-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.selection-pill {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  color: #2563eb;
+  font-size: 11px;
+}
+
+.selection-pill.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+
+.selection-pill.warning {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+.selection-pill.danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.submit-row {
+  margin-top: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.submit-tip {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.submit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.template-toolbar {
+  margin-bottom: 6px;
+}
+
+.template-editor-topbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.template-editor-presets {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.template-editor-label {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.template-editor-chip {
+  padding: 5px 9px;
+  border: 1px solid rgba(59, 130, 246, 0.08);
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.06);
+  color: #2563eb;
+  font-size: 11px;
+  cursor: pointer;
+  transition: 0.2s ease background, 0.2s ease transform;
+}
+
+.template-editor-chip:hover {
+  background: rgba(59, 130, 246, 0.12);
+  transform: translateY(-1px);
+}
+
+.template-editor-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.template-overview-card {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.template-overview-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.template-editor-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+  gap: 10px;
+}
+
+.template-editor-main {
+  min-width: 0;
+}
+
+.template-editor-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.template-editor-panel {
+  padding: 12px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.template-editor-section + .template-editor-section {
+  margin-top: 6px;
+}
+
+.template-editor-section-title {
+  margin-bottom: 6px;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.template-payload-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.template-editor-help {
+  background: linear-gradient(180deg, #f8fbff 0%, #f3f7fd 100%);
+}
+
+.template-editor-preview {
+  align-self: start;
+}
+
+.template-code-block {
+  margin-top: 6px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.history-card {
+  min-width: 0;
+}
+
+.history-head {
+  margin-bottom: 6px;
+}
+
+.history-toolbar {
+  margin: 6px 0;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.history-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.history-name-cell strong {
+  color: #0f172a;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.history-name-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.task-detail-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.detail-heading-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.detail-main-title {
+  color: #0f172a;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.detail-subline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.detail-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 0;
+}
+
+.detail-summary.compact {
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.detail-chip {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.12);
+  color: #1e3a8a;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.detail-desc {
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.task-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.task-metric-grid.compact {
+  gap: 6px;
+}
+
+.task-metric-card {
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.task-metric-card.success {
+  background: linear-gradient(180deg, #f0fdf4 0%, #f7fee7 100%);
+}
+
+.task-metric-card.danger {
+  background: linear-gradient(180deg, #fff1f2 0%, #fef2f2 100%);
+}
+
+.task-metric-card.warning {
+  background: linear-gradient(180deg, #fffbeb 0%, #fefce8 100%);
+}
+
+.task-metric-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.detail-grid.compact {
+  gap: 6px;
+}
+
+.detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 0;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.detail-section-title {
+  margin-bottom: 0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.detail-kv {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.compact-stack {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+}
+
+.compact-kv {
+  padding: 5px 0;
+  min-height: 28px;
+}
+
+.detail-code-block {
+  margin: 0;
+  padding: 10px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.danger-text {
+  color: #b91c1c;
+}
+
+.target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.target-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(120px, 0.9fr) minmax(80px, 0.7fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.18);
+}
+
+.target-list-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.target-list-item:first-child {
+  padding-top: 0;
+}
+
+.target-list-item strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.target-list-item span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.output-block {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-center-page :deep(.el-input__wrapper),
+.task-center-page :deep(.el-textarea__inner),
+.task-center-page :deep(.el-select__wrapper) {
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.16) inset;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.task-center-page :deep(.el-input__wrapper:hover),
+.task-center-page :deep(.el-select__wrapper:hover),
+.task-center-page :deep(.el-textarea__inner:hover) {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18) inset;
+}
+
+.task-center-page :deep(.el-input__wrapper.is-focus),
+.task-center-page :deep(.el-select__wrapper.is-focused),
+.task-center-page :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.22) inset;
+}
+
+.task-center-page :deep(.el-button) {
+  border-radius: 10px;
+}
+
+.task-center-page :deep(.el-table) {
+  --el-table-border-color: rgba(148, 163, 184, 0.16);
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-row-hover-bg-color: #f8fbff;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.task-center-page :deep(.el-table th.el-table__cell) {
+  color: #475569;
+  font-weight: 600;
+  background: #f8fafc;
+}
+
+.task-center-page :deep(.el-drawer__header) {
+  margin-bottom: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.task-center-page :deep(.task-center-drawer) {
+  height: 100vh;
+  max-height: 100vh;
+}
+
+.task-center-page :deep(.task-center-drawer .el-drawer__header) {
+  padding: 14px 18px 10px;
+}
+
+.task-center-page :deep(.task-center-drawer .el-drawer__body) {
+  min-height: calc(100vh - 56px);
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  background: #f8fafc;
+}
+
+@media (max-width: 1100px) {
+  .composer-grid,
+  .library-grid,
+  .task-source-grid,
+  .template-editor-layout,
+  .template-editor-overview,
+  .task-metric-grid,
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .detail-heading,
+  .form-row,
+  .submit-row,
+  .template-title-row,
+  .template-action-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .compact-stack {
+    grid-template-columns: 1fr;
+  }
+
+  .target-list-item {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
 </style>
