@@ -179,6 +179,7 @@ class AIOpsKnowledgeEnvironment(models.Model):
     k8s_cluster_ids = models.JSONField('K8s 集群', default=list, blank=True)
     k8s_namespaces = models.JSONField('K8s 命名空间', default=dict, blank=True)
     docker_host_ids = models.JSONField('Docker 环境', default=list, blank=True)
+    task_resource_environment_ids = models.JSONField('任务资源底座环境', default=list, blank=True)
     association_snapshot = models.JSONField('关联快照', default=dict, blank=True)
     child_node_snapshot = models.JSONField('子节点快照', default=dict, blank=True)
     snapshot_generated_at = models.DateTimeField('快照生成时间', null=True, blank=True)
@@ -213,7 +214,7 @@ class AIOpsChatSession(models.Model):
         null=True,
         blank=True,
         related_name='mirrored_sessions',
-        verbose_name='?????',
+        verbose_name='镜像来源',
     )
     title = models.CharField('标题', max_length=128, default='新会话')
     status = models.CharField('状态', max_length=16, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
@@ -261,7 +262,7 @@ class AIOpsChatMessage(models.Model):
         null=True,
         blank=True,
         related_name='mirrored_messages',
-        verbose_name='?????',
+        verbose_name='镜像来源',
     )
     role = models.CharField('角色', max_length=16, choices=ROLE_CHOICES)
     message_type = models.CharField('消息类型', max_length=16, choices=TYPE_CHOICES, default=TYPE_TEXT)
@@ -320,7 +321,7 @@ class AIOpsPendingAction(models.Model):
         null=True,
         blank=True,
         related_name='mirrored_actions',
-        verbose_name='?????',
+        verbose_name='镜像来源',
     )
     message = models.ForeignKey(
         AIOpsChatMessage,

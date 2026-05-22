@@ -12,7 +12,7 @@ from rest_framework.test import APIClient
 from cmdb.models import CIType, ConfigItem
 from eventwall.models import EventRecord, EventSource
 from marketplace.models import ServiceDeployment, ServiceTemplate
-from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSystem, TracingDataSource, TransactionTicket
+from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSystem, TaskResource, TaskResourceGroup, TracingDataSource, TransactionTicket
 from rbac.models import Role
 from rbac.services import ensure_builtin_rbac
 
@@ -24,6 +24,7 @@ from .services import (
     _ensure_followup_line,
     _formatter_repair_issue,
     _is_formatted_answer_valid,
+    _is_direct_log_question,
     _normalize_formatter_output,
     _request_model_completion,
     recover_masked_suggested_question,
@@ -39,9 +40,11 @@ from .services import (
     query_cost_report,
     query_cmdb_items,
     query_hosts,
+    query_task_resources,
     query_k8s_cluster_summary,
     query_grafana_promql,
     query_alert_root_cause,
+    query_logs,
     query_recent_changes,
     query_system_posture,
     query_traces,
@@ -104,6 +107,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('query_event_wall', active_tools)
         self.assertIn('query_container_assets', active_tools)
         self.assertIn('generate_host_task', active_tools)
+        self.assertIn('query_task_resources', active_tools)
         self.assertIn('query_k8s_resources', active_tools)
         self.assertNotIn('query_workorders', active_tools)
         self.assertNotIn('query_task_center', active_tools)
@@ -141,6 +145,25 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         entry = next(item for item in response.data['k8s_clusters'] if item['id'] == cluster.id)
         self.assertEqual(entry['namespaces'], ['production', 'monitoring'])
+
+    def test_knowledge_environment_catalog_includes_task_resource_base(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        system = TaskResourceGroup.objects.create(name='订单系统', group_type=TaskResourceGroup.GROUP_SYSTEM, parent=env)
+        TaskResource.objects.create(
+            name='order-node-01',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            system=system,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.1.1.10',
+        )
+
+        response = self.client.get('/api/aiops/knowledge-environments/catalog/')
+
+        self.assertEqual(response.status_code, 200)
+        env_entry = next(item for item in response.data['task_resource_environments'] if item['id'] == env.id)
+        self.assertEqual(env_entry['resource_count'], 1)
+        self.assertNotIn('task_resource_systems', response.data)
 
     def test_knowledge_graph_only_links_observability_and_event_context(self):
         log_source = LogDataSource.objects.create(name='prod-loki', provider='loki', is_enabled=True)
@@ -371,6 +394,14 @@ class AIOpsApiTests(TestCase):
             config={'resource_types': ['deployment']},
         )
         SystemPostureEnvironment.objects.create(key='posture-prod', name='生产态势', is_enabled=True)
+        task_resource_env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        TaskResource.objects.create(
+            name='trade-resource-node-01',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=task_resource_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.30.1.30',
+        )
         AIOpsKnowledgeEnvironment.objects.create(
             name='交易生产',
             aliases=['生产', '线上'],
@@ -382,6 +413,7 @@ class AIOpsApiTests(TestCase):
             posture_environments=['posture-prod'],
             k8s_cluster_ids=[cluster.id],
             docker_host_ids=[docker_host.id],
+            task_resource_environment_ids=[task_resource_env.id],
             is_enabled=True,
             created_by='aiops_user',
             updated_by='aiops_user',
@@ -468,6 +500,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('trade-tempo', node_labels)
         self.assertIn('trade-prod-k8s', node_labels)
         self.assertIn('trade-docker-01', node_labels)
+        self.assertIn('电商测试环境', node_labels)
         self.assertIn('node-01', node_labels)
         self.assertIn('Trade MySQL / trade-mysql', node_labels)
         self.assertIn('Trade Redis', node_labels)
@@ -498,6 +531,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('service_deployment', relation_types)
         self.assertIn('infrastructure_member', relation_types)
         self.assertIn('environment_infrastructure', relation_types)
+        self.assertIn('environment_resource_base', relation_types)
         self.assertIn('environment_observability', relation_types)
         self.assertNotIn('infrastructure_runtime', relation_types)
 
@@ -513,6 +547,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('trade-loki', {item['name'] for item in catalog_response.data['log_datasources']})
         self.assertIn('trade-prod-k8s', {item['name'] for item in catalog_response.data['k8s_clusters']})
         self.assertIn('trade-docker-01', {item['name'] for item in catalog_response.data['docker_hosts']})
+        self.assertIn('电商测试环境', {item['name'] for item in catalog_response.data['task_resource_environments']})
         self.assertNotIn('ELK 演示（API Key 模板）', {item['name'] for item in catalog_response.data['log_datasources']})
 
         knowledge_env = AIOpsKnowledgeEnvironment.objects.get(name='交易生产')
@@ -2077,7 +2112,123 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(result['summary']['status'], 'offline')
         self.assertIn('legacy-data-sync', result['sections'][0]['items'][0])
 
-    def test_query_cost_report_filters_business_line_and_environment(self):
+    def test_query_task_resources_filters_resource_base_hosts_by_named_environment(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        other_env = TaskResourceGroup.objects.create(name='供应链测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+        )
+        TaskResource.objects.create(
+            name='supply-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=other_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.177',
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='task-resource-base')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='电商测试环境下的全部主机')
+
+        result = query_task_resources(
+            session,
+            user_message,
+            self.user,
+            query='电商测试环境下的全部主机',
+            environment='电商测试环境',
+            resource_type='host',
+        )
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['resources'][0]['name'], 'tf-k3s-single-node')
+        self.assertEqual(result['resource_ids'], [result['resources'][0]['id']])
+
+    def test_query_hosts_compat_reads_task_resource_base_when_host_center_removed(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='query-hosts-compat')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='电商测试环境有哪些主机')
+
+        result = query_hosts(session, user_message, self.user, query='电商测试环境有哪些主机')
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['summary']['compat_tool'], 'query_hosts')
+        self.assertEqual(result['resource_ids'][0], env.environment_resources.first().id)
+        self.assertEqual(result['citations'][0]['path'], '/tasks/resources')
+
+    def test_query_task_resources_uses_knowledge_environment_resource_scope(self):
+        ecommerce_env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        supply_env = TaskResourceGroup.objects.create(name='供应链测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        ecommerce = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=ecommerce_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+        )
+        TaskResource.objects.create(
+            name='supply-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=supply_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.177',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[ecommerce_env.id],
+        )
+        session = AIOpsChatSession.objects.create(
+            user=self.user,
+            title='resource-scope',
+            context={'current_environment': {'name': '电商测试环境'}},
+        )
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='全部主机')
+
+        result = query_task_resources(session, user_message, self.user, query='全部主机', resource_type='host')
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['resource_ids'], [ecommerce.id])
+        self.assertEqual(result['summary']['knowledge_environment'], '电商测试环境')
+
+    def test_query_task_resources_soft_fallbacks_system_filter_inside_resource_scope(self):
+        ecommerce_env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        ecommerce = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=ecommerce_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[ecommerce_env.id],
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='resource-soft-system')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='电商测试环境服务器巡检')
+
+        result = query_task_resources(
+            session,
+            user_message,
+            self.user,
+            query='电商测试环境服务器巡检',
+            system_name='电商',
+            resource_type='host',
+        )
+
+        self.assertEqual(result['summary']['count'], 1)
+        self.assertEqual(result['resource_ids'], [ecommerce.id])
+
+    def test_query_cost_report_filters_system_name_and_environment(self):
         ci_type = CIType.objects.create(name='云主机')
         ConfigItem.objects.create(
             name='data-prod-warehouse',
@@ -2108,7 +2259,7 @@ class AIOpsApiTests(TestCase):
 
         result = query_cost_report(session, user_message, self.user, query='数据平台生产环境月成本多少')
 
-        self.assertEqual(result['summary']['business_line'], '数据平台')
+        self.assertEqual(result['summary']['system_name'], '数据平台')
         self.assertEqual(result['summary']['environment'], 'prod')
         self.assertEqual(result['summary']['total_monthly_cost'], 2400.0)
         self.assertIn('月成本合计：2400.00 元', result['sections'][0]['items'][3])
@@ -2587,6 +2738,591 @@ class AIOpsApiTests(TestCase):
         self.assertIn('99.95', assistant_message['content'])
         mocked_completion.assert_not_called()
 
+    @mock.patch('aiops.services.run_log_provider_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_log_fastpath_uses_observability_mapping(self, mocked_completion, mocked_run_query):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-log-analysis-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        log_source = LogDataSource.objects.create(
+            name='ecommerce-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example.com'},
+            is_enabled=True,
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='ecommerce-tempo',
+            provider='tempo',
+            config={'endpoint': 'http://tempo.example.com'},
+            is_enabled=True,
+        )
+        link = ObservabilityDataSourceLink.objects.create(
+            name='ecommerce-observability-link',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+        )
+        cluster = K8sCluster.objects.create(
+            name='ecommerce-k3s',
+            api_server='https://ecommerce-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            log_datasource_ids=[log_source.id],
+            tracing_datasource_ids=[trace_source.id],
+            observability_link_ids=[link.id],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['ecommerce']},
+            is_enabled=True,
+        )
+        mocked_run_query.return_value = {
+            'logs': [{
+                'timestamp': '2026-05-21T10:00:00+08:00',
+                'message': '{"timestamp":"2026-05-21T10:00:00","level":"WARNING","service":"api-gateway","message":"checkout rejected for user_id=scheduled-conflict-001 status_code=409 body={\\"available\\":18,\\"error\\":\\"insufficient inventory\\",\\"product_id\\":3,\\"requested\\":100000}","trace_id":"trace-001","span_id":"span-001"}',
+                'level': 'warning',
+                'source': 'loki',
+                'attributes': {'detected_level': 'warn'},
+            }, {
+                'timestamp': '2026-05-21T09:59:00+08:00',
+                'message': '{"timestamp":"2026-05-21T09:59:00","level":"WARNING","service":"api-gateway","message":"checkout rejected for user_id=scheduled-conflict-002 status_code=409 body={\\"available\\":20,\\"error\\":\\"insufficient inventory\\",\\"product_id\\":1,\\"requested\\":100000}","trace_id":"trace-002","span_id":"span-002"}',
+                'level': 'warning',
+                'source': 'loki',
+                'attributes': {'detected_level': 'warn'},
+            }],
+        }
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_logs',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_logs',
+                                'arguments': '{"query":"电商测试环境 gateway 最近半小时 warn日志","service":"api-gateway","level":"warning","duration_minutes":30,"limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n模型分析认为这些 WARN 与库存校验失败有关。\n依据：\n- 日志样本包含 status_code=409 与 insufficient inventory。\n建议：\n- 继续按 trace_id 关联调用链。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n模型分析认为这些 WARN 与库存校验失败有关。\n依据：\n- 日志样本包含 status_code=409 与 insufficient inventory。\n建议：\n- 继续按 trace_id 关联调用链。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-log'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境 gateway 最近半小时 warn日志'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertEqual(assistant_message['tool_calls'], ['query_logs'])
+        self.assertNotIn('query_alerts', assistant_message['tool_calls'])
+        tool_event_names = [item.get('name') for item in assistant_message['metadata'].get('tool_events', [])]
+        self.assertEqual(set(tool_event_names), {'query_logs'})
+        self.assertNotIn('query_alerts', tool_event_names)
+        self.assertIn('模型分析认为', assistant_message['content'])
+        self.assertEqual(assistant_message['metadata']['formatter_mode'], 'skill')
+        payload = mocked_run_query.call_args.args[2]
+        self.assertEqual(payload['query'], '{container="api-gateway",namespace="ecommerce"} | json | detected_level=~"warn|warning"')
+        mocked_completion.assert_called()
+        self.assertEqual(mocked_completion.call_count, 3)
+
+    def test_direct_log_question_requires_explicit_log_marker(self):
+        self.assertTrue(_is_direct_log_question('电商测试环境 gateway 最近半小时 warn日志'))
+        self.assertTrue(_is_direct_log_question('show gateway warn logs'))
+        self.assertFalse(_is_direct_log_question('show catalog service health'))
+        self.assertFalse(_is_direct_log_question('login service status'))
+
+    @mock.patch('aiops.services.run_log_provider_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_direct_log_fastpath_uses_llm_to_map_chinese_service_name(self, mocked_completion, mocked_run_query):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-log-param-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        log_source = LogDataSource.objects.create(
+            name='order-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example.com'},
+            is_enabled=True,
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='order-tempo',
+            provider='tempo',
+            config={'endpoint': 'http://tempo.example.com'},
+            is_enabled=True,
+        )
+        link = ObservabilityDataSourceLink.objects.create(
+            name='order-observability-link',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+        )
+        cluster = K8sCluster.objects.create(
+            name='order-k3s',
+            api_server='https://order-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            log_datasource_ids=[log_source.id],
+            tracing_datasource_ids=[trace_source.id],
+            observability_link_ids=[link.id],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['ecommerce']},
+            association_snapshot={
+                'nodes': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}],
+                'edges': [],
+            },
+            child_node_snapshot={'children': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}]},
+            is_enabled=True,
+        )
+        mocked_run_query.return_value = {'logs': []}
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_order_logs',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_logs',
+                                'arguments': '{"query":"电商测试环境订单服务最近半小时的警告日志","service":"order","level":"warning","duration_minutes":30,"limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n模型分析认为订单服务当前没有命中警告日志。\n依据：\n- query_logs 返回 0 条。\n建议：\n- 放宽时间窗口后复查。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n模型分析认为订单服务当前没有命中警告日志。\n依据：\n- query_logs 返回 0 条。\n建议：\n- 放宽时间窗口后复查。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'order-log'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境订单服务最近半小时的警告日志'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertEqual(assistant_message['tool_calls'], ['query_logs'])
+        self.assertNotIn('query_alerts', assistant_message['tool_calls'])
+        self.assertIn('模型分析认为订单服务', assistant_message['content'])
+        payload = mocked_run_query.call_args.args[2]
+        self.assertEqual(payload['query'], '{container="order",namespace="ecommerce"} | json | detected_level=~"warn|warning"')
+        self.assertEqual(mocked_completion.call_count, 3)
+
+    @mock.patch('aiops.services.run_log_provider_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_direct_log_fastpath_supports_combined_warning_and_error_levels(self, mocked_completion, mocked_run_query):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-combined-log-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        log_source = LogDataSource.objects.create(
+            name='ecommerce-order-loki',
+            provider='loki',
+            config={'endpoint': 'http://loki.example.com'},
+            is_enabled=True,
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='ecommerce-order-tempo',
+            provider='tempo',
+            config={'endpoint': 'http://tempo.example.com'},
+            is_enabled=True,
+        )
+        link = ObservabilityDataSourceLink.objects.create(
+            name='ecommerce-order-observability-link',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+        )
+        cluster = K8sCluster.objects.create(
+            name='ecommerce-order-k3s',
+            api_server='https://ecommerce-order-k3s.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            log_datasource_ids=[log_source.id],
+            tracing_datasource_ids=[trace_source.id],
+            observability_link_ids=[link.id],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['ecommerce']},
+            association_snapshot={
+                'nodes': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}],
+                'edges': [],
+            },
+            child_node_snapshot={'children': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}]},
+            is_enabled=True,
+        )
+        mocked_run_query.return_value = {
+            'logs': [{
+                'timestamp': '2026-05-21T10:00:00+08:00',
+                'message': '{"level":"ERROR","service":"order","message":"create order failed"}',
+                'level': 'error',
+                'source': 'loki',
+                'attributes': {'detected_level': 'error'},
+            }],
+        }
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_order_combined_logs',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_logs',
+                                'arguments': '{"query":"电商测试环境订单服务最近半小时警告和错误日志","service":"order","levels":["warning","error"],"duration_minutes":30,"limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n订单服务最近半小时的 WARNING/ERROR 日志指向订单创建失败。\n依据：\n- query_logs 命中 ERROR 样本，message 包含 create order failed。\n建议操作：\n- 继续关联 trace_id 和库存服务调用链确认上游失败点。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n订单服务最近半小时的 WARNING/ERROR 日志指向订单创建失败。\n依据：\n- query_logs 命中 ERROR 样本，message 包含 create order failed。\n建议操作：\n- 继续关联 trace_id 和库存服务调用链确认上游失败点。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'order-combined-log'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境订单服务最近半小时警告和错误日志'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertEqual(assistant_message['tool_calls'], ['query_logs'])
+        self.assertNotIn('query_alerts', assistant_message['tool_calls'])
+        tool_event_names = [item.get('name') for item in assistant_message['metadata'].get('tool_events', [])]
+        self.assertEqual(set(tool_event_names), {'query_logs'})
+        self.assertNotIn('query_alerts', tool_event_names)
+        self.assertIn('WARNING/ERROR', assistant_message['content'])
+        payload = mocked_run_query.call_args.args[2]
+        self.assertEqual(payload['query'], '{container="order",namespace="ecommerce"} | json | detected_level=~"warn|warning|error|err|fatal|critical|crit"')
+        self.assertEqual(mocked_completion.call_count, 3)
+
+    @mock.patch('aiops.services.run_log_provider_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_log_answer_rewrites_when_formatter_claims_no_logs_but_logs_exist(self, mocked_completion, mocked_run_query):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-log-conflict-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        log_source = LogDataSource.objects.create(
+            name='ecommerce-order-loki-conflict',
+            provider='loki',
+            config={'endpoint': 'http://loki.example.com'},
+            is_enabled=True,
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='ecommerce-order-tempo-conflict',
+            provider='tempo',
+            config={'endpoint': 'http://tempo.example.com'},
+            is_enabled=True,
+        )
+        link = ObservabilityDataSourceLink.objects.create(
+            name='ecommerce-order-observability-link-conflict',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+        )
+        cluster = K8sCluster.objects.create(
+            name='ecommerce-order-k3s-conflict',
+            api_server='https://ecommerce-order-k3s-conflict.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            log_datasource_ids=[log_source.id],
+            tracing_datasource_ids=[trace_source.id],
+            observability_link_ids=[link.id],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['ecommerce']},
+            association_snapshot={
+                'nodes': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}],
+                'edges': [],
+            },
+            child_node_snapshot={'children': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}]},
+            is_enabled=True,
+        )
+        mocked_run_query.return_value = {
+            'logs': [{
+                'timestamp': '2026-05-21T15:30:00+08:00',
+                'message': '{"level":"WARNING","service":"order","message":"insufficient inventory for user_id=scheduled-conflict-001","trace_id":"trace-order-001"}',
+                'level': 'warning',
+                'source': 'loki',
+                'attributes': {'detected_level': 'warn', 'trace_id': 'trace-order-001'},
+            }],
+        }
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_order_logs_conflict',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_logs',
+                                'arguments': '{"query":"电商测试环境订单服务最近半小时警告和错误日志","service":"order","levels":["warning","error"],"duration_minutes":30,"limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n订单服务最近半小时没有命中任何日志。\n依据：\n- query_logs 返回 0 条。\n建议操作：\n- 放宽时间窗口。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': '结论：\n订单服务最近半小时命中 1 条 WARNING 日志，表现为库存不足导致的下单告警。\n依据：\n- query_logs 返回 1 条日志，样本包含 insufficient inventory 和 trace-order-001。\n建议操作：\n- 使用 trace_id 关联链路，确认库存校验返回路径。\n可继续查看：\n- 日志中心',
+                    },
+                }],
+            },
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'order-log-conflict'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境订单服务最近半小时警告和错误日志'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertEqual(assistant_message['tool_calls'], ['query_logs'])
+        self.assertIn('命中 1 条 WARNING 日志', assistant_message['content'])
+        self.assertIn('insufficient inventory', assistant_message['content'])
+        self.assertNotIn('没有命中任何日志', assistant_message['content'])
+        self.assertEqual(assistant_message['metadata']['formatter_mode'], 'skill')
+        self.assertEqual(mocked_completion.call_count, 3)
+
+    @mock.patch('aiops.services.run_log_provider_query')
+    @mock.patch('aiops.services._request_model_completion')
+    def test_log_answer_fallback_still_analyzes_when_formatter_never_returns_valid_analysis(self, mocked_completion, mocked_run_query):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-log-list-only-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        log_source = LogDataSource.objects.create(
+            name='ecommerce-order-loki-list-only',
+            provider='loki',
+            config={'endpoint': 'http://loki.example.com'},
+            is_enabled=True,
+        )
+        trace_source = TracingDataSource.objects.create(
+            name='ecommerce-order-tempo-list-only',
+            provider='tempo',
+            config={'endpoint': 'http://tempo.example.com'},
+            is_enabled=True,
+        )
+        link = ObservabilityDataSourceLink.objects.create(
+            name='ecommerce-order-observability-link-list-only',
+            log_datasource=log_source,
+            tracing_datasource=trace_source,
+            log_label_mappings=[
+                {'trace_tag': 'service.name', 'log_label': 'container'},
+                {'trace_tag': 'service.namespace', 'log_label': 'namespace'},
+            ],
+        )
+        cluster = K8sCluster.objects.create(
+            name='ecommerce-order-k3s-list-only',
+            api_server='https://ecommerce-order-k3s-list-only.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            log_datasource_ids=[log_source.id],
+            tracing_datasource_ids=[trace_source.id],
+            observability_link_ids=[link.id],
+            k8s_cluster_ids=[cluster.id],
+            k8s_namespaces={str(cluster.id): ['ecommerce']},
+            association_snapshot={
+                'nodes': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}],
+                'edges': [],
+            },
+            child_node_snapshot={'children': [{'id': 'service:order', 'kind': 'service', 'label': 'order'}]},
+            is_enabled=True,
+        )
+        mocked_run_query.return_value = {
+            'logs': [{
+                'timestamp': '2026-05-21T15:52:03+08:00',
+                'message': '{"level":"WARNING","service":"order","message":"insufficient inventory for user_id=scheduled-conflict-001","trace_id":"trace-order-001"}',
+                'level': 'warning',
+                'source': 'loki',
+                'attributes': {'detected_level': 'warn', 'trace_id': 'trace-order-001'},
+            }, {
+                'timestamp': '2026-05-21T15:51:03+08:00',
+                'message': '{"level":"WARNING","service":"order","message":"insufficient inventory for user_id=scheduled-conflict-002","trace_id":"trace-order-002"}',
+                'level': 'warning',
+                'source': 'loki',
+                'attributes': {'detected_level': 'warn', 'trace_id': 'trace-order-002'},
+            }],
+        }
+        list_only_answer = (
+            '已通过已启用的 MCP 与 Skills 获取平台内能力结果。\n'
+            '- 日志数据源与查询条件\n'
+            '  ecommerce-order-loki-list-only / loki / {container="order",namespace="ecommerce"}\n'
+            '- 最近日志命中\n'
+            '  2026-05-21T15:52:03 / WARN / insufficient inventory\n'
+        )
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_order_logs_list_only',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_logs',
+                                'arguments': '{"query":"电商测试环境订单服务最近半小时警告和错误日志","service":"order","levels":["warning","error"],"duration_minutes":30,"limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {'choices': [{'message': {'content': list_only_answer}}]},
+            {'choices': [{'message': {'content': list_only_answer}}]},
+            {'choices': [{'message': {'content': list_only_answer}}]},
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'order-log-list-only'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '帮我分析下电商测试环境订单服务最近半小时警告和错误日志'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertIn(assistant_message['metadata']['formatter_mode'], {'fallback', 'draft_only'})
+        self.assertIn('结论：', assistant_message['content'])
+        self.assertIn('共同模式', assistant_message['content'])
+        self.assertIn('建议操作：', assistant_message['content'])
+        self.assertIn('insufficient inventory', assistant_message['content'])
+        self.assertNotIn('智能助手回复', assistant_message['content'])
+        self.assertGreaterEqual(mocked_completion.call_count, 4)
+
     @mock.patch('aiops.services._request_model_completion')
     def test_send_message_direct_container_fastpath_uses_environment_scope(self, mocked_completion):
         get_agent_config()
@@ -2937,7 +3673,7 @@ class AIOpsApiTests(TestCase):
             {
                 'choices': [{
                     'message': {
-                        'content': '???????????????',
+                        'content': '已生成巡检任务草稿。',
                     },
                 }],
             },
@@ -2950,7 +3686,7 @@ class AIOpsApiTests(TestCase):
             },
         ]
         self.ensure_prod_knowledge_environment()
-        session_response = self.client.post('/api/aiops/sessions/', {'title': '??????'}, format='json')
+        session_response = self.client.post('/api/aiops/sessions/', {'title': '任务生成'}, format='json')
         session_id = session_response.data['id']
         AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline')
@@ -2978,7 +3714,7 @@ class AIOpsApiTests(TestCase):
         mocked_completion.return_value = {
             'choices': [{
                 'message': {
-                    'content': '????????????????',
+                    'content': '当前生产环境没有需要处理的问题。',
                 },
             }],
         }
@@ -2988,12 +3724,12 @@ class AIOpsApiTests(TestCase):
         AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
         response = self.client.post(
             f'/api/aiops/sessions/{session_id}/send_message/',
-            {'content': '?????????'},
+            {'content': '生产环境风险情况'},
             format='json',
         )
         self.assertEqual(response.status_code, 201)
-        self.assertIn('query_alerts', response.data['assistant_message']['tool_calls'])
-        self.assertNotEqual(response.data['assistant_message']['metadata'].get('error_code'), 'no_tool_called')
+        self.assertEqual(response.data['assistant_message']['tool_calls'], [])
+        self.assertEqual(response.data['assistant_message']['metadata'].get('error_code'), 'no_tool_called')
 
 
     def test_task_request_respects_action_execution_switch(self):
@@ -3081,6 +3817,78 @@ class AIOpsApiTests(TestCase):
         self.assertIn('生成回复', step_titles)
         self.assertIn('Skill 模板整形', step_titles)
         self.assertNotIn('接收问题', step_titles)
+
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_alert_question_uses_llm_platform_mcp_when_provider_ready(self, mocked_completion):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-alert-platform-mcp-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        self.ensure_prod_knowledge_environment()
+        Alert.objects.create(
+            title='today active checkout alert',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='monitor',
+            message='checkout error rate high',
+            environment='prod',
+            is_acknowledged=False,
+        )
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'tool_calls': [{
+                            'id': 'call_alerts',
+                            'type': 'function',
+                            'function': {
+                                'name': 'query_alerts',
+                                'arguments': '{"query":"prod checkout","status":"active","date_filter":"today","limit":8}',
+                            },
+                        }],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': 'found today active checkout alert',
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': 'Conclusion:\nPlatform MCP returned active alert evidence.\nEvidence:\n- today active checkout alert.\nNext step:\n- Open alert center.',
+                    },
+                }],
+            },
+        ]
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'alert-platform-mcp'}, format='json')
+        session_id = session_response.data['id']
+        AIOpsChatSession.objects.filter(pk=session_id).update(context={'current_environment': {'name': 'prod'}})
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': 'prod active alerts today'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertIn('query_alerts', assistant_message['tool_calls'])
+        self.assertNotEqual(assistant_message['metadata'].get('execution_mode'), 'direct_alerts_fastpath')
+        self.assertGreaterEqual(mocked_completion.call_count, 2)
 
     @mock.patch('aiops.services._request_model_completion')
     def test_alert_answer_falls_back_when_llm_claims_zero_results(self, mocked_completion):
@@ -3433,6 +4241,162 @@ class AIOpsApiTests(TestCase):
             {'host_ids': [1], 'name': 'test'},
         )
         self.assertFalse(decision)
+
+    def test_build_task_draft_and_confirm_support_task_resource_targets(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='resource-task')
+        assistant_message = AIOpsChatMessage.objects.create(session=session, role='assistant', content='已生成任务草稿')
+
+        draft = build_task_draft(
+            self.user,
+            '帮我建个电商测试环境的服务器巡检任务，电商测试环境下的全部主机',
+            {
+                'request_summary': '帮我建个电商测试环境的服务器巡检任务，电商测试环境下的全部主机',
+                'resource_environment': '电商测试环境',
+                'target_resource_ids': [resource.id],
+                'task_kind': 'refresh_metrics',
+            },
+        )
+        action = create_pending_task_action_from_draft(session, assistant_message, draft)
+        task = confirm_action(action, self.user)
+
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['target_refs'], [{'source': 'task_resource', 'id': resource.id}])
+        self.assertEqual(task.target_count, 1)
+        self.assertEqual(task.target_snapshot[0]['source'], 'task_resource')
+        self.assertEqual(task.target_snapshot[0]['resource_id'], resource.id)
+        self.assertEqual(task.target_snapshot[0]['hostname'], 'tf-k3s-single-node')
+        self.assertEqual(task.selection_filters['target_refs'], [{'source': 'task_resource', 'id': resource.id}])
+
+    def test_build_task_draft_dedupes_task_resource_targets_from_multiple_fields(self):
+        env = TaskResourceGroup.objects.create(name='ecommerce-test', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='resource-task-dedupe')
+        assistant_message = AIOpsChatMessage.objects.create(session=session, role='assistant', content='draft')
+
+        draft = build_task_draft(
+            self.user,
+            'create ecommerce test server inspection task',
+            {
+                'request_summary': 'create ecommerce test server inspection task',
+                'resource_environment': 'ecommerce-test',
+                'target_resource_ids': [resource.id, resource.id],
+                'resource_ids': [resource.id],
+                'target_task_resource_ids': [resource.id],
+                'task_kind': 'refresh_metrics',
+            },
+        )
+        action = create_pending_task_action_from_draft(session, assistant_message, draft)
+        task = confirm_action(action, self.user)
+
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['target_refs'], [{'source': 'task_resource', 'id': resource.id}])
+        self.assertEqual(draft['host_count'], 1)
+        self.assertEqual(task.target_count, 1)
+        self.assertEqual(task.selection_filters['target_refs'], [{'source': 'task_resource', 'id': resource.id}])
+
+    def test_build_task_draft_uses_configured_resource_base_for_server_inspection(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        TaskResource.objects.create(
+            name='supply-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=TaskResourceGroup.objects.create(name='供应链测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT),
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.177',
+            ssh_user='root',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[env.id],
+        )
+
+        draft = build_task_draft(
+            self.user,
+            '帮我建个电商测试环境的服务器巡检任务',
+            {'request_summary': '帮我建个电商测试环境的服务器巡检任务'},
+        )
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['target_refs'], [{'source': 'task_resource', 'id': resource.id}])
+        self.assertEqual(draft['host_count'], 1)
+
+    def test_build_task_draft_uses_resource_base_scope_for_alternate_task_wording(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[env.id],
+        )
+
+        draft = build_task_draft(
+            self.user,
+            '给电商测试环境安排一次基础健康检查',
+            {'request_summary': '给电商测试环境安排一次基础健康检查'},
+        )
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+
+    def test_build_task_draft_uses_environment_scope_when_system_name_does_not_match_resource_base(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[env.id],
+        )
+
+        draft = build_task_draft(
+            self.user,
+            '给电商测试环境安排一次基础健康检查',
+            {
+                'request_summary': '给电商测试环境安排一次基础健康检查',
+                'system_name': '电商',
+            },
+        )
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['resource_ids'], [resource.id])
 
     @mock.patch('aiops.views.test_mcp_server_connection')
     def test_mcp_test_connection_endpoint(self, mocked_test_connection):

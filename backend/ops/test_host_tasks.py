@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from ops.host_tasks import AnsibleControllerError
-from ops.models import Host, HostTask, HostTaskTemplate, K8sCluster
+from ops.models import Host, HostTask, HostTaskTemplate, K8sCluster, TaskResource, TaskResourceGroup
 from rbac.models import Role
 from rbac.services import ensure_builtin_rbac
 
@@ -150,6 +150,63 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_ANSIBLE)
         self.assertNotIn('SSH', payload['summary'])
         mock_open_ssh_client.assert_not_called()
+
+    @patch('ops.host_tasks.is_ansible_playbook_available', return_value=False)
+    def test_run_playbook_reports_missing_controller_with_actionable_message(self, _mock_available):
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'playbook-missing-controller',
+                'task_type': HostTask.TASK_RUN_PLAYBOOK,
+                'host_ids': [self.host.id],
+                'payload': {
+                    'playbook_name': 'inspect.yml',
+                    'playbook_content': '- hosts: targets\n  gather_facts: false\n  tasks: []',
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['status'], 'failed')
+        self.assertIn('ansible-playbook', payload['executions'][0]['error_message'])
+        self.assertIn('HOST_TASK_ANSIBLE_PLAYBOOK_BINARY', payload['executions'][0]['error_message'])
+
+    @patch('ops.host_tasks.open_ssh_client')
+    def test_task_resource_execution_exposes_target_name(self, mock_open_ssh_client):
+        mock_open_ssh_client.return_value = self._mock_client({
+            'uptime': {'exit_status': 0, 'stdout': 'resource-ok'},
+        })
+        env = TaskResourceGroup.objects.create(name='ecommerce-test', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+            ssh_password='secret',
+        )
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'resource-target-command',
+                'task_type': HostTask.TASK_RUN_COMMAND,
+                'execution_mode': HostTask.EXECUTION_MODE_SSH,
+                'resource_ids': [resource.id],
+                'payload': {'command': 'uptime'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        execution = response.json()['executions'][0]
+        self.assertEqual(execution['host_name'], 'tf-k3s-single-node')
+        self.assertEqual(execution['target_name'], 'tf-k3s-single-node')
+        self.assertEqual(execution['target_id'], f'task_resource:{resource.id}')
+        self.assertEqual(execution['target_kind'], 'task_resource_host')
 
     @patch('ops.host_tasks.collect_host_metrics')
     @patch('ops.host_tasks.open_ssh_client')

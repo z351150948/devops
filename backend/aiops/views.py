@@ -8,7 +8,7 @@ from rest_framework.response import Response
 
 from eventwall.models import EventRecord
 from eventwall.services import record_event
-from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, TracingDataSource
+from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, TaskResource, TaskResourceGroup, TracingDataSource
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 from rbac.services import is_demo_account, user_has_permissions
 
@@ -347,6 +347,20 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             for item in DockerHost.objects.order_by('name', 'id')
             if not _is_demoish_catalog_item(item.name, item.description, item.ip_address)
         ]
+        resource_counts = TaskResource.objects.values('environment_id').annotate(total=Count('id'))
+        env_counts = {}
+        for item in resource_counts:
+            env_counts[item['environment_id']] = env_counts.get(item['environment_id'], 0) + item['total']
+        task_resource_environments = [
+            {
+                'id': item.id,
+                'name': item.name,
+                'code': item.code,
+                'description': item.description,
+                'resource_count': env_counts.get(item.id, 0),
+            }
+            for item in TaskResourceGroup.objects.filter(group_type=TaskResourceGroup.GROUP_ENVIRONMENT).order_by('sort_order', 'name', 'id')
+        ]
 
         folder_map = {}
         for setting in GrafanaSetting.objects.filter(enabled=True).order_by('name'):
@@ -381,6 +395,7 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             'posture_environments': posture_environments,
             'k8s_clusters': k8s_clusters,
             'docker_hosts': docker_hosts,
+            'task_resource_environments': task_resource_environments,
         })
 
     def perform_create(self, serializer):

@@ -562,6 +562,7 @@ FIREMAP_SYSTEM_TEMPLATES = [
     {
         'id': 'commerce-core',
         'name': '交易系统核心',
+        'enabled_by_default': False,
         'domain': '交易域',
         'owner': '交易平台',
         'tier': 'P0',
@@ -1115,6 +1116,11 @@ def _system_posture_system_to_template(system, builtin_backed=False, builtin_tem
     north_star = _system_posture_default_metric(system)
     service_specs = system.service_specs if isinstance(system.service_specs, list) else []
     dependencies = system.dependencies if isinstance(system.dependencies, list) else []
+    builtin_service_specs = builtin_template.get('service_specs') if isinstance(builtin_template, dict) and isinstance(builtin_template.get('service_specs'), list) else []
+    builtin_dependencies = builtin_template.get('dependencies') if isinstance(builtin_template, dict) and isinstance(builtin_template.get('dependencies'), list) else []
+    if builtin_backed:
+        service_specs = _merge_builtin_service_specs(service_specs, builtin_service_specs)
+        dependencies = _merge_builtin_dependencies(dependencies, builtin_dependencies)
     metrics = system.metrics if isinstance(system.metrics, list) else []
     configured_rule_config = system.rule_config if isinstance(system.rule_config, dict) else {}
     builtin_rule_config = builtin_template.get('rule_config') if isinstance(builtin_template, dict) and isinstance(builtin_template.get('rule_config'), dict) else {}
@@ -1168,6 +1174,7 @@ def _system_posture_system_to_template(system, builtin_backed=False, builtin_tem
         'name': system.name,
         'environment': system.environment or 'prod',
         'domain': system.domain,
+        'sort_order': system.sort_order,
         'tier': system.tier,
         'owner': system.owner,
         'summary': system.summary,
@@ -1199,6 +1206,8 @@ def _system_posture_templates():
         if override:
             if override.is_enabled:
                 templates.append(_system_posture_system_to_template(override, builtin_backed=True, builtin_template=item))
+            continue
+        if item.get('enabled_by_default') is False:
             continue
         templates.append({
             **item,
@@ -1656,6 +1665,72 @@ def _deep_merge_dict(base, override):
         else:
             merged[key] = copy.deepcopy(value)
     return merged
+
+
+def _merge_builtin_service_specs(configured_specs, builtin_specs):
+    builtin_map = {
+        item.get('id'): item
+        for item in builtin_specs if isinstance(item, dict) and item.get('id')
+    }
+    merged = []
+    for item in configured_specs if isinstance(configured_specs, list) else []:
+        if not isinstance(item, dict):
+            continue
+        builtin = builtin_map.get(item.get('id')) or {}
+        next_item = copy.deepcopy(item)
+        interfaces = next_item.get('interfaces')
+        builtin_interfaces = builtin.get('interfaces') if isinstance(builtin.get('interfaces'), list) else []
+        if not isinstance(interfaces, list):
+            next_item['interfaces'] = copy.deepcopy(builtin_interfaces)
+        elif any(not isinstance(interface, dict) for interface in interfaces):
+            next_item['interfaces'] = copy.deepcopy(builtin_interfaces)
+        merged.append(next_item)
+    return merged
+
+
+def _merge_builtin_dependencies(configured_dependencies, builtin_dependencies):
+    builtin_map = {
+        item.get('id'): item
+        for item in builtin_dependencies if isinstance(item, dict) and item.get('id')
+    }
+    merged = []
+    for item in configured_dependencies if isinstance(configured_dependencies, list) else []:
+        if not isinstance(item, dict):
+            continue
+        builtin = builtin_map.get(item.get('id')) or {}
+        next_item = copy.deepcopy(item)
+        for key in ('name', 'kind', 'metrics', 'impact', 'base_status'):
+            if not next_item.get(key) and builtin.get(key) is not None:
+                next_item[key] = copy.deepcopy(builtin.get(key))
+        merged.append(next_item)
+    return merged
+
+
+def _normalize_system_posture_service_specs(service_specs, rule_config):
+    drilldown = rule_config.get('drilldown') if isinstance(rule_config.get('drilldown'), dict) else {}
+    drilldown_services = drilldown.get('services') if isinstance(drilldown.get('services'), list) else []
+    drilldown_service_map = {
+        item.get('id'): item
+        for item in drilldown_services
+        if isinstance(item, dict) and item.get('id')
+    }
+
+    normalized = []
+    for service in service_specs if isinstance(service_specs, list) else []:
+        if not isinstance(service, dict):
+            continue
+        next_service = copy.deepcopy(service)
+        interfaces = next_service.get('interfaces')
+        if not isinstance(interfaces, list):
+            next_service['interfaces'] = []
+        elif any(not isinstance(item, dict) for item in interfaces):
+            fallback_interfaces = drilldown_service_map.get(next_service.get('id'), {}).get('interfaces')
+            if isinstance(fallback_interfaces, list) and all(isinstance(item, dict) for item in fallback_interfaces):
+                next_service['interfaces'] = copy.deepcopy(fallback_interfaces)
+            else:
+                next_service['interfaces'] = []
+        normalized.append(next_service)
+    return normalized
 
 
 def _system_posture_rule_config(template):
@@ -2818,7 +2893,7 @@ def _build_system_posture_system_payload(template, access, catalog=None, evidenc
     evidence = evidence or _system_posture_evidence(access, trace_catalog, time_context=time_context)
     traces = evidence.get('traces') or trace_catalog.get('recent_traces') or []
     keywords = template.get('keywords') or []
-    service_specs = template.get('service_specs') or []
+    service_specs = _normalize_system_posture_service_specs(template.get('service_specs') or [], rule_config)
     dependency_specs = template.get('dependencies') or []
     matched_alerts = []
     matched_logs = []
@@ -3218,6 +3293,7 @@ def _build_system_posture_system_payload(template, access, catalog=None, evidenc
         'name': template['name'],
         'environment': template.get('environment') or 'prod',
         'domain': template['domain'],
+        'sort_order': template.get('sort_order') or 100,
         'owner': template['owner'],
         'tier': template['tier'],
         'status': status,
@@ -3543,8 +3619,21 @@ def _capture_system_posture_sla_history(request, access, day=None, time_context=
         _build_system_posture_system_payload(template, access, catalog if isinstance(catalog, dict) else None, evidence=evidence, time_context=time_context)
         for template in templates
     ]
+    expected_keys = {
+        system.get('id') or system.get('name') or ''
+        for system in systems
+        if system.get('id') or system.get('name')
+    }
 
     captured = 0
+    try:
+        stale_queryset = SystemPostureSLAHistory.objects.filter(day=day)
+        if expected_keys:
+            stale_queryset = stale_queryset.exclude(system_key__in=expected_keys)
+        stale_queryset.delete()
+    except OperationalError:
+        # SQLite 锁冲突时优先保留现有历史，避免影响页面读取。
+        pass
     for system in systems:
         sla = _system_posture_sla_from_system(system)
         health_score = system.get('health_score')
@@ -4155,7 +4244,7 @@ def observability_system_posture_history(request):
     for day, system_key in existing_pairs:
         existing_by_day.setdefault(day, set()).add(system_key)
     today_existing_keys = existing_by_day.get(latest_day, set())
-    if force_refresh or (expected_keys and not expected_keys.issubset(today_existing_keys)):
+    if force_refresh or expected_keys != today_existing_keys:
         backfill_days.append(latest_day)
     if backfill_enabled:
         for offset in range(days):
@@ -4163,9 +4252,8 @@ def observability_system_posture_history(request):
             if day == latest_day:
                 continue
             existing_keys = existing_by_day.get(day, set())
-            if expected_keys and not expected_keys.issubset(existing_keys):
+            if expected_keys != existing_keys:
                 backfill_days.append(day)
-                break
     for day in backfill_days:
         captured += _capture_system_posture_sla_history(
             request,
@@ -4177,6 +4265,7 @@ def observability_system_posture_history(request):
     records = list(
         SystemPostureSLAHistory.objects
         .filter(day__gte=start_day, day__lte=latest_day)
+        .filter(system_key__in=expected_keys)
         .order_by('system_name', 'day')
     )
     system_map = {}

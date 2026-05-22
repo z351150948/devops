@@ -42,7 +42,7 @@ const routes = [
       {
         path: 'hosts/assets',
         redirect: '/tasks/resources',
-        meta: { hidden: true, title: '主机资产', icon: 'Monitor', anyPermissions: ['ops.host.view', 'ops.host.manage', 'ops.host.terminal'] },
+        meta: { hidden: true, title: '资源底座', icon: 'Monitor', anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage', 'ops.host.view', 'ops.host.manage', 'ops.host.terminal'] },
       },
       {
         path: 'hosts/schedules',

@@ -387,7 +387,7 @@
             <span>所属环境</span>
             <strong>{{ environmentLabel(systemForm.environment) }}</strong>
           </div>
-          <div class="form-grid">
+          <div class="form-grid form-grid--basic">
             <el-form-item label="系统名称">
               <el-input v-model="systemForm.name" maxlength="128" show-word-limit placeholder="例如：交易系统核心" />
             </el-form-item>
@@ -400,6 +400,10 @@
                   :value="item"
                 />
               </el-select>
+            </el-form-item>
+            <el-form-item label="展示顺序">
+              <el-input-number v-model="systemForm.sort_order" :min="0" :step="10" controls-position="right" />
+              <div class="form-item-hint">同一环境下数值越小越靠前</div>
             </el-form-item>
           </div>
         </div>
@@ -647,9 +651,11 @@ const systems = computed(() => systemPosture.value.systems || [])
 const topology = computed(() => selectedSystem.value.topology || systemPosture.value.topology || {})
 const selectedSystem = computed(() => {
   const selected = systemPosture.value.selected_system || {}
-  if (selectedSystemId.value && selected.id !== selectedSystemId.value) {
+  if (selectedSystemId.value) {
     const matched = systems.value.find(item => item.id === selectedSystemId.value)
-    if (matched && !selected.id) return matched
+    if (matched) {
+      return selected.id === selectedSystemId.value ? selected : matched
+    }
   }
   return selected.id ? selected : systems.value[0] || {}
 })
@@ -719,7 +725,13 @@ const selectedNode = computed(() => {
     || drilldownRows.value[0]
 })
 
-const allowedQuickActions = computed(() => (systemPosture.value.quick_actions || selectedSystem.value.actions || []).filter(actionAllowed))
+const allowedQuickActions = computed(() => {
+  const responseSelectedId = systemPosture.value.selected_system?.id || ''
+  const source = responseSelectedId === selectedSystem.value.id
+    ? (systemPosture.value.quick_actions || selectedSystem.value.actions || [])
+    : (selectedSystem.value.actions || [])
+  return source.filter(actionAllowed)
+})
 
 const canViewAlerts = computed(() => authStore.hasPermission('ops.alert.view'))
 const canViewTrace = computed(() => authStore.hasPermission('ops.trace.view'))
@@ -1038,6 +1050,10 @@ function environmentStatus(items = []) {
   return environmentStatusFromCounts(environmentCounts(items), items.length)
 }
 
+function systemSortOrderValue(item = {}) {
+  return Number(item.sort_order ?? item.form?.sort_order ?? 100)
+}
+
 function groupSystemsByEnvironment(items = [], environmentDefs = []) {
   const groups = new Map()
   environmentDefs.forEach((environment) => {
@@ -1061,11 +1077,17 @@ function groupSystemsByEnvironment(items = [], environmentDefs = []) {
   })
   return Array.from(groups.values())
     .map((group) => {
+      const sortedItems = [...group.items].sort((a, b) => (
+        systemSortOrderValue(a) - systemSortOrderValue(b)
+        || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')
+        || String(a.id || '').localeCompare(String(b.id || ''), 'en')
+      ))
       const counts = environmentCounts(group.items)
       return {
         ...group,
+        items: sortedItems,
         counts,
-        status: environmentStatusFromCounts(counts, group.items.length),
+        status: environmentStatusFromCounts(counts, sortedItems.length),
       }
     })
     .sort((a, b) => (a.sort_order ?? environmentOrder(a.key)) - (b.sort_order ?? environmentOrder(b.key)) || a.label.localeCompare(b.label, 'zh-Hans-CN'))
@@ -1172,8 +1194,64 @@ function systemToForm(system = {}) {
     metric_unit: northStar.unit || '%',
     metric_direction: northStar.direction || 'higher',
     rule_config_text: stringifyConfig(ruleConfig),
-    sort_order: form.sort_order ?? 100,
+    sort_order: form.sort_order ?? system.sort_order ?? 100,
   }
+}
+
+function hasStructuredServiceSpecs(items = []) {
+  return Array.isArray(items) && items.some((service) => (
+    service
+    && typeof service === 'object'
+    && !Array.isArray(service)
+    && Array.isArray(service.interfaces)
+    && service.interfaces.some((item) => item && typeof item === 'object' && !Array.isArray(item))
+  ))
+}
+
+function buildServiceSpecsFromChildren(system = {}) {
+  return (Array.isArray(system.children) ? system.children : [])
+    .filter((service) => service && typeof service === 'object' && !Array.isArray(service))
+    .map((service) => ({
+      id: service.id || '',
+      name: service.name || '',
+      role: service.role || '',
+      base_status: service.base_status || service.status || 'unknown',
+      metrics: Array.isArray(service.metrics) ? service.metrics : [],
+      interfaces: (Array.isArray(service.children) ? service.children : [])
+        .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+        .map((item) => ({
+          id: item.id || '',
+          name: item.name || '',
+          base_status: item.base_status || item.status || 'unknown',
+          hint: item.hint || '',
+          metrics: Array.isArray(item.metrics) ? item.metrics : [],
+        })),
+    }))
+    .filter((service) => service.id)
+}
+
+function hasStructuredDependencies(items = []) {
+  return Array.isArray(items) && items.some((item) => (
+    item
+    && typeof item === 'object'
+    && !Array.isArray(item)
+    && item.name
+  ))
+}
+
+function buildDependenciesFromSource(system = {}) {
+  return (Array.isArray(system.dependencies) ? system.dependencies : [])
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({
+      id: item.id || '',
+      name: item.name || '',
+      role: item.role || 'dependency',
+      kind: item.kind || '',
+      base_status: item.base_status || item.status || 'unknown',
+      metrics: Array.isArray(item.metrics) ? item.metrics : [],
+      impact: item.impact || item.hint || '',
+    }))
+    .filter((item) => item.id)
 }
 
 function formToPayload(sourceForm = systemForm.value, sourceSystem = editingSystem.value) {
@@ -1190,16 +1268,32 @@ function formToPayload(sourceForm = systemForm.value, sourceSystem = editingSyst
     direction: form.metric_direction || 'higher',
   }
   const drilldownConfig = ruleConfig.drilldown && typeof ruleConfig.drilldown === 'object' ? ruleConfig.drilldown : {}
-  const serviceSpecs = Array.isArray(drilldownConfig.services)
+  const sourceServiceSpecs = Array.isArray(formSnapshot.service_specs)
+    ? formSnapshot.service_specs
+    : Array.isArray(sourceSystem?.service_specs)
+      ? sourceSystem.service_specs
+      : []
+  const fallbackServiceSpecs = hasStructuredServiceSpecs(sourceServiceSpecs)
+    ? sourceServiceSpecs
+    : buildServiceSpecsFromChildren(sourceSystem)
+  const serviceSpecs = hasStructuredServiceSpecs(drilldownConfig.services)
     ? drilldownConfig.services
-    : Array.isArray(ruleConfig.service_specs)
+    : hasStructuredServiceSpecs(ruleConfig.service_specs)
       ? ruleConfig.service_specs
-      : formSnapshot.service_specs || sourceSystem?.service_specs || []
-  const dependencies = Array.isArray(drilldownConfig.dependencies)
+      : fallbackServiceSpecs
+  const sourceDependencies = Array.isArray(formSnapshot.dependencies)
+    ? formSnapshot.dependencies
+    : Array.isArray(sourceSystem?.dependencies)
+      ? sourceSystem.dependencies
+      : []
+  const fallbackDependencies = hasStructuredDependencies(sourceDependencies)
+    ? sourceDependencies
+    : buildDependenciesFromSource(sourceSystem)
+  const dependencies = hasStructuredDependencies(drilldownConfig.dependencies)
     ? drilldownConfig.dependencies
-    : Array.isArray(ruleConfig.dependencies)
+    : hasStructuredDependencies(ruleConfig.dependencies)
       ? ruleConfig.dependencies
-      : formSnapshot.dependencies || sourceSystem?.dependencies || []
+      : fallbackDependencies
   const playbook = Array.isArray(ruleConfig.playbook)
     ? ruleConfig.playbook
     : formSnapshot.playbook || sourceSystem?.playbook || []
@@ -2940,8 +3034,19 @@ onUnmounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.form-grid--basic {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .form-grid--slo {
   grid-template-columns: minmax(160px, 1.35fr) minmax(120px, 1fr) minmax(88px, 0.7fr) minmax(120px, 1fr);
+}
+
+.form-item-hint {
+  color: var(--fm-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 6px;
 }
 
 .dialog-footer {

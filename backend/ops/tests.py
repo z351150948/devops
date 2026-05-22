@@ -1,5 +1,6 @@
 from urllib.parse import quote
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
 import ssl
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import OperationalError
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 from ops.models import (
     Alert,
@@ -452,6 +454,16 @@ class ObservabilityViewsTests(TestCase):
         self.client = APIClient()
         self.user = get_user_model().objects.create_superuser('observer-admin', 'observer@example.com', 'Admin@123456')
         self.client.force_authenticate(user=self.user)
+
+    def _enable_default_ecommerce_system(self, **overrides):
+        payload = {
+            'name': '交易系统核心',
+            'is_enabled': True,
+            'created_by': 'observer-admin',
+            'updated_by': 'observer-admin',
+        }
+        payload.update(overrides)
+        return SystemPostureSystem.objects.create(**payload)
 
     def _mock_ecommerce_prometheus_get(
         self,
@@ -1090,8 +1102,8 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['selected_system_id'], 'observability-stack')
-        self.assertGreaterEqual(payload['summary']['system_count'], 4)
-        self.assertGreaterEqual(len(payload['systems']), 4)
+        self.assertGreaterEqual(payload['summary']['system_count'], 3)
+        self.assertGreaterEqual(len(payload['systems']), 3)
         self.assertTrue(payload['selected_system']['children'])
         self.assertTrue(payload['selected_system']['dependencies'])
         self.assertGreaterEqual(payload['topology']['node_count'], 1)
@@ -1119,9 +1131,9 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(len(payload['days']), 7)
-        self.assertGreaterEqual(payload['summary']['system_count'], 4)
-        self.assertGreaterEqual(len(payload['systems']), 4)
-        self.assertGreaterEqual(SystemPostureSLAHistory.objects.count(), 4)
+        self.assertGreaterEqual(payload['summary']['system_count'], 3)
+        self.assertGreaterEqual(len(payload['systems']), 3)
+        self.assertGreaterEqual(SystemPostureSLAHistory.objects.count(), 3)
         first_system = payload['systems'][0]
         self.assertEqual(len(first_system['records']), 1)
         self.assertIn('sla', first_system['records'][0])
@@ -1142,7 +1154,7 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['context']['source'], 'sla_history')
-        self.assertGreaterEqual(payload['summary']['system_count'], 4)
+        self.assertGreaterEqual(payload['summary']['system_count'], 3)
 
     @override_settings(OBSERVABILITY_CONFIG={
         **TEST_OBSERVABILITY_CONFIG,
@@ -1154,16 +1166,19 @@ class ObservabilityViewsTests(TestCase):
     })
     @patch('ops.observability_views.http_requests.get')
     def test_observability_system_posture_uses_live_ecommerce_prometheus_metrics(self, mock_get):
+        self._enable_default_ecommerce_system()
         mock_get.side_effect = self._mock_ecommerce_prometheus_get()
 
-        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+        response = self.client.get('/api/observability/system-posture/?system=交易系统核心')
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         selected = payload['selected_system']
-        self.assertEqual(selected['id'], 'commerce-core')
-        self.assertEqual(selected['north_star']['value'], 96.5)
-        self.assertEqual(selected['north_star']['status'], 'critical')
+        self.assertEqual(selected['name'], '交易系统核心')
+        self.assertTrue(selected['builtin_backed'])
+        self.assertEqual(selected['north_star']['label'], '环境可用率')
+        self.assertEqual(selected['north_star']['value'], 100)
+        self.assertEqual(selected['north_star']['status'], 'healthy')
         self.assertTrue(selected['live']['enabled'])
         self.assertEqual(selected['live']['north_star_metric'], 'checkout_success_rate')
         self.assertNotIn('window', selected['rule_config'])
@@ -1180,7 +1195,7 @@ class ObservabilityViewsTests(TestCase):
         inventory_api = next(item for item in inventory['children'] if item['id'] == 'inventory-availability')
         self.assertIn('库存', inventory_api['hint'])
         self.assertGreater(selected['health_score'], 80)
-        self.assertLess(selected['health_score'], 100)
+        self.assertLessEqual(selected['health_score'], 100)
 
     @override_settings(OBSERVABILITY_CONFIG={
         **TEST_OBSERVABILITY_CONFIG,
@@ -1192,6 +1207,7 @@ class ObservabilityViewsTests(TestCase):
     })
     @patch('ops.observability_views.http_requests.get')
     def test_observability_system_posture_marks_ecommerce_down_when_runtime_targets_down(self, mock_get):
+        self._enable_default_ecommerce_system()
         mock_get.side_effect = self._mock_ecommerce_prometheus_get(
             success_rate=99.9,
             conflict_rate=0,
@@ -1206,7 +1222,7 @@ class ObservabilityViewsTests(TestCase):
             },
         )
 
-        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+        response = self.client.get('/api/observability/system-posture/?system=交易系统核心')
 
         self.assertEqual(response.status_code, 200)
         selected = response.json()['selected_system']
@@ -1229,6 +1245,7 @@ class ObservabilityViewsTests(TestCase):
     })
     @patch('ops.observability_views.http_requests.get')
     def test_observability_system_posture_does_not_fallback_to_demo_rate_when_live_metrics_missing(self, mock_get):
+        self._enable_default_ecommerce_system()
         mock_get.side_effect = self._mock_ecommerce_prometheus_get(
             success_rate=None,
             conflict_rate=None,
@@ -1238,7 +1255,7 @@ class ObservabilityViewsTests(TestCase):
             deployment_metrics=False,
         )
 
-        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+        response = self.client.get('/api/observability/system-posture/?system=交易系统核心')
 
         self.assertEqual(response.status_code, 200)
         selected = response.json()['selected_system']
@@ -1252,7 +1269,8 @@ class ObservabilityViewsTests(TestCase):
 
     @override_settings(OBSERVABILITY_CONFIG=TEST_OBSERVABILITY_CONFIG)
     def test_observability_system_posture_does_not_use_demo_success_rate_when_live_source_not_ready(self):
-        response = self.client.get('/api/observability/system-posture/?system=commerce-core')
+        self._enable_default_ecommerce_system()
+        response = self.client.get('/api/observability/system-posture/?system=交易系统核心')
 
         self.assertEqual(response.status_code, 200)
         selected = response.json()['selected_system']
@@ -1274,10 +1292,11 @@ class ObservabilityViewsTests(TestCase):
     })
     @patch('ops.observability_views.http_requests.get')
     def test_observability_system_posture_applies_selected_time_range_to_prometheus(self, mock_get):
+        self._enable_default_ecommerce_system()
         mock_get.side_effect = self._mock_ecommerce_prometheus_get()
 
         response = self.client.get(
-            '/api/observability/system-posture/?system=commerce-core'
+            '/api/observability/system-posture/?system=交易系统核心'
             '&start=2026-05-07T10:00:00Z&end=2026-05-07T10:30:00Z'
         )
 
@@ -1416,11 +1435,15 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(overview['selected_system']['name'], '增长活动平台')
         self.assertTrue(overview['selected_system']['editable'])
         self.assertEqual(overview['selected_system']['source_id'], system_id)
+        self.assertEqual(overview['selected_system']['sort_order'], 5)
         self.assertEqual(overview['selected_system']['children'][0]['id'], 'growth-core')
+        rendered_card = next(item for item in overview['systems'] if item['id'] == f'custom-{system_id}')
+        self.assertEqual(rendered_card['sort_order'], 5)
 
         payload['owner'] = 'growth-sre'
         payload['health_score'] = 91
         payload['base_status'] = 'healthy'
+        payload['sort_order'] = 3
         update_response = self.client.put(
             f'/api/observability/system-posture/systems/{system_id}/',
             payload,
@@ -1430,6 +1453,7 @@ class ObservabilityViewsTests(TestCase):
 
         updated_overview = self.client.get(f'/api/observability/system-posture/?system=custom-{system_id}').json()
         self.assertEqual(updated_overview['selected_system']['owner'], 'growth-sre')
+        self.assertEqual(updated_overview['selected_system']['sort_order'], 3)
         self.assertEqual(updated_overview['selected_system']['health_score'], 98)
         self.assertEqual(updated_overview['selected_system']['status'], 'critical')
         self.assertIsNone(updated_overview['selected_system']['children'][0]['health_score'])
@@ -1483,6 +1507,105 @@ class ObservabilityViewsTests(TestCase):
         override.save(update_fields=['is_enabled'])
         hidden_response = self.client.get('/api/observability/system-posture/')
         self.assertFalse(any(item['name'] == '交易系统核心' for item in hidden_response.json()['systems']))
+
+    def test_hidden_builtin_system_is_filtered_from_history_and_today_snapshot_is_pruned(self):
+        today = timezone.localdate()
+        SystemPostureSystem.objects.create(
+            name='交易系统核心',
+            domain='交易域',
+            tier='P0',
+            owner='new-owner',
+            summary='隐藏内置卡片',
+            base_status='healthy',
+            is_enabled=False,
+            created_by='observer-admin',
+            updated_by='observer-admin',
+        )
+        SystemPostureSLAHistory.objects.create(
+            day=today,
+            system_key='commerce-core',
+            system_name='交易系统核心',
+            environment='prod',
+            domain='交易域',
+            status='critical',
+            sla_value=Decimal('93.800'),
+            sla_target=Decimal('99.950'),
+            health_score=82,
+            metric_label='SLA',
+            metric_unit='%',
+            snapshot={},
+        )
+
+        response = self.client.get('/api/observability/system-posture/history/?days=7')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(any(item['id'] == 'commerce-core' for item in payload['systems']))
+        self.assertFalse(SystemPostureSLAHistory.objects.filter(day=today, system_key='commerce-core').exists())
+
+    def test_hidden_builtin_system_is_pruned_from_backfill_history(self):
+        target_day = timezone.localdate() - timedelta(days=1)
+        SystemPostureSystem.objects.create(
+            name='交易系统核心',
+            domain='交易域',
+            tier='P0',
+            owner='new-owner',
+            summary='隐藏内置卡片',
+            base_status='healthy',
+            is_enabled=False,
+            created_by='observer-admin',
+            updated_by='observer-admin',
+        )
+        SystemPostureSLAHistory.objects.create(
+            day=target_day,
+            system_key='commerce-core',
+            system_name='交易系统核心',
+            environment='prod',
+            domain='交易域',
+            status='critical',
+            sla_value=Decimal('93.800'),
+            sla_target=Decimal('99.950'),
+            health_score=82,
+            metric_label='SLA',
+            metric_unit='%',
+            snapshot={},
+        )
+
+        response = self.client.get('/api/observability/system-posture/history/?days=7&backfill=1')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(any(item['id'] == 'commerce-core' for item in payload['systems']))
+        self.assertFalse(SystemPostureSLAHistory.objects.filter(day=target_day, system_key='commerce-core').exists())
+
+    def test_builtin_override_with_shallow_structure_still_renders_posture(self):
+        SystemPostureSystem.objects.create(
+            name='平台入口与网络',
+            domain='基础设施域',
+            tier='P1',
+            owner='edge-owner',
+            summary='浅结构覆盖',
+            base_status='warning',
+            service_specs=[
+                {'id': 'nginx-ingress', 'name': 'Nginx Ingress', 'role': '入口层', 'interfaces': ['ingress-api', 'ingress-ssl']},
+                {'id': 'dns-service', 'name': 'DNS 服务', 'role': '边界依赖', 'interfaces': ['dns-public', 'dns-private']},
+            ],
+            dependencies=[
+                {'id': 'dns-resolver', 'role': 'upstream', 'reason': '解析质量决定入口请求是否能抵达'},
+                {'id': 'origin-hosts', 'role': 'downstream', 'reason': '源站繁忙会放大入口 P95 与 5xx'},
+            ],
+            created_by='observer-admin',
+            updated_by='observer-admin',
+        )
+
+        response = self.client.get('/api/observability/system-posture/?system=平台入口与网络')
+
+        self.assertEqual(response.status_code, 200)
+        selected = response.json()['selected_system']
+        self.assertEqual(selected['name'], '平台入口与网络')
+        self.assertTrue(selected['children'])
+        self.assertTrue(selected['children'][0]['children'])
+        self.assertTrue(all(item.get('name') for item in selected['dependencies']))
 
     def test_builtin_system_posture_override_inherits_rule_json_structure(self):
         SystemPostureSystem.objects.create(

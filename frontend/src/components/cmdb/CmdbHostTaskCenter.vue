@@ -630,13 +630,24 @@
             </div>
           </div>
           <div v-if="Object.keys(detailTask.payload || {}).length" class="detail-section">
-            <div class="detail-section-title">{{ ui.taskPayload }} JSON</div>
-            <pre class="detail-code-block">{{ formatPayloadJson(detailTask.payload) }}</pre>
+            <div class="detail-section-title">{{ detailTask.task_type === 'run_playbook' ? ui.playbookContent : `${ui.taskPayload} JSON` }}</div>
+            <template v-if="detailTask.task_type === 'run_playbook'">
+              <div class="detail-kv">{{ ui.playbookName }}: {{ detailTask.payload?.playbook_name || '-' }}</div>
+              <pre class="detail-code-block template-code-block yaml-code-block">{{ formatMultilineContent(detailTask.payload?.playbook_content) }}</pre>
+            </template>
+            <pre v-else class="detail-code-block">{{ formatPayloadJson(detailTask.payload) }}</pre>
           </div>
           <div class="detail-section">
             <div class="detail-section-title">{{ ui.executionDetails }}</div>
             <el-table :data="detailTask.executions || []" max-height="520" :empty-text="ui.emptyExecutions">
-              <el-table-column prop="target_name" :label="ui.targetResource" min-width="160" />
+              <el-table-column :label="ui.targetResource" min-width="180">
+                <template #default="{ row }">
+                  <div class="execution-target-cell">
+                    <strong>{{ executionTargetName(row) }}</strong>
+                    <span v-if="executionTargetMeta(row)">{{ executionTargetMeta(row) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column :label="ui.status" width="88">
                 <template #default="{ row }"><el-tag size="small" :type="executionStatusType(row.status)">{{ row.status_display }}</el-tag></template>
               </el-table-column>
@@ -1062,6 +1073,16 @@ function templatePreviewLabel(template) {
   return ui.serviceDetail
 }
 function formatPayloadJson(payload) { return JSON.stringify(payload || {}, null, 2) }
+function formatMultilineContent(value) {
+  return String(value || '-').replace(/\\n/g, '\n')
+}
+function executionTargetName(row) {
+  return row?.target_name || row?.host_name || row?.host_ip || row?.target_id || '-'
+}
+function executionTargetMeta(row) {
+  const parts = [row?.host_ip, row?.target_namespace, row?.target_kind].filter(Boolean)
+  return parts.join(' / ')
+}
 function buildTemplateDraft(source = {}) {
   const taskType = source.task_type || 'run_command'
   const targetType = source.target_type || (taskType.startsWith('k8s_') ? 'k8s' : 'host')
@@ -2246,6 +2267,12 @@ onMounted(async () => {
   word-break: break-word;
 }
 
+.yaml-code-block {
+  max-height: 420px;
+  overflow: auto;
+  tab-size: 2;
+}
+
 .detail-actions {
   display: flex;
   align-items: center;
@@ -2291,6 +2318,27 @@ onMounted(async () => {
 .target-list-item span {
   color: #64748b;
   font-size: 12px;
+}
+
+.execution-target-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.execution-target-cell strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-target-cell span {
+  color: #64748b;
+  font-size: 11px;
 }
 
 .output-block {

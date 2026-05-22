@@ -25,7 +25,8 @@ from eventwall.models import EventRecord
 from eventwall.services import record_event
 from iac.models import TerraformExecution, TerraformStack
 from multicloud.models import CloudAsset
-from ops.host_tasks import start_host_task
+from ops.host_tasks import build_host_target_snapshot as build_ops_host_target_snapshot
+from ops.host_tasks import resolve_host_source_refs, start_host_task
 from ops.models import (
     Alert,
     Deployment,
@@ -40,6 +41,8 @@ from ops.models import (
     ObservabilityDataSourceLink,
     SystemPostureSLAHistory,
     SystemPostureSystem,
+    TaskResource,
+    TaskResourceGroup,
     TracingDataSource,
     TransactionTicket,
 )
@@ -52,6 +55,8 @@ from ops.tracing_providers import (
 )
 from ops.middleware_views import _build_payload as build_middleware_payload
 from ops.middleware_views import _get_demo_state as get_middleware_demo_state
+from ops.log_views import _merge_config as merge_log_config
+from ops.log_views import _run_query as run_log_provider_query
 from ops.observability_views import execute_dashboard_panel_queries, execute_promql_query
 from rbac.services import is_demo_account, user_has_permissions
 
@@ -194,7 +199,7 @@ BUILTIN_MCP_SERVERS = [
         'name': '任务中心 MCP',
         'server_type': AIOpsMCPServer.SERVER_PLATFORM_BUILTIN,
         'description': '查询主机任务并生成任务草稿。',
-        'tool_whitelist': ['generate_host_task'],
+        'tool_whitelist': ['query_task_resources', 'generate_host_task'],
     },
     {
         'name': '事件墙 MCP',
@@ -967,6 +972,432 @@ def _clean_posture_query_tokens(text):
     return deduped[:8]
 
 
+def _normalize_log_level_filter(value):
+    text = str(value or '').strip().lower()
+    if text in {'error', 'err', 'fatal', 'critical', 'crit', '错误', '异常', '失败'}:
+        return 'error'
+    if text in {'warning', 'warn', '警告', '告警'}:
+        return 'warning'
+    if text in {'info', 'information', 'notice', '信息'}:
+        return 'info'
+    if text in {'debug', 'trace', 'verbose', '调试'}:
+        return 'debug'
+    return ''
+
+
+def _detect_log_level_filter(query='', level=''):
+    explicit = _normalize_log_level_filter(level)
+    if explicit:
+        return explicit
+    text = str(query or '').lower()
+    if any(keyword in text for keyword in ['error', 'errors', 'err', 'fatal', 'exception', '错误', '异常', '失败']):
+        return 'error'
+    if any(keyword in text for keyword in ['warning', 'warn', '警告', '告警']):
+        return 'warning'
+    if any(keyword in text for keyword in ['debug', 'trace', '调试']):
+        return 'debug'
+    if any(keyword in text for keyword in ['info', '信息']):
+        return 'info'
+    return ''
+
+
+def _normalize_log_levels_filter(value):
+    if isinstance(value, (list, tuple, set)):
+        raw_values = value
+    else:
+        raw_values = re.split(r'[,，/、\s]+', str(value or ''))
+    levels = []
+    for item in raw_values:
+        level = _normalize_log_level_filter(item)
+        if level and level not in levels:
+            levels.append(level)
+    return levels
+
+
+def _detect_log_levels_filter(query='', level='', levels=None):
+    explicit_levels = _normalize_log_levels_filter(levels)
+    explicit_level = _normalize_log_level_filter(level)
+    if explicit_level and explicit_level not in explicit_levels:
+        explicit_levels.append(explicit_level)
+    if explicit_levels:
+        return explicit_levels
+    text = str(query or '').lower()
+    detected = []
+    checks = [
+        ('error', ['error', 'errors', 'err', 'fatal', 'exception', '错误', '异常', '失败']),
+        ('warning', ['warning', 'warn', '警告', '告警']),
+        ('debug', ['debug', 'trace', '调试']),
+        ('info', ['info', '信息']),
+    ]
+    for level_name, keywords in checks:
+        if any(keyword in text for keyword in keywords):
+            detected.append(level_name)
+    return detected
+
+
+def _primary_log_level(levels):
+    return levels[0] if len(levels or []) == 1 else ''
+
+
+def _format_log_levels_label(levels, fallback='all'):
+    normalized = _normalize_log_levels_filter(levels)
+    if normalized:
+        return '/'.join(item.upper() for item in normalized)
+    return str(fallback or 'all').upper()
+
+
+def _detect_log_duration_minutes(query='', duration_minutes=None):
+    try:
+        explicit = int(duration_minutes or 0)
+    except (TypeError, ValueError):
+        explicit = 0
+    if explicit > 0:
+        return max(1, min(explicit, 1440))
+    text = str(query or '').lower()
+    half_hour_markers = ['最近半小时', '近半小时', '过去半小时', '半小时', '30分钟', '30 分钟', 'half hour']
+    if any(marker in text for marker in half_hour_markers):
+        return 30
+    hour_match = re.search(r'(?:最近|近|过去)?\s*(\d{1,3})\s*(?:小时|hour|hours|h)\b', text)
+    if hour_match:
+        return max(1, min(int(hour_match.group(1)) * 60, 1440))
+    minute_match = re.search(r'(?:最近|近|过去)?\s*(\d{1,4})\s*(?:分钟|minute|minutes|min|m)\b', text)
+    if minute_match:
+        return max(1, min(int(minute_match.group(1)), 1440))
+    return 60
+
+
+def _normalize_service_name(value):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+    normalized = text.lower().replace('_', '-')
+    if normalized == 'api gateway':
+        return 'api-gateway'
+    return normalized
+
+
+def _service_aliases_for_name(service_name):
+    name = str(service_name or '').strip()
+    if not name:
+        return []
+    lowered = name.lower()
+    return [name, lowered, lowered.replace('-', ' '), lowered.replace('-', '_')]
+
+
+def _match_service_from_options(query, service_options):
+    text = str(query or '').strip()
+    if not text:
+        return ''
+    lowered = text.lower()
+    options = [str(item or '').strip() for item in (service_options or []) if str(item or '').strip()]
+    for service_name in options:
+        for alias in _service_aliases_for_name(service_name):
+            alias_text = str(alias or '').strip()
+            if not alias_text:
+                continue
+            if re.search(r'[\u4e00-\u9fff]', alias_text):
+                if alias_text in text:
+                    return service_name
+            elif re.search(rf'(?<![A-Za-z0-9_.@-]){re.escape(alias_text.lower())}(?![A-Za-z0-9_.@-])', lowered):
+                return service_name
+    return ''
+
+
+def _service_options_from_knowledge_environment(knowledge_environment):
+    if not knowledge_environment:
+        return []
+    services = []
+    snapshot = knowledge_environment.get('association_snapshot') or {}
+    if isinstance(snapshot, dict):
+        for node in snapshot.get('nodes') or []:
+            if not isinstance(node, dict) or node.get('kind') != 'service':
+                continue
+            label = node.get('service') or node.get('label') or node.get('name')
+            if label and label not in services:
+                services.append(label)
+    try:
+        graph = build_knowledge_graph(_querydict_for_environment(knowledge_environment.get('name')))
+    except Exception:
+        graph = {}
+    for node in graph.get('nodes') or []:
+        if node.get('kind') != 'service':
+            continue
+        label = node.get('label') or node.get('name')
+        if label and label not in services:
+            services.append(label)
+    return services
+
+
+def _detect_log_service(query='', service='', service_options=None):
+    explicit = _normalize_service_name(service)
+    if explicit:
+        matched = _match_service_from_options(explicit, service_options)
+        if matched:
+            return matched
+        return explicit
+    text = str(query or '').strip()
+    lowered = text.lower()
+    matched = _match_service_from_options(text, service_options)
+    if matched:
+        return matched
+    if 'gateway' in lowered or '网关' in text:
+        return 'api-gateway'
+    service_match = re.search(r'(?:service|服务|应用)\s*[:=：]\s*([A-Za-z0-9_.@-]+)', text, flags=re.IGNORECASE)
+    if service_match:
+        return _normalize_service_name(service_match.group(1))
+    for token in re.findall(r'[A-Za-z][A-Za-z0-9_.@-]{2,}', text):
+        if token.lower() not in {'error', 'errors', 'warning', 'warn', 'info', 'debug', 'logs', 'log', 'loki', 'trace'}:
+            normalized = _normalize_service_name(token)
+            matched = _match_service_from_options(normalized, service_options)
+            return matched or normalized
+    return ''
+
+
+def _parse_json_object_from_text(text):
+    raw = str(text or '').strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r'\{.*\}', raw, flags=re.DOTALL)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _llm_extract_log_query_arguments(provider, question, scoped_question, service_options=None):
+    if not provider:
+        return {}
+    service_options = [str(item) for item in (service_options or []) if str(item or '').strip()]
+    prompt = '\n'.join([
+        '你是 AIOps 日志查询参数抽取器。只返回 JSON，不要解释。',
+        '从用户问题中抽取 service、levels、duration_minutes。',
+        'service 必须优先从候选服务中选择；如果用户使用中文服务名、业务别名或近义表达，请映射到最可能的候选服务。',
+        'levels 是数组，元素只能是 error、warning、info、debug；如果用户同时提到警告和错误，必须返回 ["warning","error"]。',
+        'duration_minutes 必须是 1 到 1440 的整数；最近半小时是 30。',
+        '如果无法确定 service，返回空字符串。',
+        f'候选服务：{json.dumps(service_options, ensure_ascii=False)}',
+        f'用户问题：{question}',
+        f'带环境问题：{scoped_question}',
+        '返回格式：{"service":"","levels":[],"duration_minutes":60}',
+    ])
+    completion = _request_model_completion(provider, {
+        'model': provider.default_model,
+        'temperature': 0,
+        'max_tokens': 256,
+        'messages': [
+            {'role': 'system', 'content': '只输出一个 JSON object。'},
+            {'role': 'user', 'content': prompt},
+        ],
+    })
+    message = (((completion or {}).get('choices') or [{}])[0]).get('message') or {}
+    parsed = _parse_json_object_from_text(_extract_message_content(message))
+    service = str(parsed.get('service') or '').strip()
+    if service_options:
+        matched_service = _match_service_from_options(service, service_options)
+        if matched_service:
+            service = matched_service
+        elif service and service not in service_options:
+            service = ''
+    levels = _normalize_log_levels_filter(parsed.get('levels'))
+    single_level = _normalize_log_level_filter(parsed.get('level'))
+    if single_level and single_level not in levels:
+        levels.append(single_level)
+    try:
+        duration = int(parsed.get('duration_minutes') or 0)
+    except (TypeError, ValueError):
+        duration = 0
+    return {
+        'service': service,
+        'levels': levels,
+        'level': levels[0] if len(levels) == 1 else '',
+        'duration_minutes': max(1, min(duration, 1440)) if duration > 0 else None,
+    }
+
+
+def _log_level_query_terms(provider, level):
+    if not level:
+        return []
+    if level == 'error':
+        return ['detected_level="error"', 'level="ERROR"', 'level="error"', '|= "ERROR"', '|= "error"']
+    if level == 'warning':
+        return ['detected_level="warn"', 'detected_level="warning"', 'level="WARN"', 'level="WARNING"', '|= "WARN"', '|= "WARNING"']
+    if level == 'info':
+        return ['detected_level="info"', 'level="INFO"', 'level="info"', '|= "INFO"']
+    if level == 'debug':
+        return ['detected_level="debug"', 'level="DEBUG"', 'level="debug"', '|= "DEBUG"']
+    return []
+
+
+def _level_regex_terms(level):
+    if level == 'error':
+        return ['error', 'err', 'fatal', 'critical', 'crit']
+    if level == 'warning':
+        return ['warn', 'warning']
+    if level == 'info':
+        return ['info', 'information', 'notice']
+    if level == 'debug':
+        return ['debug', 'trace', 'verbose']
+    return []
+
+
+def _loki_level_pipeline(levels=None):
+    terms = []
+    for level in _normalize_log_levels_filter(levels):
+        for item in _level_regex_terms(level):
+            if item not in terms:
+                terms.append(item)
+    if terms:
+        return f'| json | detected_level=~"{"|".join(terms)}"'
+    return '| json'
+
+
+def _render_loki_selector(labels):
+    parts = []
+    for key, value in labels.items():
+        if key and value:
+            escaped = str(value).replace('\\', '\\\\').replace('"', '\\"')
+            parts.append(f'{key}="{escaped}"')
+    return '{' + ','.join(parts) + '}' if parts else '{job!=""}'
+
+
+def _build_log_datasource_scope(knowledge_environment):
+    if not knowledge_environment:
+        datasource_queryset = LogDataSource.objects.filter(is_enabled=True).order_by('-is_default', 'provider', 'name')
+        return list(datasource_queryset[:3]), []
+    log_ids = list(knowledge_environment.get('log_datasource_ids') or [])
+    link_ids = list(knowledge_environment.get('observability_link_ids') or [])
+    link_queryset = ObservabilityDataSourceLink.objects.select_related('log_datasource').filter(is_enabled=True)
+    if link_ids:
+        link_queryset = link_queryset.filter(id__in=link_ids)
+    elif log_ids:
+        link_queryset = link_queryset.filter(log_datasource_id__in=log_ids)
+    else:
+        link_queryset = link_queryset.none()
+    links = list(link_queryset.order_by('-is_default', 'name'))
+    datasource_ids = set(log_ids)
+    datasource_ids.update(link.log_datasource_id for link in links if link.log_datasource_id)
+    datasource_queryset = LogDataSource.objects.filter(is_enabled=True)
+    if datasource_ids:
+        datasource_queryset = datasource_queryset.filter(id__in=datasource_ids)
+    else:
+        datasource_queryset = datasource_queryset.none()
+    datasources = list(datasource_queryset.order_by('-is_default', 'provider', 'name'))
+    return datasources, links
+
+
+def _labels_from_observability_links(links, service_name='', namespace=''):
+    labels = {}
+    for link in links:
+        for item in link.log_label_mappings or []:
+            if not isinstance(item, dict):
+                continue
+            trace_tag = str(item.get('trace_tag') or '').strip()
+            log_label = str(item.get('log_label') or '').strip()
+            if not log_label:
+                continue
+            if trace_tag in {'service.name', 'service', 'serviceName'} and service_name:
+                labels.setdefault(log_label, service_name)
+            if trace_tag in {'service.namespace', 'namespace', 'k8s.namespace.name'} and namespace:
+                labels.setdefault(log_label, namespace)
+    if service_name:
+        labels.setdefault('container', service_name)
+    if namespace:
+        labels.setdefault('namespace', namespace)
+    return labels
+
+
+def _query_live_log_datasources(knowledge_environment, query='', service='', level='', levels=None, duration_minutes=60, limit=6):
+    resolved_levels = _detect_log_levels_filter(query, level, levels)
+    resolved_level = _primary_log_level(resolved_levels)
+    datasources, links = _build_log_datasource_scope(knowledge_environment)
+    if not datasources:
+        return {'logs': [], 'datasources': [], 'source': '', 'error': 'no_log_datasource'}
+    namespace = ''
+    namespaces = knowledge_environment.get('k8s_namespaces') if knowledge_environment else {}
+    if isinstance(namespaces, dict):
+        for values in namespaces.values():
+            if isinstance(values, list) and values:
+                namespace = str(values[0] or '').strip()
+                break
+    start_ms = int((timezone.now() - timedelta(minutes=duration_minutes)).timestamp() * 1000)
+    end_ms = int(timezone.now().timestamp() * 1000)
+    all_logs = []
+    errors = []
+    datasource_summaries = []
+    for datasource in datasources:
+        config = merge_log_config(datasource.provider, datasource.config)
+        payload = {
+            'provider': datasource.provider,
+            'datasource_id': datasource.id,
+            'start_ms': start_ms,
+            'end_ms': end_ms,
+            'limit': max(limit, 20),
+        }
+        if datasource.provider == 'loki':
+            labels = _labels_from_observability_links(
+                [link for link in links if link.log_datasource_id == datasource.id],
+                service_name=service,
+                namespace=namespace,
+            )
+            selector = _render_loki_selector(labels)
+            payload['query'] = f'{selector} {_loki_level_pipeline(resolved_levels)}' if resolved_levels else selector
+        elif datasource.provider == 'elk':
+            clauses = []
+            if service:
+                clauses.append(f'(service.name:"{service}" OR service:"{service}" OR container:"{service}")')
+            if resolved_levels:
+                level_clauses = []
+                for item in resolved_levels:
+                    for value in _level_regex_terms(item):
+                        level_clauses.append(f'level:"{value.upper()}"')
+                        level_clauses.append(f'level:"{value}"')
+                        level_clauses.append(f'detected_level:"{value}"')
+                clauses.append(f"({' OR '.join(dict.fromkeys(level_clauses))})")
+            payload['query'] = ' AND '.join(clauses)
+            payload['source'] = config.get('index_pattern') or '*'
+            payload['index_pattern'] = config.get('index_pattern') or '*'
+            payload['time_field'] = config.get('time_field') or '@timestamp'
+            payload['message_fields'] = config.get('message_fields') or 'message,log,msg'
+        elif datasource.provider == 'sls':
+            clauses = []
+            if service:
+                clauses.append(service)
+            for item in resolved_levels:
+                clauses.extend(_log_level_query_terms('sls', item)[:2])
+            payload['query'] = ' AND '.join(clauses) or '*'
+            payload['source'] = config.get('logstore') or ''
+            payload['logstore'] = config.get('logstore') or ''
+        try:
+            result = run_log_provider_query(datasource.provider, config, payload)
+            datasource_summaries.append({'id': datasource.id, 'name': datasource.name, 'provider': datasource.provider, 'query': payload.get('query')})
+            for item in result.get('logs') or []:
+                item = dict(item)
+                item['datasource_name'] = datasource.name
+                item['datasource_id'] = datasource.id
+                all_logs.append(item)
+        except Exception as exc:
+            errors.append(f'{datasource.name}: {str(exc)[:160]}')
+    all_logs.sort(key=lambda item: str(item.get('timestamp') or ''), reverse=True)
+    return {
+        'logs': all_logs[:limit],
+        'datasources': datasource_summaries,
+        'source': 'live_log_datasource',
+        'errors': errors,
+        'duration_minutes': duration_minutes,
+        'service': service,
+        'level': resolved_level,
+        'levels': resolved_levels,
+    }
+
+
 def _normalize_alert_query_request(query='', level='', only_unacknowledged=False, status='', date_filter=''):
     raw_query = query or ''
     normalized_query = raw_query
@@ -1201,6 +1632,7 @@ def _build_analysis_scope(knowledge_environment):
         'tracing_datasource_ids': knowledge_environment.get('tracing_datasource_ids') or [],
         'k8s_cluster_ids': knowledge_environment.get('k8s_cluster_ids') or [],
         'docker_host_ids': knowledge_environment.get('docker_host_ids') or [],
+        'task_resource_environment_ids': knowledge_environment.get('task_resource_environment_ids') or [],
     }
 
 
@@ -1236,10 +1668,6 @@ def _extract_system_name(text):
         if keyword.lower() in lowered:
             return normalized
     return ''
-
-
-def _extract_business_line(text):
-    return _extract_system_name(text)
 
 
 def _contains_any(text, keywords):
@@ -1467,6 +1895,13 @@ def query_resources(session, user_message, user, query='', environment='', limit
     resource_type = _detect_k8s_resource_type(query)
     if resource_type and resource_type != 'pods':
         return query_k8s_resources(session, user_message, user, query=query, resource_type=resource_type, limit=limit)
+    if any(keyword in (query or '') for keyword in ['\u8d44\u6e90\u5e95\u5ea7', '\u5168\u90e8\u4e3b\u673a', '\u6240\u6709\u4e3b\u673a', '\u4e3b\u673a', '\u670d\u52a1\u5668']) or 'host' in lowered_query:
+        status = 'inactive' if any(keyword in lowered_query for keyword in ['offline', 'inactive']) or '\u79bb\u7ebf' in (query or '') else 'active'
+        return query_task_resources(session, user_message, user, query=query, environment=environment, resource_type='host', status=status, limit=max(limit, 20))
+    if user_has_permissions(user, ['ops.task.resource.view']):
+        resource_result = query_task_resources(session, user_message, user, query=query, environment=environment, resource_type='', status='', limit=max(limit, 20))
+        if resource_result.get('summary', {}).get('count'):
+            return resource_result
     if any(keyword in lowered_query for keyword in ['离线', 'offline']) and any(keyword in lowered_query for keyword in ['主机', '服务器', 'host']):
         return query_hosts(session, user_message, user, query=query, environment=environment, status='offline', limit=limit)
     if any(keyword in lowered_query for keyword in ['月成本', '成本', 'cost']):
@@ -1496,7 +1931,7 @@ def query_resources(session, user_message, user, query='', environment='', limit
                 'items': [f'{host.hostname} ({host.ip_address}) / {host.get_status_display()}' for host in hosts],
             })
             summary['hosts'] = len(hosts)
-            citations.append({'title': '主机中心', 'path': '/hosts/assets'})
+            citations.append({'title': '资源底座', 'path': '/tasks/resources'})
 
     if user_has_permissions(user, ['cmdb.ci.view']):
         ci_queryset = ConfigItem.objects.select_related('ci_type').all()
@@ -1586,7 +2021,8 @@ def query_resources(session, user_message, user, query='', environment='', limit
 
 def query_hosts(session, user_message, user, query='', environment='', status='', limit=6):
     started_at = time.time()
-    environment = environment or _extract_environment(query)
+    resource_environment = environment or _resolve_task_resource_environment_from_text(query)
+    environment = environment or resource_environment or _extract_environment(query)
     resolved_status = (status or '').strip().lower()
     if not resolved_status:
         lowered = (query or '').lower()
@@ -1594,6 +2030,26 @@ def query_hosts(session, user_message, user, query='', environment='', status=''
             resolved_status = 'offline'
         elif any(keyword in lowered for keyword in ['在线', 'online']):
             resolved_status = 'online'
+    if user_has_permissions(user, ['ops.task.resource.view']):
+        resource_status = ''
+        if resolved_status == 'offline':
+            resource_status = TaskResource.STATUS_INACTIVE
+        elif resolved_status == 'online':
+            resource_status = TaskResource.STATUS_ACTIVE
+        result = query_task_resources(
+            session,
+            user_message,
+            user,
+            query=query,
+            environment=resource_environment or environment,
+            resource_type=TaskResource.RESOURCE_HOST,
+            status=resource_status,
+            limit=max(limit, 20),
+        )
+        if result.get('summary', {}).get('count') or not user_has_permissions(user, ['ops.host.view']):
+            result.setdefault('summary', {})['compat_tool'] = 'query_hosts'
+            result['citations'] = [{'title': '资源底座', 'path': '/tasks/resources'}]
+            return result
     search_query = _strip_common_query_phrases(
         query,
         [
@@ -1629,19 +2085,224 @@ def query_hosts(session, user_message, user, query='', environment='', status=''
     }] if hosts else []
     summary = {'count': len(hosts), 'environment': environment, 'status': resolved_status}
     _finish_tool_invocation(invocation, summary, started_at, success=True)
-    return {'summary': summary, 'sections': sections, 'citations': [{'title': '主机中心', 'path': '/hosts/assets'}], 'hosts': hosts}
+    return {'summary': summary, 'sections': sections, 'citations': [{'title': '资源底座', 'path': '/tasks/resources'}], 'hosts': hosts}
+
+
+def _task_resource_environment_filter(queryset, environment):
+    environment_text = str(environment or '').strip()
+    if not environment_text:
+        return queryset
+    if environment_text not in {'prod', 'test', 'dev'}:
+        environment_ids = []
+        for group in TaskResourceGroup.objects.filter(group_type=TaskResourceGroup.GROUP_ENVIRONMENT):
+            name = str(group.name or '')
+            code = str(group.code or '')
+            if environment_text == name or environment_text in name or name in environment_text or environment_text.lower() == code.lower():
+                environment_ids.append(group.id)
+        if environment_ids:
+            return queryset.filter(environment_id__in=environment_ids)
+    filters = Q(environment__name__icontains=environment_text) | Q(environment__code__iexact=environment_text)
+    if environment_text in {'prod', 'test', 'dev'}:
+        env_aliases = {
+            'prod': ['生产', '生产环境', 'prod'],
+            'test': ['测试', '测试环境', 'test'],
+            'dev': ['开发', '开发环境', 'dev'],
+        }
+        for alias in env_aliases.get(environment_text, []):
+            filters |= Q(environment__name__icontains=alias) | Q(environment__code__iexact=alias)
+    return queryset.filter(filters)
+
+
+def _task_resource_system_filter(queryset, system_name):
+    system_text = str(system_name or '').strip()
+    if not system_text:
+        return queryset
+    return queryset.filter(Q(system__name__icontains=system_text) | Q(system__code__iexact=system_text))
+
+
+def _task_resource_search_filter(queryset, query):
+    raw_query = str(query or '')
+    if (
+        '\u5168\u90e8' in raw_query
+        or '\u6240\u6709' in raw_query
+        or (any(keyword in raw_query for keyword in ['\u4e3b\u673a', '\u670d\u52a1\u5668']) and any(keyword in raw_query for keyword in ['\u6709\u54ea\u4e9b', '\u54ea\u4e9b', '\u5217\u8868']))
+    ):
+        return queryset
+    if any(keyword in str(query or '') for keyword in ['\u5168\u90e8', '\u6240\u6709']):
+        return queryset
+    if any(keyword in str(query or '') for keyword in ['全部', '所有']):
+        return queryset
+    search_query = _strip_common_query_phrases(
+        raw_query,
+        [
+            '任务中心', '资源底座', '资源', '全部', '所有', '主机', '服务器', '巡检任务', '巡检',
+            '环境', '系统', '电商', '测试', '生产', '开发', 'prod', 'test', 'dev',
+        ],
+    )
+    tokens = _clean_tokens(search_query)
+    if not tokens:
+        return queryset
+    filters = Q()
+    for token in tokens:
+        filters |= (
+            Q(name__icontains=token)
+            | Q(ip_address__icontains=token)
+            | Q(description__icontains=token)
+            | Q(owner__icontains=token)
+            | Q(environment__name__icontains=token)
+            | Q(system__name__icontains=token)
+            | Q(cluster__name__icontains=token)
+        )
+    return queryset.filter(filters)
+
+
+def _filter_task_resources_by_query(queryset, query, allow_scope_fallback=False):
+    filtered = _task_resource_search_filter(queryset, query)
+    if allow_scope_fallback and not filtered.exists():
+        return queryset
+    return filtered
+
+
+def _soft_filter_task_resources_by_system(queryset, system_name, allow_scope_fallback=False):
+    filtered = _task_resource_system_filter(queryset, system_name)
+    if system_name and allow_scope_fallback and not filtered.exists():
+        return queryset
+    return filtered
+
+
+def _format_task_resource(resource):
+    return {
+        'id': resource.id,
+        'name': resource.name,
+        'hostname': resource.name,
+        'resource_type': resource.resource_type,
+        'environment': resource.environment.name if resource.environment_id else '',
+        'environment_code': resource.environment.code if resource.environment_id else '',
+        'system': resource.system.name if resource.system_id else '',
+        'system_code': resource.system.code if resource.system_id else '',
+        'status': resource.status,
+        'ip_address': str(resource.ip_address or ''),
+        'ssh_port': resource.ssh_port,
+        'owner': resource.owner,
+        'description': resource.description,
+    }
+
+
+def _resolve_task_resource_environment_from_text(text):
+    raw_text = str(text or '').strip()
+    if not raw_text:
+        return ''
+    best = ''
+    for group in TaskResourceGroup.objects.filter(group_type=TaskResourceGroup.GROUP_ENVIRONMENT):
+        name = str(group.name or '').strip()
+        code = str(group.code or '').strip()
+        candidates = [item for item in [name, code] if item]
+        if any(candidate and candidate in raw_text for candidate in candidates):
+            if not best or len(name) > len(best):
+                best = name
+    return best
+
+
+def _knowledge_environment_for_session(session):
+    context = session.context if isinstance(getattr(session, 'context', None), dict) else {}
+    current_environment = context.get('current_environment') or {}
+    environment_name = current_environment.get('name') if isinstance(current_environment, dict) else current_environment
+    return resolve_knowledge_environment(environment_name)
+
+
+def query_task_resources(session, user_message, user, query='', environment='', system_name='', resource_type='host', status='active', limit=20, knowledge_environment=None):
+    started_at = time.time()
+    knowledge_environment = knowledge_environment or _resolve_knowledge_environment_for_query(query, environment) or _knowledge_environment_for_session(session)
+    environment = environment or _resolve_task_resource_environment_from_text(query) or _extract_environment(query)
+    resource_type = (resource_type or 'host').strip().lower()
+    if resource_type in {'hosts', 'server', 'servers', 'machine', 'machines'}:
+        resource_type = TaskResource.RESOURCE_HOST
+    if resource_type in {'k8s', 'kubernetes', 'cluster', 'clusters'}:
+        resource_type = TaskResource.RESOURCE_K8S
+    status_value = (status or '').strip().lower()
+    try:
+        limit = max(1, min(int(limit or 20), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    invocation = _create_tool_invocation(
+        session,
+        user_message,
+        'query_task_resources',
+        {
+            'query': query,
+            'environment': environment,
+            'system_name': system_name,
+            'resource_type': resource_type,
+            'status': status_value,
+            'limit': limit,
+            'knowledge_environment': (knowledge_environment or {}).get('name'),
+        },
+    )
+    if not user_has_permissions(user, ['ops.task.resource.view']):
+        _finish_tool_invocation(invocation, {'detail': 'missing_permission'}, started_at, success=False)
+        return {'summary': {'count': 0, 'detail': 'missing_permission'}, 'sections': [], 'citations': [{'title': '任务中心资源底座', 'path': '/tasks/resources'}], 'resources': []}
+
+    queryset = TaskResource.objects.select_related('environment', 'system', 'cluster').all()
+    if resource_type:
+        queryset = queryset.filter(resource_type=resource_type)
+    scoped_env_ids = list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
+    if scoped_env_ids:
+        queryset = queryset.filter(environment_id__in=scoped_env_ids)
+    elif environment:
+        queryset = _task_resource_environment_filter(queryset, environment)
+    has_environment_scope = bool(scoped_env_ids or environment)
+    queryset = _soft_filter_task_resources_by_system(
+        queryset,
+        system_name,
+        allow_scope_fallback=has_environment_scope,
+    )
+    if status_value:
+        queryset = queryset.filter(status=status_value)
+    queryset = _filter_task_resources_by_query(
+        queryset,
+        query,
+        allow_scope_fallback=has_environment_scope,
+    )
+    resources = list(queryset.order_by('environment__sort_order', 'system__sort_order', 'resource_type', 'name', 'id')[:limit])
+    formatted_resources = [_format_task_resource(item) for item in resources]
+    sections = []
+    if resources:
+        sections.append({
+            'title': '任务中心资源底座',
+            'items': [
+                f"{item.name} ({item.ip_address or (item.cluster.name if item.cluster_id else '-')}) / {item.environment.name if item.environment_id else '-'} / {item.system.name if item.system_id else '-'} / {item.status} / resource_id={item.id}"
+                for item in resources[:20]
+            ],
+        })
+    summary = {
+        'count': len(resources),
+        'environment': environment,
+        'system_name': system_name,
+        'resource_type': resource_type,
+        'status': status_value,
+        'knowledge_environment': (knowledge_environment or {}).get('name'),
+        'resource_ids': [item.id for item in resources],
+    }
+    _finish_tool_invocation(invocation, summary, started_at, success=True)
+    return {
+        'summary': summary,
+        'sections': sections,
+        'citations': [{'title': '任务中心资源底座', 'path': '/tasks/resources'}],
+        'resources': formatted_resources,
+        'resource_ids': summary['resource_ids'],
+    }
 
 
 def query_cost_report(session, user_message, user, query='', environment='', business_line='', month='', limit=5):
     started_at = time.time()
     environment = environment or _extract_environment(query)
-    business_line = business_line or _extract_business_line(query)
+    system_name = business_line or _extract_system_name(query)
     month = (month or timezone.localdate().strftime('%Y-%m')).strip()
     invocation = _create_tool_invocation(
         session,
         user_message,
         'query_cost_report',
-        {'query': query, 'environment': environment, 'business_line': business_line, 'month': month, 'limit': limit},
+        {'query': query, 'environment': environment, 'system_name': system_name, 'month': month, 'limit': limit},
     )
     if not user_has_permissions(user, ['cmdb.ci.view']):
         _finish_tool_invocation(invocation, {'detail': 'missing_permission'}, started_at, success=False)
@@ -1655,7 +2316,7 @@ def query_cost_report(session, user_message, user, query='', environment='', bus
         ci = row['ci']
         if environment and ci.environment != environment:
             continue
-        if business_line and ci.business_line != business_line:
+        if system_name and ci.business_line != system_name:
             continue
         filtered_rows.append(row)
 
@@ -1665,7 +2326,7 @@ def query_cost_report(session, user_message, user, query='', environment='', bus
         'title': '成本概览',
         'items': [
             f"月份：{month}",
-            f"系统：{business_line or '全部系统'}",
+            f"系统：{system_name or '全部系统'}",
             f"环境：{environment or '全部环境'}",
             f"月成本合计：{float(total):.2f} 元",
         ],
@@ -1682,7 +2343,7 @@ def query_cost_report(session, user_message, user, query='', environment='', bus
         'month': month,
         'count': len(filtered_rows),
         'environment': environment,
-        'business_line': business_line,
+        'system_name': system_name,
         'total_monthly_cost': float(total),
     }
     _finish_tool_invocation(invocation, summary, started_at, success=True)
@@ -1726,7 +2387,6 @@ def query_alerts(session, user_message, user, query='', level='', only_unacknowl
             'status': status,
             'date_filter': date_filter,
             'system_name': system_name,
-            'business_line': system_name,
             'limit': limit,
         },
     )
@@ -1794,7 +2454,6 @@ def query_alerts(session, user_message, user, query='', level='', only_unacknowl
         'status': status,
         'date_filter': date_filter,
         'system_name': system_name,
-        'business_line': system_name,
         'environment': knowledge_environment.get('name') if knowledge_environment else environment,
     }
     _finish_tool_invocation(invocation, response_summary, started_at, success=True)
@@ -2541,11 +3200,24 @@ def query_events(session, user_message, user, query='', date_filter='', limit=8)
     return {'summary': summary, 'sections': sections, 'citations': [{'title': '事件墙', 'path': '/events/wall'}], 'events': events}
 
 
-def query_logs(session, user_message, user, query='', limit=6):
+def query_logs(session, user_message, user, query='', service='', level='', levels=None, duration_minutes=None, limit=6):
     started_at = time.time()
     knowledge_environment = _resolve_knowledge_environment_for_query(query)
     search_query = _strip_knowledge_environment_name(query, knowledge_environment)
-    tokens = _clean_tokens(search_query)
+    service_options = _service_options_from_knowledge_environment(knowledge_environment)
+    resolved_service = _detect_log_service(search_query, service, service_options=service_options)
+    resolved_levels = _detect_log_levels_filter(query, level, levels)
+    resolved_level = _primary_log_level(resolved_levels)
+    resolved_duration = _detect_log_duration_minutes(query, duration_minutes)
+    cleaned_search_query = _strip_common_query_phrases(
+        search_query,
+        ['最近', '近', '过去', '半小时', '分钟', '小时', '日志', '错误日志', '错误', '异常', '分析', '帮我', '看下', '查询', '环境', '测试环境'],
+    )
+    tokens = [
+        token for token in _clean_tokens(cleaned_search_query)
+        if token not in {resolved_service, resolved_level, 'gateway'}
+        and token not in set(resolved_levels)
+    ]
     invocation = _create_tool_invocation(
         session,
         user_message,
@@ -2553,6 +3225,10 @@ def query_logs(session, user_message, user, query='', limit=6):
         {
             'query': query,
             'knowledge_environment': knowledge_environment.get('name') if knowledge_environment else '',
+            'service': resolved_service,
+            'level': resolved_level,
+            'levels': resolved_levels,
+            'duration_minutes': resolved_duration,
             'tokens': tokens,
             'limit': limit,
         },
@@ -2561,19 +3237,79 @@ def query_logs(session, user_message, user, query='', limit=6):
     if not allowed:
         _finish_tool_invocation(invocation, {'detail': 'missing_permission'}, started_at, success=False)
         return {'sections': [], 'citations': []}
+    live_result = _query_live_log_datasources(
+        knowledge_environment,
+        query=search_query,
+        service=resolved_service,
+        level=resolved_level,
+        levels=resolved_levels,
+        duration_minutes=resolved_duration,
+        limit=limit,
+    )
+    if live_result.get('datasources') or live_result.get('logs'):
+        logs = live_result.get('logs') or []
+        datasource_lines = [
+            f"{item.get('name')} / {item.get('provider')} / {item.get('query') or '-'}"
+            for item in live_result.get('datasources') or []
+        ]
+        log_lines = []
+        for item in logs:
+            attrs = item.get('attributes') if isinstance(item.get('attributes'), dict) else {}
+            effective_level = attrs.get('detected_level') or attrs.get('level') or item.get('level') or '-'
+            log_lines.append(
+                f"{item.get('timestamp') or '-'} / {str(effective_level).upper()} / {item.get('source') or item.get('datasource_name') or '-'} / {str(item.get('message') or '')[:160]}"
+            )
+        sections = [
+            {'title': '日志数据源与查询条件', 'items': datasource_lines or ['未命中可用日志数据源。']},
+            {'title': '最近日志命中', 'items': log_lines or ['当前时间窗口内没有命中日志。']},
+        ]
+        if live_result.get('errors'):
+            sections.append({'title': '日志查询异常', 'items': live_result.get('errors')})
+        summary = {
+            'count': len(logs),
+            'source': live_result.get('source'),
+            'service': resolved_service,
+            'level': resolved_level,
+            'levels': resolved_levels,
+            'duration_minutes': resolved_duration,
+            'datasource_count': len(live_result.get('datasources') or []),
+            'errors': live_result.get('errors') or [],
+        }
+        _finish_tool_invocation(invocation, summary, started_at, success=True)
+        return {
+            'summary': summary,
+            'sections': sections,
+            'citations': [{'title': '日志中心', 'path': '/logs/query'}],
+            'logs': logs,
+            'datasources': live_result.get('datasources') or [],
+        }
     queryset = LogEntry.objects.select_related('host').all()
     if knowledge_environment:
         source_environments = set(knowledge_environment.get('event_environments') or []) | set(knowledge_environment.get('alert_environments') or [])
         if source_environments:
             queryset = queryset.filter(Q(host__environment__in=source_environments) | Q(host__isnull=True))
+    if resolved_service:
+        queryset = queryset.filter(service__icontains=resolved_service)
+    if resolved_levels:
+        queryset = queryset.filter(level__in=resolved_levels)
+    if resolved_duration:
+        queryset = queryset.filter(timestamp__gte=timezone.now() - timedelta(minutes=resolved_duration))
     queryset = _queryset_search(queryset, ['service', 'message', 'host__hostname'], tokens)
     logs = list(queryset.order_by('-timestamp')[:limit])
     sections = [{
         'title': '相关日志',
         'items': [f'{log.get_level_display()} / {log.service} / {log.message[:80]}' for log in logs],
     }] if logs else []
-    _finish_tool_invocation(invocation, {'count': len(logs)}, started_at, success=True)
-    return {'sections': sections, 'citations': [{'title': '日志中心', 'path': '/logs/query'}], 'logs': logs}
+    summary = {
+        'count': len(logs),
+        'source': 'local_log_entry',
+        'service': resolved_service,
+        'level': resolved_level,
+        'levels': resolved_levels,
+        'duration_minutes': resolved_duration,
+    }
+    _finish_tool_invocation(invocation, summary, started_at, success=True)
+    return {'summary': summary, 'sections': sections, 'citations': [{'title': 'Log Center', 'path': '/logs/query'}], 'logs': logs}
 
 
 def _extract_quoted_trace_query(query):
@@ -2754,7 +3490,6 @@ def _direct_alert_query_arguments(question, scoped_question):
         'status': status or Alert.STATUS_ACTIVE if any(keyword in str(question or '').lower() for keyword in ['活跃', '当前', '未恢复', '还在', 'active', 'open']) else status,
         'date_filter': date_filter,
         'system_name': _extract_system_name(scoped_question),
-        'business_line': _extract_system_name(scoped_question),
         'limit': 10,
     }
 
@@ -2779,6 +3514,177 @@ def _is_direct_posture_question(question):
     return any(keyword in lowered for keyword in [
         '系统态势', '态势', 'sla', 'slo', '健康度', '健康', '可用性', '错误率', '延迟',
     ])
+
+
+def _is_direct_log_question(question):
+    lowered = str(question or '').lower()
+    if any(keyword in lowered for keyword in ['链路追踪', '调用链', 'trace', 'tracing']):
+        return False
+    if '日志' in lowered:
+        return True
+    if re.search(r'\b(?:log|logs|loki|elk|sls)\b', lowered):
+        return True
+    return False
+
+
+def _direct_log_query_arguments(question, scoped_question, analysis_scope=None, provider=None):
+    service_options = (analysis_scope or {}).get('services') or []
+    llm_arguments = {}
+    if provider:
+        try:
+            llm_arguments = _llm_extract_log_query_arguments(provider, question, scoped_question, service_options=service_options)
+        except Exception:
+            llm_arguments = {}
+    resolved_levels = (
+        _normalize_log_levels_filter(llm_arguments.get('levels'))
+        or _detect_log_levels_filter(question, llm_arguments.get('level'))
+    )
+    return {
+        'query': scoped_question,
+        'service': llm_arguments.get('service') or _detect_log_service(scoped_question, service_options=service_options),
+        'level': _primary_log_level(resolved_levels),
+        'levels': resolved_levels,
+        'duration_minutes': llm_arguments.get('duration_minutes') or _detect_log_duration_minutes(question),
+        'limit': 8,
+    }
+
+
+def _compact_log_sample(item, max_message_length=500):
+    attrs = item.get('attributes') if isinstance(item.get('attributes'), dict) else {}
+    message = str(item.get('message') or '').replace('\n', ' ').strip()
+    return {
+        'timestamp': item.get('timestamp') or '',
+        'level': attrs.get('detected_level') or attrs.get('level') or item.get('level') or '',
+        'source': item.get('source') or item.get('datasource_name') or '',
+        'message': message[:max_message_length],
+        'trace_id': attrs.get('trace_id') or attrs.get('traceId') or '',
+        'span_id': attrs.get('span_id') or attrs.get('spanId') or '',
+        'attributes': {
+            key: value
+            for key, value in attrs.items()
+            if key in {'service', 'service_name', 'container', 'namespace', 'detected_level', 'level', 'trace_id', 'span_id'}
+        },
+    }
+
+
+def _build_log_fallback_content(log_result, knowledge_environment, log_arguments):
+    summary = log_result.get('summary') or {}
+    logs = log_result.get('logs') or []
+    datasources = log_result.get('datasources') or []
+    service = summary.get('service') or log_arguments.get('service') or '-'
+    level = _format_log_levels_label(summary.get('levels') or log_arguments.get('levels'), fallback=summary.get('level') or log_arguments.get('level') or 'all')
+    duration = summary.get('duration_minutes') or log_arguments.get('duration_minutes') or '-'
+    lines = [
+        '结论：',
+        f"已完成日志查询，但当前没有可用模型生成根因分析；请启用 AIOps 模型后重试。命中 {len(logs)} 条 {service} 最近 {duration} 分钟 {level} 日志。",
+        '查询依据：',
+    ]
+    if datasources:
+        for item in datasources[:3]:
+            lines.append(f"- {item.get('name') or '-'} / {item.get('provider') or '-'} / {item.get('query') or '-'}")
+    else:
+        lines.append('- 未返回日志数据源信息。')
+    lines.append('日志样本：')
+    if logs:
+        for item in logs[:8]:
+            sample = _compact_log_sample(item, max_message_length=220)
+            lines.append(f"- {sample['timestamp'] or '-'} / {str(sample['level'] or '-').upper()} / {sample['source'] or '-'} / {sample['message']}")
+    else:
+        lines.append('- 当前时间窗口内没有命中符合条件的日志。')
+    return '\n'.join(lines)
+
+
+def _build_direct_log_result(log_result, question, knowledge_environment, analysis_scope, log_arguments, provider=None, active_skills=None):
+    summary = log_result.get('summary') or {}
+    logs = log_result.get('logs') or []
+    datasources = log_result.get('datasources') or []
+    level_label = _format_log_levels_label(summary.get('levels') or log_arguments.get('levels'), fallback=summary.get('level') or log_arguments.get('level') or 'all')
+    service = summary.get('service') or log_arguments.get('service') or '-'
+    duration = summary.get('duration_minutes') or log_arguments.get('duration_minutes') or '-'
+    citations = _dedupe_citations(log_result.get('citations', []))
+    log_samples = [_compact_log_sample(item) for item in logs[:8]]
+    sections = [
+        {
+            'title': '日志查询事实',
+            'items': [
+                f"环境：{knowledge_environment.get('name') or '-'}",
+                f"服务：{service}",
+                f"级别：{level_label}",
+                f"时间窗口：最近 {duration} 分钟",
+                f"命中数量：{len(logs)}",
+            ],
+        },
+        {
+            'title': '数据源与查询语句',
+            'items': [
+                f"{item.get('name') or '-'} / {item.get('provider') or '-'} / {item.get('query') or '-'}"
+                for item in datasources[:5]
+            ] or ['未返回日志数据源信息。'],
+        },
+        {
+            'title': '日志样本',
+            'items': [
+                f"{item['timestamp'] or '-'} / {str(item['level'] or '-').upper()} / {item['source'] or '-'} / {item['message']}"
+                for item in log_samples
+            ] or ['当前时间窗口内没有命中符合条件的日志。'],
+        },
+    ]
+    if log_result.get('summary', {}).get('errors'):
+        sections.append({'title': '日志查询异常', 'items': log_result['summary']['errors'][:5]})
+    fallback_content = _build_log_fallback_content(log_result, knowledge_environment, log_arguments)
+    content = fallback_content
+    formatter_result = None
+    collected_tool_outputs = [{
+        'tool_name': 'query_logs',
+        'tool_output': {
+            'summary': summary,
+            'datasources': datasources,
+            'log_samples': log_samples,
+            'sections': sections,
+        },
+    }]
+    if provider:
+        formatter_result = _run_answer_formatter(
+            provider,
+            question=question,
+            draft_content='\n'.join([
+                '请基于日志样本分析可能原因、影响范围、证据和下一步建议；不要只复述日志列表。',
+                fallback_content,
+            ]),
+            sections=sections,
+            citations=citations,
+            tool_calls=['query_logs'],
+            pending_action_draft=None,
+            message_type=AIOpsChatMessage.TYPE_ANALYSIS,
+            active_skills=active_skills or [],
+            collected_tool_outputs=collected_tool_outputs,
+        )
+        if formatter_result.get('used') and not formatter_result.get('fell_back'):
+            content = formatter_result.get('content') or content
+    return {
+        'content': content,
+        'citations': citations,
+        'tool_calls': ['query_logs'],
+        'message_type': AIOpsChatMessage.TYPE_ANALYSIS,
+        'pending_action_draft': None,
+        'metadata': {
+            'execution_mode': 'direct_logs_fastpath',
+            'current_environment': knowledge_environment.get('name'),
+            'analysis_scope': analysis_scope,
+            'log_filters': {
+                'service': log_arguments.get('service'),
+                'level': log_arguments.get('level'),
+                'levels': log_arguments.get('levels') or [],
+                'duration_minutes': log_arguments.get('duration_minutes'),
+            },
+            'formatter_mode': (
+                'skill'
+                if formatter_result and formatter_result.get('used') and not formatter_result.get('fell_back')
+                else 'fallback'
+            ),
+            'formatter_attempts': (formatter_result or {}).get('attempts', 0),
+        },
+    }
 
 
 def _is_direct_container_question(question):
@@ -2843,7 +3749,18 @@ def _direct_event_query_arguments(question, scoped_question):
     }
 
 
-def _build_direct_tool_result(tool_name, tool_result, question, knowledge_environment, analysis_scope, execution_mode, extra_metadata=None):
+def _build_direct_tool_result(
+    tool_name,
+    tool_result,
+    question,
+    knowledge_environment,
+    analysis_scope,
+    execution_mode,
+    extra_metadata=None,
+    provider=None,
+    active_skills=None,
+    prefer_llm=False,
+):
     citations = _dedupe_citations(tool_result.get('citations', []))
     collected_tool_outputs = [{'tool_name': tool_name, 'tool_output': tool_result}]
     final_content = _ensure_followup_line(
@@ -2855,12 +3772,32 @@ def _build_direct_tool_result(tool_name, tool_result, question, knowledge_enviro
         )),
         citations,
     )
+    formatter_result = None
+    if prefer_llm and provider:
+        formatter_result = _run_answer_formatter(
+            provider,
+            question=question,
+            draft_content=final_content,
+            sections=tool_result.get('sections', []),
+            citations=citations,
+            tool_calls=[tool_name],
+            pending_action_draft=None,
+            message_type=AIOpsChatMessage.TYPE_ANALYSIS,
+            active_skills=active_skills or [],
+            collected_tool_outputs=collected_tool_outputs,
+        )
+        if formatter_result.get('used') and not formatter_result.get('fell_back'):
+            final_content = formatter_result.get('content') or final_content
     metadata = {
         'execution_mode': execution_mode,
         'current_environment': knowledge_environment.get('name') if knowledge_environment else '',
         'analysis_scope': analysis_scope,
-        'formatter_mode': 'deterministic',
-        'formatter_attempts': 0,
+        'formatter_mode': (
+            'skill'
+            if formatter_result and formatter_result.get('used') and not formatter_result.get('fell_back')
+            else 'deterministic'
+        ),
+        'formatter_attempts': (formatter_result or {}).get('attempts', 0),
     }
     metadata.update(extra_metadata or {})
     return {
@@ -3073,7 +4010,7 @@ def query_observability(session, user_message, user, query='', limit=6):
 def query_workorders(session, user_message, user, query='', status='', limit=6):
     started_at = time.time()
     environment = _extract_environment(query)
-    business_line = _extract_business_line(query)
+    system_name = _extract_system_name(query)
     normalized_status = (status or '').strip().lower()
     if normalized_status in {'all', 'any', '全部', '全部状态', '不限', '不限制'}:
         normalized_status = ''
@@ -3090,7 +4027,7 @@ def query_workorders(session, user_message, user, query='', status='', limit=6):
         session,
         user_message,
         'query_workorders',
-        {'query': query, 'status': normalized_status, 'raw_status': status, 'limit': limit, 'environment': environment, 'system_name': business_line, 'business_line': business_line, 'tokens': tokens},
+        {'query': query, 'status': normalized_status, 'raw_status': status, 'limit': limit, 'environment': environment, 'system_name': system_name, 'tokens': tokens},
     )
     can_view_tickets = user_has_permissions(user, ['ops.ticket.view'])
     can_view_deployments = user_has_permissions(user, ['ops.deployment.view'])
@@ -3109,8 +4046,8 @@ def query_workorders(session, user_message, user, query='', status='', limit=6):
             queryset = queryset.filter(status=normalized_status)
         if environment:
             queryset = queryset.filter(environment=environment)
-        if business_line:
-            queryset = queryset.filter(business_line=business_line)
+        if system_name:
+            queryset = queryset.filter(business_line=system_name)
         queryset = _queryset_search(queryset, ['title', 'description', 'applicant', 'business_line', 'owner'], tokens)
         tickets = list(queryset.order_by('-updated_at')[:limit])
         if tickets:
@@ -3127,8 +4064,8 @@ def query_workorders(session, user_message, user, query='', status='', limit=6):
         deployment_queryset = Deployment.objects.select_related('docker_host', 'cluster', 'host').all()
         if environment:
             deployment_queryset = deployment_queryset.filter(environment=environment)
-        if business_line:
-            deployment_queryset = deployment_queryset.filter(business_line=business_line)
+        if system_name:
+            deployment_queryset = deployment_queryset.filter(business_line=system_name)
         if normalized_status:
             deployment_queryset = deployment_queryset.filter(Q(status=normalized_status) | Q(approval_status=normalized_status))
         deployment_queryset = _queryset_search(
@@ -3152,8 +4089,7 @@ def query_workorders(session, user_message, user, query='', status='', limit=6):
         'ticket_count': len(tickets),
         'deployment_count': len(deployments),
         'environment': environment,
-        'system_name': business_line,
-        'business_line': business_line,
+        'system_name': system_name,
     }
     _finish_tool_invocation(invocation, summary, started_at, success=True)
     return {
@@ -3779,6 +4715,156 @@ def _build_alert_structured_answer(question, sections, citations, collected_tool
     return '\n'.join(lines).strip()
 
 
+def _extract_log_message_text(message):
+    raw = str(message or '').strip()
+    if not raw:
+        return ''
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw
+    if isinstance(parsed, dict):
+        for key in ['message', 'msg', 'log', 'error']:
+            value = parsed.get(key)
+            if value:
+                return str(value)
+    return raw
+
+
+def _normalize_log_message_pattern(message):
+    text = _extract_log_message_text(message)
+    if not text:
+        return ''
+    text = re.sub(r'\b[0-9a-f]{12,}\b', '<hex>', text, flags=re.IGNORECASE)
+    text = re.sub(r'\btrace[_-]?id[=:][^\s,}]+', 'trace_id=<id>', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bspan[_-]?id[=:][^\s,}]+', 'span_id=<id>', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b[A-Za-z_]*id[=:][^\s,}]+', lambda match: match.group(0).split('=')[0].split(':')[0] + '=<id>', text, flags=re.IGNORECASE)
+    text = re.sub(r'\b\d{4,}\b', '<num>', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text[:180]
+
+
+def _collect_log_context(collected_tool_outputs):
+    context = {
+        'count': 0,
+        'service': '',
+        'duration_minutes': '',
+        'levels': [],
+        'datasources': [],
+        'samples': [],
+        'level_counter': Counter(),
+        'pattern_counter': Counter(),
+        'trace_ids': [],
+        'query': '',
+        'errors': [],
+    }
+    for item in collected_tool_outputs or []:
+        if item.get('tool_name') != 'query_logs':
+            continue
+        tool_output = item.get('tool_output') or {}
+        summary = tool_output.get('summary') or {}
+        logs = tool_output.get('logs') or []
+        context['count'] = max(context['count'], _safe_int(summary.get('count'), len(logs)))
+        context['service'] = context['service'] or summary.get('service') or ''
+        context['duration_minutes'] = context['duration_minutes'] or summary.get('duration_minutes') or ''
+        levels = _normalize_log_levels_filter(summary.get('levels')) or _normalize_log_levels_filter(summary.get('level'))
+        for level in levels:
+            if level not in context['levels']:
+                context['levels'].append(level)
+        context['errors'].extend(summary.get('errors') or [])
+        for datasource in tool_output.get('datasources') or []:
+            if datasource not in context['datasources']:
+                context['datasources'].append(datasource)
+            if not context['query'] and isinstance(datasource, dict):
+                context['query'] = datasource.get('query') or ''
+        for log_item in logs[:10]:
+            if not isinstance(log_item, dict):
+                continue
+            sample = _compact_log_sample(log_item, max_message_length=500)
+            context['samples'].append(sample)
+            level = str(sample.get('level') or '').upper()
+            if level:
+                context['level_counter'][level] += 1
+            pattern = _normalize_log_message_pattern(sample.get('message'))
+            if pattern:
+                context['pattern_counter'][pattern] += 1
+            trace_id = sample.get('trace_id') or ''
+            if trace_id and trace_id not in context['trace_ids']:
+                context['trace_ids'].append(trace_id)
+    return context
+
+
+def _build_log_structured_answer(question, citations, collected_tool_outputs):
+    log_context = _collect_log_context(collected_tool_outputs)
+    if not log_context.get('count') and not any(item.get('tool_name') == 'query_logs' for item in collected_tool_outputs or []):
+        return ''
+
+    count = log_context.get('count') or 0
+    service = log_context.get('service') or '目标服务'
+    duration = log_context.get('duration_minutes') or '-'
+    level_label = _format_log_levels_label(log_context.get('levels'), fallback='all')
+    samples = log_context.get('samples') or []
+    patterns = log_context.get('pattern_counter') or Counter()
+    level_counter = log_context.get('level_counter') or Counter()
+    top_patterns = patterns.most_common(3)
+
+    lines = ['结论：']
+    if count > 0:
+        pattern_text = top_patterns[0][0] if top_patterns else '日志样本存在重复异常模式'
+        lines.append(
+            f'已查询到 {service} 最近 {duration} 分钟 {level_label} 日志 {count} 条；'
+            f'主要共同模式是：{pattern_text}。'
+        )
+    else:
+        lines.append(
+            f'{service} 最近 {duration} 分钟 {level_label} 日志在当前查询条件下未命中；'
+            '这只能说明本次日志条件没有返回样本，不能直接证明服务没有问题。'
+        )
+
+    lines.append('依据：')
+    lines.append('日志事实')
+    if log_context.get('query'):
+        lines.append(f"- 查询语句：`{log_context['query']}`")
+    if level_counter:
+        lines.append('- 返回样本级别分布：' + '、'.join(f'{key}={value}' for key, value in level_counter.items()))
+    if count > 0:
+        if top_patterns:
+            lines.append('- 共同模式（直接证据）：' + '；'.join(f'{pattern}（{amount} 条样本）' for pattern, amount in top_patterns))
+        if samples:
+            first_time = samples[-1].get('timestamp') if len(samples) > 1 else samples[0].get('timestamp')
+            last_time = samples[0].get('timestamp')
+            if first_time or last_time:
+                lines.append(f'- 样本时间范围：{first_time or "-"} 到 {last_time or "-"}')
+            for sample in samples[:3]:
+                message = _extract_log_message_text(sample.get('message'))[:220]
+                lines.append(f"- 样本：{sample.get('timestamp') or '-'} / {str(sample.get('level') or '-').upper()} / {message}")
+        if log_context.get('trace_ids'):
+            lines.append('- 可关联 trace_id：' + '、'.join(log_context['trace_ids'][:3]))
+        if 'ERROR' not in level_counter and any(level in {'error'} for level in log_context.get('levels') or []):
+            lines.append('- 当前返回样本未看到 ERROR；由于返回条数有限，仍建议单独按 ERROR 查询或提高 limit 复核。')
+    else:
+        lines.append('- query_logs 返回 0 条日志。')
+        if log_context.get('errors'):
+            lines.append('- 查询异常：' + '；'.join(log_context['errors'][:3]))
+
+    lines.append('建议操作：')
+    if count > 0:
+        lines.append('- 先按共同模式做聚合统计，确认是否由同一类请求、同一调用入口或同一批输入反复触发。')
+        if log_context.get('trace_ids'):
+            lines.append('- 选取样本中的 trace_id 进入链路追踪，确认失败发生在哪个下游调用、耗时和返回码。')
+        else:
+            lines.append('- 如果日志缺少 trace_id，建议补查同时间窗 Trace 或请求 ID，避免只凭日志文本判断根因。')
+        lines.append('- 将日志样本与同时间窗发布、配置变更和依赖服务状态交叉验证，区分业务校验失败、数据问题和系统异常。')
+    else:
+        lines.append('- 放宽查询条件验证是否有任何日志进入 Loki，例如先去掉等级过滤或扩大时间窗。')
+        lines.append('- 核对服务名、namespace、container label 和日志格式，确认 detected_level 字段是否能被解析。')
+        lines.append('- 如业务侧确认有异常，继续检查日志采集链路与 Pod/容器运行状态。')
+
+    if citations:
+        lines.append(_format_followup_line(item['title'] for item in _dedupe_citations(citations)))
+    return '\n'.join(lines).strip()
+
+
 def _should_prefer_structured_alert_answer(content, structured_answer, collected_tool_outputs):
     if not structured_answer or not _collect_alert_context(collected_tool_outputs, []).get('entries'):
         return False
@@ -3801,6 +4887,9 @@ def _should_prefer_structured_alert_answer(content, structured_answer, collected
 
 
 def _build_fallback_answer(sections, citations, pending_action_draft=None, question='', collected_tool_outputs=None):
+    structured_log_answer = _build_log_structured_answer(question, citations, collected_tool_outputs or [])
+    if structured_log_answer:
+        return structured_log_answer
     structured_alert_answer = _build_alert_structured_answer(question, sections, citations, collected_tool_outputs or [])
     if structured_alert_answer:
         return structured_alert_answer
@@ -3940,6 +5029,42 @@ def _build_formatter_fact_digest(collected_tool_outputs, citations=None, pending
         sources = list((alert_context.get('sources') or Counter()).keys())[:3]
         if sources:
             lines.append(f"- 告警来源：{'、'.join(sources)}")
+    for item in collected_tool_outputs or []:
+        if item.get('tool_name') != 'query_logs':
+            continue
+        tool_output = item.get('tool_output') or {}
+        summary = tool_output.get('summary') or {}
+        logs = tool_output.get('logs') or []
+        count = _safe_int(summary.get('count'), len(logs))
+        service = summary.get('service') or '-'
+        duration = summary.get('duration_minutes') or '-'
+        levels = _format_log_levels_label(summary.get('levels'), fallback=summary.get('level') or 'all')
+        lines.append(f"- 日志事实：query_logs 命中 {count} 条，服务 {service}，时间窗最近 {duration} 分钟，级别 {levels}。")
+        if logs:
+            level_counter = Counter()
+            message_terms = []
+            for log_item in logs[:8]:
+                attrs = log_item.get('attributes') if isinstance(log_item.get('attributes'), dict) else {}
+                level = attrs.get('detected_level') or attrs.get('level') or log_item.get('level') or ''
+                if level:
+                    level_counter[str(level).upper()] += 1
+                message = str(log_item.get('message') or '').replace('\n', ' ').strip()
+                if message:
+                    message_terms.append(message[:120])
+            if level_counter:
+                lines.append('- 日志级别分布：' + '、'.join(f'{key}={value}' for key, value in level_counter.items()))
+            if message_terms:
+                lines.append('- 日志样本摘要：' + '；'.join(message_terms[:3]))
+    for item in collected_tool_outputs or []:
+        if item.get('tool_name') != 'query_task_resources':
+            continue
+        tool_output = item.get('tool_output') or {}
+        summary = tool_output.get('summary') or {}
+        resources = tool_output.get('resources') or []
+        lines.append(f"- 资源底座事实：query_task_resources 命中 {summary.get('count') or len(resources)} 个资源，环境 {summary.get('environment') or '-'}，类型 {summary.get('resource_type') or '-'}。")
+        if resources:
+            labels = [f"{resource.get('name')}({resource.get('ip_address') or '-'})" for resource in resources[:3]]
+            lines.append(f"- 资源底座目标：{'、'.join(labels)}")
     if pending_action_draft:
         target_hosts = pending_action_draft.get('target_hosts') or []
         lines.append(f"- 任务事实：目标主机 {pending_action_draft.get('host_count') or len(target_hosts)} 台，任务类型 {pending_action_draft.get('task_type') or '未说明'}。")
@@ -3974,6 +5099,10 @@ def _build_answer_formatter_messages(question, draft_content, sections, citation
         '你是 AIOps 智能助手的二阶段回答整形器。',
         '你的职责是基于 MCP 工具事实、回答草稿和 Skill 模板，生成最终给用户看的中文答案。',
         '禁止编造工具未返回的事实；禁止省略关键对象、数量、状态、风险和下一步。',
+        '如果工具结果来自 query_logs，必须基于日志样本分析可能原因、共同模式、影响范围和建议动作；不要只罗列日志样本。',
+        '日志分析可以根据日志文本、字段、trace_id、状态码、错误词、重复模式做归纳，但必须说明哪些是从日志直接观察到的证据，哪些是推断。',
+        '如果 query_logs 的 summary.count 大于 0，禁止说“没有命中/未查到/没找到/0条”；必须围绕已返回日志做分析。',
+        '如果 query_logs 的 summary.count 等于 0，禁止声称发现了具体日志样本；只能说明当前查询条件未命中，并提出放宽条件或检查采集链路。',
         '如果事实不足，要明确说明“当前工具结果未覆盖该信息”。',
         '如果涉及任务生成：必须明确区分“任务草稿 / 待确认创建 / 已在任务中心创建待执行任务”，不能混淆为已执行完成。',
         '输出保持简洁、结构化、可读，优先使用短标题和项目符号，不要输出你的推理过程。',
@@ -4012,6 +5141,15 @@ def _content_conflicts_with_tool_facts(content, collected_tool_outputs):
         '0条',
         '暂无',
         '未查到',
+        '没查到',
+        '没找到',
+        '没有找到',
+        '未找到',
+        '没有命中',
+        '未命中',
+        '无日志',
+        '没有日志',
+        '当前无日志',
         '没有严重告警',
         '没有未确认',
         '当前无告警',
@@ -4019,19 +5157,47 @@ def _content_conflicts_with_tool_facts(content, collected_tool_outputs):
     positive_count_match = re.search(r'([1-9]\d*)条', compact)
 
     for item in collected_tool_outputs or []:
-        if item.get('tool_name') != 'query_alerts':
-            continue
+        tool_name = item.get('tool_name')
         tool_output = item.get('tool_output') or {}
         summary = tool_output.get('summary') or {}
-        alerts = tool_output.get('alerts') or []
-        try:
-            count = int(summary.get('count', len(alerts)))
-        except (TypeError, ValueError):
-            count = len(alerts)
-        if count > 0 and any(pattern in compact for pattern in negative_patterns):
-            return True
-        if count == 0 and positive_count_match and '告警' in compact:
-            return True
+        if tool_name == 'query_alerts':
+            alerts = tool_output.get('alerts') or []
+            try:
+                count = int(summary.get('count', len(alerts)))
+            except (TypeError, ValueError):
+                count = len(alerts)
+            if count > 0 and any(pattern in compact for pattern in negative_patterns):
+                return True
+            if count == 0 and positive_count_match and '告警' in compact:
+                return True
+        elif tool_name == 'query_logs':
+            logs = tool_output.get('logs') or []
+            count = _safe_int(summary.get('count'), len(logs))
+            has_log_word = any(token in compact for token in ['日志', 'log', 'LOG', 'WARN', 'ERROR', 'WARNING'])
+            if count > 0 and has_log_word and any(pattern in compact for pattern in negative_patterns):
+                return True
+            if count == 0 and has_log_word and positive_count_match:
+                return True
+    return False
+
+
+def _log_answer_lacks_analysis(content, collected_tool_outputs):
+    log_context = _collect_log_context(collected_tool_outputs or [])
+    if not log_context.get('samples'):
+        return False
+    text = _normalize_formatter_output(_sanitize_assistant_content(content))
+    if not text:
+        return True
+    compact = re.sub(r'\s+', '', text)
+    has_log_result = any(token in compact for token in ['日志数据源', '最近日志命中', '日志样本', '查询语句'])
+    has_analysis_signal = any(token in compact for token in [
+        '共同模式', '主要模式', '原因', '可能', '推断', '影响', '建议操作', '下一步', 'trace_id', '链路追踪', '复核', '排查',
+    ])
+    has_required_headings = _has_any_heading(text, ['结论：']) and _has_any_heading(text, ['依据：']) and _has_any_heading(text, ['建议操作：'])
+    if has_log_result and not has_analysis_signal:
+        return True
+    if not has_required_headings:
+        return True
     return False
 
 
@@ -4156,6 +5322,8 @@ def _is_formatted_answer_valid(content, *, pending_action_draft=None, message_ty
 def _formatter_repair_issue(content, *, fallback_content='', collected_tool_outputs=None, pending_action_draft=None, message_type=AIOpsChatMessage.TYPE_TEXT, profile='general'):
     if _content_conflicts_with_tool_facts(content, collected_tool_outputs or []):
         return '回答内容与工具事实冲突，请严格按工具事实重写。'
+    if _log_answer_lacks_analysis(content, collected_tool_outputs or []):
+        return '日志类回答只列出了查询结果，缺少结论、共同模式、影响判断或建议操作；请基于日志样本重写分析。'
     if not _is_formatted_answer_valid(content, pending_action_draft=pending_action_draft, message_type=message_type, profile=profile):
         text = _normalize_formatter_output(content)
         missing = _missing_required_headings(text, profile)
@@ -4275,237 +5443,6 @@ def _build_task_sections(draft):
     return sections
 
 
-def _resolve_host_targets_for_task(question='', environment='', target_status='all', explicit_host_ids=None, max_hosts=20):
-    host_queryset = Host.objects.all()
-    if environment:
-        host_queryset = host_queryset.filter(environment=environment)
-    if target_status == 'offline':
-        host_queryset = host_queryset.filter(status='offline')
-
-    explicit_host_ids = explicit_host_ids or []
-    if explicit_host_ids:
-        hosts = list(Host.objects.filter(id__in=explicit_host_ids))
-        host_map = {host.id: host for host in hosts}
-        return [host_map[host_id] for host_id in explicit_host_ids if host_id in host_map][:max_hosts]
-
-    candidates = []
-    seen_ids = set()
-
-    for ip_value in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', question or ''):
-        for host in host_queryset.filter(ip_address=ip_value):
-            if host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-    normalized_question = (question or '').strip()
-    if normalized_question:
-        for host in host_queryset.filter(hostname__iexact=normalized_question)[:max_hosts]:
-            if host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-    tokens = _clean_cmdb_query_tokens(question)
-    if tokens:
-        for host in host_queryset.filter(hostname__in=tokens)[:max_hosts]:
-            if host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-        config_items = list(_query_cmdb_queryset(ConfigItem.objects.select_related('ci_type').all(), tokens).order_by('-updated_at')[: max_hosts * 2])
-        for item in config_items:
-            attributes = item.attributes or {}
-            possible_ips = [
-                attributes.get('host_ip'),
-                attributes.get('docker_environment_ip'),
-                attributes.get('ip_address'),
-                attributes.get('private_ip'),
-                attributes.get('public_ip'),
-            ]
-            possible_names = [item.name, attributes.get('host_name'), attributes.get('docker_environment_name')]
-            host = None
-            for ip_value in [value for value in possible_ips if value]:
-                host = host_queryset.filter(ip_address=ip_value).order_by('id').first()
-                if host:
-                    break
-            if not host:
-                for hostname in [value for value in possible_names if value]:
-                    host = host_queryset.filter(hostname=hostname).order_by('id').first()
-                    if host:
-                        break
-            if host and host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-    return candidates[:max_hosts]
-
-
-def build_task_draft(user, question='', draft_request=None):
-    if not user_has_permissions(user, ['aiops.task.generate']):
-        return {'error': '当前账号无权生成任务草稿。'}
-
-    draft_request = draft_request or {}
-    environment = draft_request.get('environment') or _extract_environment(question)
-    target_status = draft_request.get('target_status') or ('offline' if '离线' in (question or '') else 'all')
-    max_hosts = draft_request.get('max_hosts') or 20
-
-    host_queryset = Host.objects.all()
-    if environment:
-        host_queryset = host_queryset.filter(environment=environment)
-    if target_status == 'offline':
-        host_queryset = host_queryset.filter(status='offline')
-
-    explicit_host_ids = draft_request.get('target_host_ids') or []
-    if explicit_host_ids:
-        host_ids = list(Host.objects.filter(id__in=explicit_host_ids).values_list('id', flat=True))
-    else:
-        host_ids = list(host_queryset.values_list('id', flat=True)[:max_hosts])
-    if not host_ids:
-        host_ids = list(Host.objects.values_list('id', flat=True)[: min(max_hosts, 10)])
-    if not host_ids:
-        return {'error': '当前没有可用主机，无法生成任务。'}
-
-    task_kind = draft_request.get('task_kind') or ''
-    service_name = (draft_request.get('service_name') or '').strip()
-    command = (draft_request.get('command') or '').strip()
-    playbook_content = (draft_request.get('playbook_content') or '').strip()
-    request_summary = (draft_request.get('request_summary') or question or '').strip()
-
-    if not task_kind:
-        service_match = re.search(r'(nginx|redis|rocketmq|mysql|docker|kubelet|sshd)', question or '', re.IGNORECASE)
-        command_match = re.search(r'(?:执行|运行|命令)\s+([a-zA-Z0-9_\-./ ]{3,120})', question or '')
-        if service_name or service_match:
-            task_kind = 'service_status'
-            service_name = service_name or service_match.group(1)
-        elif command or command_match:
-            task_kind = 'run_command'
-            command = command or command_match.group(1).strip()
-        elif _contains_any(question, ['连通', '连通性', 'ssh']):
-            task_kind = 'check_connection'
-        elif _contains_any(question, ['playbook']):
-            task_kind = 'run_playbook'
-        else:
-            task_kind = 'refresh_metrics'
-
-    task_type = HostTask.TASK_REFRESH_METRICS
-    payload = {}
-    execution_mode = HostTask.EXECUTION_MODE_SSH
-    execution_strategy = HostTask.STRATEGY_CONTINUE
-    timeout_seconds = 30
-    title = '智能巡检任务'
-    description = '由 AIOps 智能助手生成的任务草稿'
-
-    if task_kind == 'service_status':
-        task_type = HostTask.TASK_SERVICE_STATUS
-        payload = {'service_name': service_name or 'nginx'}
-        title = f"{payload['service_name']} 服务状态巡检"
-        description = f"检查 {payload['service_name']} 服务状态"
-    elif task_kind == 'run_command':
-        task_type = HostTask.TASK_RUN_COMMAND
-        payload = {'command': command or 'hostname && uptime'}
-        execution_mode = HostTask.EXECUTION_MODE_ANSIBLE
-        execution_strategy = HostTask.STRATEGY_STOP_ON_ERROR
-        title = f"批量命令执行：{payload['command'][:32]}"
-        description = '由聊天助手从自然语言生成的批量命令任务'
-    elif task_kind == 'check_connection':
-        task_type = HostTask.TASK_CHECK_CONNECTION
-        title = 'SSH 连通性检查'
-        description = '检查目标主机 SSH 连通性'
-    elif task_kind == 'run_playbook':
-        task_type = HostTask.TASK_RUN_PLAYBOOK
-        payload = {
-            'playbook_name': 'aiops_generated',
-            'playbook_content': playbook_content or '- hosts: all\n  gather_facts: false\n  tasks:\n    - name: ping\n      ping:\n',
-        }
-        execution_mode = HostTask.EXECUTION_MODE_ANSIBLE
-        title = 'Ansible Playbook 执行'
-        description = '由 AIOps 智能助手生成的 Playbook 任务'
-
-    risk_level = AIOpsPendingAction.RISK_LOW
-    if task_type == HostTask.TASK_RUN_COMMAND:
-        risk_level = AIOpsPendingAction.RISK_HIGH
-        lowered_command = payload.get('command', '').lower()
-        if any(pattern in lowered_command for pattern in DANGEROUS_COMMAND_PATTERNS):
-            risk_level = AIOpsPendingAction.RISK_CRITICAL
-    elif task_type == HostTask.TASK_RUN_PLAYBOOK:
-        risk_level = AIOpsPendingAction.RISK_HIGH
-    elif task_type == HostTask.TASK_SERVICE_STATUS:
-        risk_level = AIOpsPendingAction.RISK_MEDIUM
-
-    return {
-        'name': title,
-        'description': description,
-        'task_type': task_type,
-        'payload': payload,
-        'host_ids': host_ids,
-        'execution_mode': execution_mode,
-        'execution_strategy': execution_strategy,
-        'timeout_seconds': timeout_seconds,
-        'host_count': len(host_ids),
-        'risk_level': risk_level,
-        'request_summary': request_summary,
-    }
-
-
-def _resolve_host_targets_for_task(question='', environment='', target_status='all', explicit_host_ids=None, max_hosts=20):
-    host_queryset = Host.objects.all()
-    if environment:
-        host_queryset = host_queryset.filter(environment=environment)
-    if target_status == 'offline':
-        host_queryset = host_queryset.filter(status='offline')
-
-    explicit_host_ids = explicit_host_ids or []
-    if explicit_host_ids:
-        hosts = list(Host.objects.filter(id__in=explicit_host_ids))
-        host_map = {host.id: host for host in hosts}
-        return [host_map[host_id] for host_id in explicit_host_ids if host_id in host_map][:max_hosts]
-
-    candidates = []
-    seen_ids = set()
-
-    for ip_value in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', question or ''):
-        for host in host_queryset.filter(ip_address=ip_value).order_by('id'):
-            if host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-    tokens = _clean_cmdb_query_tokens(question)
-    if tokens:
-        for host in host_queryset.filter(hostname__in=tokens).order_by('id'):
-            if host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-        config_items = list(
-            _query_cmdb_queryset(ConfigItem.objects.select_related('ci_type').all(), tokens)
-            .order_by('-updated_at')[: max_hosts * 2]
-        )
-        for item in config_items:
-            attributes = item.attributes or {}
-            possible_ips = [
-                attributes.get('host_ip'),
-                attributes.get('docker_environment_ip'),
-                attributes.get('ip_address'),
-                attributes.get('private_ip'),
-                attributes.get('public_ip'),
-            ]
-            possible_names = [item.name, attributes.get('host_name'), attributes.get('docker_environment_name')]
-            host = None
-            for ip_value in [value for value in possible_ips if value]:
-                host = host_queryset.filter(ip_address=ip_value).order_by('id').first()
-                if host:
-                    break
-            if not host:
-                for hostname in [value for value in possible_names if value]:
-                    host = host_queryset.filter(hostname=hostname).order_by('id').first()
-                    if host:
-                        break
-            if host and host.id not in seen_ids:
-                candidates.append(host)
-                seen_ids.add(host.id)
-
-    return candidates[:max_hosts]
-
-
 def build_task_draft(user, question='', draft_request=None):
     if not user_has_permissions(user, ['aiops.task.generate']):
         return {'error': '当前账号无权生成任务草稿。'}
@@ -4515,7 +5452,7 @@ def build_task_draft(user, question='', draft_request=None):
     target_status = draft_request.get('target_status') or ('offline' if '离线' in (question or '') else 'all')
     max_hosts = draft_request.get('max_hosts') or 20
     explicit_host_ids = draft_request.get('target_host_ids') or []
-    hosts = _resolve_host_targets_for_task(
+    hosts = _resolve_task_targets_from_draft(
         question=question,
         environment=environment,
         target_status=target_status,
@@ -4523,8 +5460,10 @@ def build_task_draft(user, question='', draft_request=None):
         max_hosts=max_hosts,
         draft_request=draft_request,
     )
-    host_ids = [host.id for host in hosts]
-    if not host_ids:
+    target_refs = _host_source_refs_for_targets(hosts)
+    host_ids = [item['id'] for item in target_refs if item.get('source') == 'host']
+    resource_ids = [item['id'] for item in target_refs if item.get('source') == 'task_resource']
+    if not target_refs:
         return {'error': '未识别到明确的目标主机，请在问题中指定主机名、应用名或 IP 后再生成任务。'}
 
     task_kind = draft_request.get('task_kind') or ''
@@ -4600,11 +5539,13 @@ def build_task_draft(user, question='', draft_request=None):
         'task_type': task_type,
         'payload': payload,
         'host_ids': host_ids,
+        'resource_ids': resource_ids,
+        'target_refs': target_refs,
         'target_hosts': _build_host_target_snapshot(hosts),
         'execution_mode': execution_mode,
         'execution_strategy': execution_strategy,
         'timeout_seconds': timeout_seconds,
-        'host_count': len(host_ids),
+        'host_count': len(target_refs),
         'risk_level': risk_level,
         'request_summary': request_summary,
     }
@@ -4626,6 +5567,36 @@ def _coerce_int_list(value):
                 continue
         return values
     return []
+
+
+def _dedupe_int_list(values):
+    deduped = []
+    seen = set()
+    for item in _coerce_int_list(values):
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _dedupe_target_refs(refs):
+    deduped = []
+    seen = set()
+    for ref in refs or []:
+        if not isinstance(ref, dict):
+            continue
+        source = ref.get('source') or 'host'
+        try:
+            target_id = int(ref.get('id'))
+        except (TypeError, ValueError):
+            continue
+        key = (source, target_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({'source': source, 'id': target_id})
+    return deduped
 
 
 def _append_unique_host(candidates, seen_ids, host):
@@ -4731,24 +5702,102 @@ def create_pending_task_action(session, assistant_message, user, question):
 
 
 def _build_host_target_snapshot(hosts):
-    return [
-        {
-            'id': host.id,
-            'hostname': host.hostname,
-            'ip_address': host.ip_address,
-            'business_line': host.business_line,
-            'environment': host.environment,
-            'status': host.status,
-        }
-        for host in hosts
-    ]
+    return build_ops_host_target_snapshot(resolve_host_source_refs(_host_source_refs_for_targets(hosts)))
+
+
+def _host_source_refs_for_targets(targets):
+    refs = []
+    for target in targets or []:
+        if isinstance(target, TaskResource):
+            refs.append({'source': 'task_resource', 'id': target.id})
+        elif getattr(target, 'source', '') == 'task_resource':
+            refs.append({'source': 'task_resource', 'id': getattr(target, 'resource_id', None) or target.id})
+        else:
+            refs.append({'source': 'host', 'id': target.id})
+    return _dedupe_target_refs(refs)
+
+
+def _resolve_task_resource_targets_for_task(question='', environment='', system_name='', resource_type='host', status='active', explicit_resource_ids=None, max_hosts=20, knowledge_environment=None):
+    resource_type = (resource_type or TaskResource.RESOURCE_HOST).strip().lower()
+    if resource_type in {'hosts', 'server', 'servers', 'machine', 'machines'}:
+        resource_type = TaskResource.RESOURCE_HOST
+    queryset = TaskResource.objects.select_related('environment', 'system', 'cluster').all()
+    if resource_type:
+        queryset = queryset.filter(resource_type=resource_type)
+    scoped_env_ids = list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
+    if scoped_env_ids:
+        queryset = queryset.filter(environment_id__in=scoped_env_ids)
+    else:
+        queryset = _task_resource_environment_filter(queryset, environment)
+    has_environment_scope = bool(scoped_env_ids or environment)
+    queryset = _soft_filter_task_resources_by_system(
+        queryset,
+        system_name,
+        allow_scope_fallback=has_environment_scope,
+    )
+    if status:
+        queryset = queryset.filter(status=status)
+
+    explicit_resource_ids = _dedupe_int_list(explicit_resource_ids)
+    if explicit_resource_ids:
+        resource_map = {item.id: item for item in queryset.filter(id__in=explicit_resource_ids)}
+        return [resource_map[item] for item in explicit_resource_ids if item in resource_map][:max_hosts]
+
+    queryset = _filter_task_resources_by_query(
+        queryset,
+        question,
+        allow_scope_fallback=has_environment_scope,
+    )
+    return list(queryset.order_by('environment__sort_order', 'system__sort_order', 'resource_type', 'name', 'id')[:max_hosts])
+
+
+def _resolve_task_targets_from_draft(question='', environment='', target_status='all', explicit_host_ids=None, max_hosts=20, draft_request=None):
+    draft_request = draft_request or {}
+    explicit_resource_ids = []
+    for key in ['target_resource_ids', 'resource_ids', 'target_task_resource_ids', 'task_resource_ids']:
+        explicit_resource_ids.extend(_coerce_int_list(draft_request.get(key)))
+    explicit_resource_ids = _dedupe_int_list(explicit_resource_ids)
+    resolved_resource_environment = _resolve_task_resource_environment_from_text(question)
+    resource_environment = draft_request.get('resource_environment') or resolved_resource_environment or environment
+    resource_system = draft_request.get('resource_system') or draft_request.get('system_name') or ''
+    knowledge_environment = _resolve_knowledge_environment_for_query(question, resource_environment or environment)
+    use_resource_base = bool(
+        explicit_resource_ids
+        or draft_request.get('resource_environment')
+        or resolved_resource_environment
+        or (knowledge_environment and knowledge_environment.get('task_resource_environment_ids'))
+    )
+    if use_resource_base:
+        resource_targets = _resolve_task_resource_targets_for_task(
+            question=question,
+            environment=resource_environment,
+            system_name=resource_system,
+            resource_type=draft_request.get('resource_type') or TaskResource.RESOURCE_HOST,
+            status=draft_request.get('resource_status') or TaskResource.STATUS_ACTIVE,
+            explicit_resource_ids=explicit_resource_ids,
+            max_hosts=max_hosts,
+            knowledge_environment=knowledge_environment,
+        )
+        if resource_targets:
+            return resource_targets
+    return _resolve_host_targets_for_task(
+        question=question,
+        environment=environment,
+        target_status=target_status,
+        explicit_host_ids=explicit_host_ids,
+        max_hosts=max_hosts,
+        draft_request=draft_request,
+    )
 
 
 def _create_host_task_record_from_draft(draft, user, session=None, request=None):
     payload = dict(draft or {})
-    host_ids = payload.get('host_ids') or []
-    host_map = {host.id: host for host in Host.objects.filter(id__in=host_ids)}
-    hosts = [host_map[item] for item in host_ids if item in host_map]
+    target_refs = payload.get('target_refs') or []
+    if not target_refs:
+        target_refs = [{'source': 'host', 'id': item} for item in (payload.get('host_ids') or [])]
+        target_refs.extend({'source': 'task_resource', 'id': item} for item in (payload.get('resource_ids') or []))
+    target_refs = _dedupe_target_refs(target_refs)
+    hosts = resolve_host_source_refs(target_refs)
     if not hosts:
         raise ValueError('没有找到有效的目标主机。')
 
@@ -4761,8 +5810,9 @@ def _create_host_task_record_from_draft(draft, user, session=None, request=None)
             'source': 'aiops',
             'session_id': session.id if session else None,
             'request_summary': payload.get('request_summary', ''),
+            'target_refs': target_refs,
         },
-        target_snapshot=_build_host_target_snapshot(hosts),
+        target_snapshot=build_ops_host_target_snapshot(hosts),
         target_count=len(hosts),
         execution_mode=payload.get('execution_mode') or HostTask.EXECUTION_MODE_SSH,
         execution_strategy=payload.get('execution_strategy') or HostTask.STRATEGY_CONTINUE,
@@ -4801,79 +5851,6 @@ def _create_host_task_record_from_draft(draft, user, session=None, request=None)
         },
     )
     return task
-
-
-def _should_materialize_host_task(question, result, draft):
-    if not draft or draft.get('error'):
-        return False
-    tool_calls = set(result.get('tool_calls') or [])
-    if 'generate_host_task' not in tool_calls:
-        return False
-    text = (question or '').strip().lower()
-    if not text:
-        return True
-    negative_markers = ['草稿', '待确认', '不要创建', '先别创建', '不要落任务', '不要生成任务中心']
-    return not any(marker in text for marker in negative_markers)
-
-
-def _execute_host_task_action(action, user, request=None):
-    payload = dict(action.action_payload or {})
-    host_ids = payload.get('host_ids') or []
-    host_map = {host.id: host for host in Host.objects.filter(id__in=host_ids)}
-    hosts = [host_map[item] for item in host_ids if item in host_map]
-    if not hosts:
-        raise ValueError('没有找到有效的目标主机。')
-
-    task = HostTask.objects.create(
-        name=payload.get('name') or 'AIOps 智能任务',
-        task_type=payload.get('task_type') or HostTask.TASK_REFRESH_METRICS,
-        description=payload.get('description', ''),
-        payload=payload.get('payload') or {},
-        selection_filters={'source': 'aiops', 'session_id': action.session_id},
-        execution_mode=payload.get('execution_mode') or HostTask.EXECUTION_MODE_SSH,
-        execution_strategy=payload.get('execution_strategy') or HostTask.STRATEGY_CONTINUE,
-        timeout_seconds=payload.get('timeout_seconds') or 30,
-        created_by=user.username,
-        summary='任务已由 AIOps 智能助手创建，等待执行完成',
-    )
-    start_host_task(task, hosts)
-    action.status = AIOpsPendingAction.STATUS_EXECUTED
-    action.result_payload = {'task_id': task.id, 'task_name': task.name}
-    action.save(update_fields=['status', 'result_payload', 'updated_at'])
-    record_event(
-        request=request,
-        module='aiops',
-        category='execution',
-        action='confirm_execute_task',
-        title='AIOps 执行主机任务',
-        summary=f'已通过 AIOps 执行主机任务 {task.name}',
-        resource_type='aiops_action',
-        resource_id=action.id,
-        resource_name=action.title,
-        correlation_id=f'aiops-action:{action.id}',
-        related_resources=[{'module': 'ops', 'type': 'host_task', 'id': str(task.id), 'name': task.name}],
-        metadata={'host_count': len(hosts), 'created_by': user.username},
-    )
-    return task
-
-
-def confirm_action(action, user, request=None):
-    config = get_agent_config()
-    if not config.allow_action_execution:
-        raise ValueError('管理员已关闭机器人动作执行。')
-    if action.status != AIOpsPendingAction.STATUS_PENDING:
-        raise ValueError('当前动作状态不可确认。')
-    if action.session.user_id != user.id:
-        raise ValueError('只能确认自己的动作。')
-    if action.action_type == AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK:
-        if not user_has_permissions(user, ['aiops.task.execute', 'ops.host.execute']):
-            raise ValueError('当前账号无权执行机器人任务。')
-        action.status = AIOpsPendingAction.STATUS_CONFIRMED
-        action.confirmed_by = user.username
-        action.confirmed_at = timezone.now()
-        action.save(update_fields=['status', 'confirmed_by', 'confirmed_at', 'updated_at'])
-        return _execute_host_task_action(action, user, request=request)
-    raise ValueError('不支持的动作类型。')
 
 
 def _should_materialize_host_task(question, result, draft):
@@ -5893,15 +6870,17 @@ def _build_runtime_prompt(config, active_mcp_servers, active_skills, user):
         '如果用户明确要求生成、创建、新建、安排任务或巡检任务，不要只做查询，必须调用 generate_host_task。',
         '只要已经调用 generate_host_task，就要在最终回答里明确说明：是生成任务草稿，还是已经在任务中心创建真实任务。',
         '工具选择示例：',
+        '- “查/分析 xxx 环境 xxx 服务最近半小时 warn/error/info 日志” => 必须调用 query_logs，并设置 service、level/levels、duration_minutes；不要先调用 query_alerts。',
         '- “当前未确认的严重告警有哪些” => 优先调用 query_alerts，并设置 level=critical、only_unacknowledged=true。',
-        '- “分析生产 order-center 最近异常” => 优先调用 query_alerts；需要补充上下文时再追加 query_recent_changes、query_logs 或 query_traces。',
+        '- “分析生产 order-center 最近异常” => 如果没有明确限定日志/Trace，优先调用 query_alerts；需要补充上下文时再追加 query_recent_changes、query_logs 或 query_traces。',
         '- “链路追踪里的服务 xxx 最近有没有异常 / trace 中服务 xxx 是否有错误” => 必须优先调用 query_traces，query 只传服务名，errors_only=true。',
         '- “最近交易系统生产有哪些工单” => 调用 query_workorders，并把系统、环境信息体现在参数中。',
-        '- “生产环境有哪些离线主机” => 调用 query_hosts，并设置 environment=prod、status=offline。',
-        '- “数据平台生产环境月成本多少” => 调用 query_cost_report，并设置 business_line=数据平台、environment=prod。',
+        '- “生产环境有哪些离线主机/某环境全部主机” => 优先调用 query_task_resources；query_hosts 仅作为旧工具名兼容。',
+        '- “数据平台生产环境月成本多少” => 调用 query_cost_report，并设置 system_name=数据平台、environment=prod。',
         '- “app-prod-k8s集群有没有异常的pod” => 调用 query_k8s_cluster_summary，并传 cluster_name=app-prod-k8s。',
         '- “生成一份 Redis 巡检任务” => 调用 generate_host_task，而不是只做查询。',
     ]
+    parts.append('- “任务中心资源底座/资源底座里的主机/某环境全部主机” => 调用 query_task_resources；如果用户要求新建巡检任务，先查资源底座，再把 resource_ids 传给 generate_host_task。')
     return '\n'.join(parts)
 
 
@@ -5935,6 +6914,8 @@ def _tool_allowed(user, tool_name):
         return user_has_permissions(user, ['ops.ticket.view']) or user_has_permissions(user, ['ops.deployment.view'])
     if tool_name == 'query_task_center':
         return user_has_permissions(user, ['ops.host.execute'])
+    if tool_name == 'query_task_resources':
+        return user_has_permissions(user, ['ops.task.resource.view'])
     if tool_name == 'query_event_wall':
         return user_has_permissions(user, ['eventwall.view'])
     if tool_name == 'query_container_assets':
@@ -5998,12 +6979,12 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_hosts': {
-            'description': '查询主机中心中的主机，适合“生产环境有哪些离线主机”这类问题。',
+            'description': '兼容旧工具名：查询资源底座中的主机资源。用户问主机/服务器/离线主机时优先使用 query_task_resources；只有模型已选择旧 query_hosts 时才调用本工具。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']}, 'status': {'type': 'string', 'enum': ['online', 'offline']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_cost_report': {
             'description': '查询 CMDB 成本分析，适合“数据平台生产环境月成本多少”这类问题。',
-            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']}, 'business_line': {'type': 'string'}, 'month': {'type': 'string', 'description': 'YYYY-MM'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
+            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']}, 'system_name': {'type': 'string'}, 'month': {'type': 'string', 'description': 'YYYY-MM'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_observability': {
             'description': '查询可观测性信息，包括告警、日志、链路与最近变更。',
@@ -6016,6 +6997,20 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
         'query_task_center': {
             'description': '查询任务中心中的主机任务。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['pending', 'running', 'success', 'partial', 'failed', 'canceled']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
+        },
+        'query_task_resources': {
+            'description': '查询任务中心资源底座中的执行资源。用户提到资源底座、任务中心资源、某环境全部主机/服务器时优先使用；新建巡检任务前用它拿 resource_ids。',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string'},
+                    'environment': {'type': 'string', 'description': '环境名称或简称，例如 电商测试环境/test/prod/dev'},
+                    'system_name': {'type': 'string', 'description': '系统或业务域名称'},
+                    'resource_type': {'type': 'string', 'enum': ['host', 'k8s']},
+                    'status': {'type': 'string', 'enum': ['active', 'inactive', 'warning', '']},
+                    'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
+                },
+            },
         },
         'query_event_wall': {
             'description': '查询事件墙中的关键事件。',
@@ -6038,7 +7033,7 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_resources': {
-            'description': '查询平台资源，包括主机、CMDB、多云、IaC、中间件与日志数据源。若用户明确问离线主机、成本、K8s 异常 Pod，优先改用 query_hosts、query_cost_report、query_k8s_cluster_summary。',
+            'description': '查询平台资源，包括资源底座、CMDB、多云、IaC、中间件与日志数据源。若用户明确问主机/服务器/离线主机、成本、K8s 异常 Pod，优先改用 query_task_resources、query_cost_report、query_k8s_cluster_summary。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_alerts': {
@@ -6051,11 +7046,21 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
         },
         'query_events': {
             'description': '查询事件墙中的关键事件。',
-            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'date_filter': {'type': 'string', 'enum': ['today', 'last_hour']}, 'system_name': {'type': 'string'}, 'business_line': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
+            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'date_filter': {'type': 'string', 'enum': ['today', 'last_hour']}, 'system_name': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_logs': {
-            'description': '查询日志中心日志。',
-            'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
+            'description': 'Query logs by environment, service, level(s), and time window. Prefer log datasources and field mappings configured in the knowledge graph observability links. Use levels for combined requests such as warning and error logs.',
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'query': {'type': 'string'},
+                    'service': {'type': 'string', 'description': 'Service or container name, for example gateway/api-gateway/order-service'},
+                    'level': {'type': 'string', 'enum': ['error', 'warning', 'info', 'debug']},
+                    'levels': {'type': 'array', 'items': {'type': 'string', 'enum': ['error', 'warning', 'info', 'debug']}},
+                    'duration_minutes': {'type': 'integer', 'minimum': 1, 'maximum': 1440},
+                    'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10},
+                },
+            },
         },
         'query_traces': {
             'description': '查询链路追踪/Trace/调用链数据，支持 SkyWalking、Jaeger、Zipkin、Tempo 真实数据源。用户问“链路追踪里的服务 xxx 最近有没有异常/错误/慢调用”时必须使用本工具；query 只保留服务名或 traceId，例如 bcp-server@梧桐港-SaaS-PRO；有“异常/错误/失败”时 errors_only=true。',
@@ -6083,6 +7088,12 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
                     'command': {'type': 'string'},
                     'playbook_content': {'type': 'string'},
                     'target_host_ids': {'type': 'array', 'items': {'type': 'integer'}},
+                    'target_resource_ids': {'type': 'array', 'items': {'type': 'integer'}, 'description': '任务中心资源底座 resource_id 列表，来自 query_task_resources.resource_ids'},
+                    'resource_ids': {'type': 'array', 'items': {'type': 'integer'}, 'description': 'target_resource_ids 的兼容别名'},
+                    'resource_environment': {'type': 'string', 'description': '资源底座环境名称，例如 电商测试环境'},
+                    'resource_system': {'type': 'string', 'description': '资源底座系统名称；未明确指定时不要填写，按资源底座环境范围生成任务。'},
+                    'system_name': {'type': 'string', 'description': '系统名称；未明确指定时不要填写，按资源底座环境范围生成任务。'},
+                    'resource_status': {'type': 'string', 'enum': ['active', 'inactive', 'warning', '']},
                     'max_hosts': {'type': 'integer', 'minimum': 1, 'maximum': 50},
                 },
             },
@@ -6166,10 +7177,6 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
                     'type': 'string',
                     'description': '系统名称。用户提到交易系统、数据平台等系统范围时填写标准系统名称。',
                 },
-                'business_line': {
-                    'type': 'string',
-                    'description': '兼容旧参数，含义同 system_name。',
-                },
                 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10},
             },
         },
@@ -6231,7 +7238,7 @@ def _build_runtime_tool_registry(active_mcp_servers, user):
     builtin_specs = _tool_specs_for_runtime([item for item in active_mcp_servers if item.server_type == AIOpsMCPServer.SERVER_PLATFORM_BUILTIN], user)
     tool_specs.extend(builtin_specs)
     for spec in builtin_specs:
-        registry[spec['function']['name']] = {'kind': 'internal', 'tool_name': spec['function']['name']}
+        registry[spec['function']['name']] = {'kind': 'platform_mcp', 'tool_name': spec['function']['name']}
 
     for server in active_mcp_servers:
         if server.server_type == AIOpsMCPServer.SERVER_PLATFORM_BUILTIN:
@@ -6263,6 +7270,10 @@ def _build_runtime_tool_registry(active_mcp_servers, user):
                     pass
             continue
     return tool_specs, registry, managed_clients
+
+
+def _platform_tool_registry_entry(tool_name):
+    return {'kind': 'platform_mcp', 'tool_name': tool_name}
 
 
 def _summarize_external_tool_result(registry_entry, result):
@@ -6318,6 +7329,7 @@ def _scope_tool_arguments(session, tool_name, arguments):
         'query_container_assets',
         'query_k8s_cluster_summary',
         'query_k8s_resources',
+        'query_task_resources',
     }
     if tool_name in scoped_tools:
         query = str(scoped.get('query') or '').strip()
@@ -6330,6 +7342,7 @@ def _scope_tool_arguments(session, tool_name, arguments):
 
 def _run_tool_call(session, user_message, user, tool_name, arguments, registry_entry=None):
     arguments = _scope_tool_arguments(session, tool_name, arguments)
+    platform_mcp_entry = registry_entry if registry_entry and registry_entry.get('kind') == 'platform_mcp' else None
     if registry_entry and registry_entry.get('kind') == 'external':
         started_at = time.time()
         invocation = _create_tool_invocation(
@@ -6363,7 +7376,8 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
         result = query_hosts(session, user_message, user, query=arguments.get('query', ''), environment=arguments.get('environment', ''), status=arguments.get('status', ''), limit=arguments.get('limit') or 6)
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
     if tool_name == 'query_cost_report':
-        result = query_cost_report(session, user_message, user, query=arguments.get('query', ''), environment=arguments.get('environment', ''), business_line=arguments.get('business_line', ''), month=arguments.get('month', ''), limit=arguments.get('limit') or 5)
+        system_name = arguments.get('system_name', '') or arguments.get('business_line', '')
+        result = query_cost_report(session, user_message, user, query=arguments.get('query', ''), environment=arguments.get('environment', ''), business_line=system_name, month=arguments.get('month', ''), limit=arguments.get('limit') or 5)
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
     if tool_name == 'query_observability':
         result = query_observability(session, user_message, user, query=arguments.get('query', ''), limit=arguments.get('limit') or 6)
@@ -6373,6 +7387,19 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
     if tool_name == 'query_task_center':
         result = query_task_center(session, user_message, user, query=arguments.get('query', ''), status=arguments.get('status', ''), limit=arguments.get('limit') or 6)
+        return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
+    if tool_name == 'query_task_resources':
+        result = query_task_resources(
+            session,
+            user_message,
+            user,
+            query=arguments.get('query', ''),
+            environment=arguments.get('environment', '') or arguments.get('resource_environment', ''),
+            system_name=arguments.get('system_name', ''),
+            resource_type=arguments.get('resource_type', 'host'),
+            status=arguments.get('status', 'active'),
+            limit=arguments.get('limit') or 20,
+        )
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
     if tool_name == 'query_event_wall':
         result = query_event_wall(
@@ -6417,7 +7444,7 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
             only_unacknowledged=bool(arguments.get('only_unacknowledged')),
             status=arguments.get('status', ''),
             date_filter=arguments.get('date_filter', ''),
-            business_line=arguments.get('business_line', ''),
+            business_line='',
             system_name=arguments.get('system_name', ''),
             limit=arguments.get('limit') or 8,
         )
@@ -6482,7 +7509,17 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
         )
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_ANALYSIS}
     if tool_name == 'query_logs':
-        result = query_logs(session, user_message, user, query=arguments.get('query', ''), limit=arguments.get('limit') or 6)
+        result = query_logs(
+            session,
+            user_message,
+            user,
+            query=arguments.get('query', ''),
+            service=arguments.get('service', ''),
+            level=arguments.get('level', ''),
+            levels=arguments.get('levels'),
+            duration_minutes=arguments.get('duration_minutes'),
+            limit=arguments.get('limit') or 6,
+        )
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_ANALYSIS}
     if tool_name == 'query_traces':
         result = query_traces(
@@ -6568,7 +7605,36 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         text='已确认环境并读取知识图谱',
     )
     scoped_question = f"{knowledge_environment.get('name')} {question}".strip()
-    if _is_direct_alert_analysis_question(question):
+    provider_ready = _provider_is_ready(provider)
+    if not provider_ready and _is_direct_log_question(question):
+        log_arguments = _direct_log_query_arguments(question, scoped_question, analysis_scope=analysis_scope, provider=provider)
+        emit(
+            step={
+                'title': '日志中心直接查询',
+                'detail': '当前没有可用模型，命中日志查询类问题，直接按知识图谱日志数据源与字段映射兜底查询。',
+                'status': PROCESSING_STATUS_COMPLETED,
+            },
+            text='正在直接查询日志中心',
+        )
+        log_tool_result = _run_tool_call(
+            session,
+            user_message,
+            user,
+            'query_logs',
+            log_arguments,
+            registry_entry=_platform_tool_registry_entry('query_logs'),
+        )
+        log_result = log_tool_result.get('tool_output') or {}
+        return _build_direct_log_result(
+            log_result,
+            scoped_question,
+            knowledge_environment,
+            analysis_scope,
+            log_arguments,
+            provider=provider,
+            active_skills=active_skills,
+        )
+    if not provider_ready and _is_direct_alert_analysis_question(question):
         emit(
             step={
                 'title': '告警根因直接分析',
@@ -6577,16 +7643,21 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             },
             text='正在直接分析告警根因',
         )
-        root_cause_result = query_alert_root_cause(
+        root_cause_tool_result = _run_tool_call(
             session,
             user_message,
             user,
-            query=scoped_question,
-            fingerprint=_extract_alert_fingerprint(question),
-            alert_id=_extract_alert_id(question),
-            latest=any(keyword in str(question or '').lower() for keyword in ['最新', '最后一条', '最近一条', 'latest', 'last']),
-            limit=6,
+            'query_alert_root_cause',
+            {
+                'query': scoped_question,
+                'fingerprint': _extract_alert_fingerprint(question),
+                'alert_id': _extract_alert_id(question),
+                'latest': any(keyword in str(question or '').lower() for keyword in ['最新', '最后一条', '最近一条', 'latest', 'last']),
+                'limit': 6,
+            },
+            registry_entry=_platform_tool_registry_entry('query_alert_root_cause'),
         )
+        root_cause_result = root_cause_tool_result.get('tool_output') or {}
         return _build_direct_tool_result(
             'query_alert_root_cause',
             root_cause_result,
@@ -6599,7 +7670,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
                 'alert_id': (root_cause_result.get('summary') or {}).get('alert_id') or _extract_alert_id(question),
             },
         )
-    if _is_direct_alert_list_question(question):
+    if not provider_ready and _is_direct_alert_list_question(question):
         alert_arguments = _direct_alert_query_arguments(question, scoped_question)
         emit(
             step={
@@ -6609,7 +7680,15 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             },
             text='正在直接查询告警中心',
         )
-        alert_result = query_alerts(session, user_message, user, **alert_arguments)
+        alert_tool_result = _run_tool_call(
+            session,
+            user_message,
+            user,
+            'query_alerts',
+            alert_arguments,
+            registry_entry=_platform_tool_registry_entry('query_alerts'),
+        )
+        alert_result = alert_tool_result.get('tool_output') or {}
         citations = _dedupe_citations(alert_result.get('citations', []))
         collected_tool_outputs = [{'tool_name': 'query_alerts', 'tool_output': alert_result}]
         final_content = _ensure_followup_line(
@@ -6634,8 +7713,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
                 'alert_filters': {
                     'status': alert_arguments.get('status'),
                     'date_filter': alert_arguments.get('date_filter'),
-                    'system_name': alert_arguments.get('system_name') or alert_arguments.get('business_line'),
-                    'business_line': alert_arguments.get('system_name') or alert_arguments.get('business_line'),
+                    'system_name': alert_arguments.get('system_name'),
                     'level': alert_arguments.get('level'),
                     'only_unacknowledged': alert_arguments.get('only_unacknowledged'),
                 },
@@ -6643,7 +7721,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
                 'formatter_attempts': 0,
             },
         }
-    if _is_direct_posture_question(question):
+    if not provider_ready and _is_direct_posture_question(question):
         emit(
             step={
                 'title': '系统态势直接查询',
@@ -6652,7 +7730,15 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             },
             text='正在直接查询系统态势',
         )
-        posture_result = query_system_posture(session, user_message, user, query=scoped_question, limit=8)
+        posture_tool_result = _run_tool_call(
+            session,
+            user_message,
+            user,
+            'query_system_posture',
+            {'query': scoped_question, 'limit': 8},
+            registry_entry=_platform_tool_registry_entry('query_system_posture'),
+        )
+        posture_result = posture_tool_result.get('tool_output') or {}
         return _build_direct_tool_result(
             'query_system_posture',
             posture_result,
@@ -6661,7 +7747,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             analysis_scope,
             'direct_posture_fastpath',
         )
-    if _is_direct_promql_question(question):
+    if not provider_ready and _is_direct_promql_question(question):
         promql = _extract_promql_from_question(question)
         emit(
             step={
@@ -6671,17 +7757,22 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             },
             text='正在通过平台后端执行 PromQL',
         )
-        promql_result = query_grafana_promql(
+        promql_tool_result = _run_tool_call(
             session,
             user_message,
             user,
-            query=scoped_question,
-            promql=promql,
-            range_query=True,
-            duration_minutes=30,
-            step=60,
-            limit=6,
+            'query_grafana_promql',
+            {
+                'query': scoped_question,
+                'promql': promql,
+                'range_query': True,
+                'duration_minutes': 30,
+                'step': 60,
+                'limit': 6,
+            },
+            registry_entry=_platform_tool_registry_entry('query_grafana_promql'),
         )
+        promql_result = promql_tool_result.get('tool_output') or {}
         return _build_direct_tool_result(
             'query_grafana_promql',
             promql_result,
@@ -6691,7 +7782,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             'direct_promql_fastpath',
             extra_metadata={'promql': promql},
         )
-    if _is_direct_container_question(question):
+    if not provider_ready and _is_direct_container_question(question):
         emit(
             step={
                 'title': '容器环境直接查询',
@@ -6703,14 +7794,25 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         resource_type = _detect_k8s_resource_type(question)
         if resource_type and resource_type != 'pods':
             tool_name = 'query_k8s_resources'
-            container_result = query_k8s_resources(session, user_message, user, query=scoped_question, resource_type=resource_type, limit=8)
+            container_tool_result = _run_tool_call(
+                session,
+                user_message,
+                user,
+                tool_name,
+                {'query': scoped_question, 'resource_type': resource_type, 'limit': 8},
+                registry_entry=_platform_tool_registry_entry(tool_name),
+            )
         else:
             tool_name = 'query_k8s_cluster_summary' if any(keyword in str(question or '').lower() for keyword in ['pod', 'pods', 'k8s', 'kubernetes']) else 'query_container_assets'
-            container_result = (
-                query_k8s_cluster_summary(session, user_message, user, query=scoped_question, limit=1)
-                if tool_name == 'query_k8s_cluster_summary'
-                else query_container_assets(session, user_message, user, query=scoped_question, limit=8)
+            container_tool_result = _run_tool_call(
+                session,
+                user_message,
+                user,
+                tool_name,
+                {'query': scoped_question, 'limit': 1 if tool_name == 'query_k8s_cluster_summary' else 8},
+                registry_entry=_platform_tool_registry_entry(tool_name),
             )
+        container_result = container_tool_result.get('tool_output') or {}
         return _build_direct_tool_result(
             tool_name,
             container_result,
@@ -6719,7 +7821,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             analysis_scope,
             'direct_container_fastpath',
         )
-    if _is_direct_event_list_question(question):
+    if not provider_ready and _is_direct_event_list_question(question):
         event_arguments = _direct_event_query_arguments(question, scoped_question)
         emit(
             step={
@@ -6729,7 +7831,15 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             },
             text='正在直接查询事件中心',
         )
-        event_result = query_events(session, user_message, user, **event_arguments)
+        event_tool_result = _run_tool_call(
+            session,
+            user_message,
+            user,
+            'query_events',
+            event_arguments,
+            registry_entry=_platform_tool_registry_entry('query_events'),
+        )
+        event_result = event_tool_result.get('tool_output') or {}
         return _build_direct_tool_result(
             'query_events',
             event_result,
@@ -6739,7 +7849,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             'direct_events_fastpath',
             extra_metadata={'event_filters': {'date_filter': event_arguments.get('date_filter')}},
         )
-    if _is_trace_focused_question(question):
+    if not provider_ready and _is_trace_focused_question(question):
         trace_arguments = {
             'query': _extract_quoted_trace_query(scoped_question),
             'errors_only': any(keyword in question for keyword in ['异常', '错误', '失败']),
@@ -6827,26 +7937,6 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
     final_content = ''
     collected_tool_outputs = []
 
-    for priority_tool in ['query_alerts', 'query_system_posture']:
-        if priority_tool not in registry:
-            continue
-        priority_arguments = {'query': scoped_question, 'limit': 6}
-        emit(
-            tool_event={'name': priority_tool, 'detail': '优先证据采集', 'status': PROCESSING_STATUS_RUNNING},
-            text=f'正在优先查询 {priority_tool}',
-        )
-        tool_result = _run_tool_call(session, user_message, user, priority_tool, priority_arguments, registry_entry=registry[priority_tool])
-        executed_tool_names.append(priority_tool)
-        collected_tool_outputs.append({'tool_name': priority_tool, 'tool_output': tool_result.get('tool_output') or {}})
-        sections.extend(tool_result.get('sections', []))
-        citations.extend(tool_result.get('citations', []))
-        if tool_result.get('message_type') == AIOpsChatMessage.TYPE_ANALYSIS:
-            message_type = AIOpsChatMessage.TYPE_ANALYSIS
-        emit(
-            tool_event={'name': priority_tool, 'detail': _summarize_tool_result(tool_result), 'status': PROCESSING_STATUS_COMPLETED},
-            text=f'{priority_tool} 调用完成',
-        )
-
     messages = [
         {'role': 'system', 'content': _build_runtime_prompt(config, active_mcp_servers, active_skills, user)},
         *_build_history_messages(session, config),
@@ -6868,6 +7958,11 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         messages.append({
             'role': 'user',
             'content': '路由约束：本问题明确限定在链路追踪/Trace/调用链中排查服务异常，必须调用 query_traces；不要改用 query_alerts。query 参数只传服务名或 traceId，若用户问异常/错误则 errors_only=true。',
+        })
+    if _is_direct_log_question(question):
+        messages.append({
+            'role': 'user',
+            'content': '路由约束：本问题明确限定在日志中查询或分析，必须调用 query_logs；不要先调用 query_alerts 或 query_system_posture。若用户同时提到警告和错误，使用 levels=["warning","error"]。',
         })
 
     try:

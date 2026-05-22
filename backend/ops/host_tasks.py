@@ -62,6 +62,22 @@ def _execution_host_fk(host):
     return host if isinstance(host, Host) else None
 
 
+def _execution_target_fields(host):
+    if isinstance(host, TaskResourceHostTarget):
+        return {
+            'target_type': HostTask.TARGET_HOST,
+            'target_id': f'task_resource:{host.resource_id}',
+            'target_name': host.hostname,
+            'target_kind': 'task_resource_host',
+        }
+    return {
+        'target_type': HostTask.TARGET_HOST,
+        'target_id': str(host.id),
+        'target_name': host.hostname,
+        'target_kind': 'host',
+    }
+
+
 def _host_source_ref(host):
     if isinstance(host, TaskResourceHostTarget):
         return {'source': 'task_resource', 'id': host.resource_id}
@@ -262,6 +278,7 @@ def _create_skipped_execution(task, host, message):
         host=_execution_host_fk(host),
         host_name=host.hostname,
         host_ip=host.ip_address,
+        **_execution_target_fields(host),
         status='skipped',
         command='',
         output='',
@@ -279,6 +296,7 @@ def _create_failed_execution(task, host, command_text, message):
         host=_execution_host_fk(host),
         host_name=host.hostname,
         host_ip=host.ip_address,
+        **_execution_target_fields(host),
         status='failed',
         command=command_text,
         output='',
@@ -341,7 +359,7 @@ def _is_ansible_controller_error(message):
 
 def execute_ansible_command(host, command_text, timeout_seconds):
     if not is_ansible_available():
-        raise AnsibleControllerError('\u672a\u68c0\u6d4b\u5230 Ansible \u63a7\u5236\u7aef\u73af\u5883')
+        raise AnsibleControllerError('未检测到 Ansible 控制端环境：后端运行环境未找到 ansible 命令，请安装 ansible-core 或配置 HOST_TASK_ANSIBLE_BINARY。')
 
     alias = _ansible_inventory_alias(host)
     extra_vars = _build_ansible_extra_vars(host)
@@ -391,7 +409,7 @@ def execute_ansible_command(host, command_text, timeout_seconds):
 
 def execute_ansible_playbook(host, playbook_content, timeout_seconds, playbook_name='', extra_vars=None):
     if not is_ansible_playbook_available():
-        raise AnsibleControllerError('\u672a\u68c0\u6d4b\u5230 Ansible Playbook \u63a7\u5236\u7aef\u73af\u5883')
+        raise AnsibleControllerError('未检测到 Ansible Playbook 控制端环境：后端运行环境未找到 ansible-playbook 命令，请安装 ansible-core 或配置 HOST_TASK_ANSIBLE_PLAYBOOK_BINARY。')
 
     alias = _ansible_inventory_alias(host)
     merged_extra_vars = _build_ansible_extra_vars(host)
@@ -484,6 +502,7 @@ def _run_single_task_with_ssh(task, host):
         host=_execution_host_fk(host),
         host_name=host.hostname,
         host_ip=host.ip_address,
+        **_execution_target_fields(host),
         status=status,
         command=command_text,
         output=output[:8000],
@@ -542,6 +561,7 @@ def _run_single_task_with_ansible(task, host):
         host=_execution_host_fk(host),
         host_name=host.hostname,
         host_ip=host.ip_address,
+        **_execution_target_fields(host),
         status=status,
         command=command_text,
         output=output[:8000],

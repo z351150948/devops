@@ -260,7 +260,7 @@
               <div class="log-head-row">
                 <div class="log-meta-inline">
                   <span class="time-text">{{ formatTimestamp(item.timestamp) }}</span>
-                  <el-tag size="small" :type="levelTagType(item.level)">{{ levelLabel(item.level) }}</el-tag>
+                  <el-tag size="small" :type="levelTagType(item)">{{ levelLabel(item) }}</el-tag>
                   <span class="source-text">{{ item.source }}</span>
                 </div>
                 <span class="expand-text">{{ isExpanded(currentTab, index) ? '收起' : '展开' }}</span>
@@ -471,7 +471,7 @@ const isLoki = computed(() => activeProvider.value === 'loki')
 const isElk = computed(() => activeProvider.value === 'elk')
 const isSls = computed(() => activeProvider.value === 'sls')
 const currentResults = computed(() => currentTab.value?.results || { total: 0, source: '', took_ms: null, progress: '', logs: [] })
-const errorCount = computed(() => currentResults.value.logs.filter((item) => item.level === 'error').length)
+const errorCount = computed(() => currentResults.value.logs.filter((item) => normalizeLogLevel(item) === 'error').length)
 const currentHelpDoc = computed(() => SYNTAX_HELP_DOCS[helpProvider.value] || SYNTAX_HELP_DOCS.loki)
 const canViewTracing = computed(() => authStore.hasPermission('ops.trace.view'))
 const canViewGrafana = computed(() => authStore.hasPermission('ops.grafana.view'))
@@ -1657,7 +1657,7 @@ function bucketize(logs) {
     if (Number.isNaN(time)) return
     const index = Math.min(count - 1, Math.floor((time - min) / step))
     buckets[index].total += 1
-    if (item.level === 'error') buckets[index].error += 1
+    if (normalizeLogLevel(item) === 'error') buckets[index].error += 1
   })
 
   return buckets.map((item) => ({
@@ -1756,12 +1756,32 @@ function formatMessage(message) {
   )
 }
 
-function levelTagType(level) {
-  return { error: 'danger', warning: 'warning', info: 'success', debug: 'info' }[level] || ''
+function rawLogLevel(item) {
+  if (item && typeof item === 'object') {
+    return item.attributes?.detected_level || item.attributes?.detectedLevel || item.attributes?.level || item.level
+  }
+  return item
 }
 
-function levelLabel(level) {
-  return { error: '错误', warning: '告警', info: '信息', debug: '调试', unknown: '未知' }[level] || '未知'
+function normalizeLevel(level) {
+  const normalized = String(level || '').trim().toLowerCase()
+  if (['error', 'err', 'fatal', 'critical', 'crit'].includes(normalized)) return 'error'
+  if (['warning', 'warn'].includes(normalized)) return 'warning'
+  if (['info', 'information', 'notice'].includes(normalized)) return 'info'
+  if (['debug', 'trace', 'verbose'].includes(normalized)) return 'debug'
+  return 'unknown'
+}
+
+function normalizeLogLevel(item) {
+  return normalizeLevel(rawLogLevel(item))
+}
+
+function levelTagType(item) {
+  return { error: 'danger', warning: 'warning', info: 'success', debug: 'info' }[normalizeLogLevel(item)] || ''
+}
+
+function levelLabel(item) {
+  return { error: 'ERROR', warning: 'WARN', info: 'INFO', debug: 'DEBUG', unknown: 'UNKNOWN' }[normalizeLogLevel(item)] || 'UNKNOWN'
 }
 
 function handleResize() {

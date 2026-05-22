@@ -223,29 +223,92 @@ def _split_fields(value, fallback):
     return fallback
 
 
+def _normalize_level(value):
+    if value in (None, ''):
+        return ''
+    normalized = str(value).strip().lower()
+    normalized = re.sub(r'[^a-z0-9_\u4e00-\u9fff-]+', '', normalized)
+    if normalized in {'error', 'err', 'fatal', 'critical', 'crit', 'severe', '严重', '错误', '异常'}:
+        return 'error'
+    if normalized in {'warning', 'warn', 'warningwarn', '警告', '告警'}:
+        return 'warning'
+    if normalized in {'info', 'information', 'notice', '信息'}:
+        return 'info'
+    if normalized in {'debug', 'dbg', 'trace', 'verbose', '调试'}:
+        return 'debug'
+    if normalized.startswith(('err', 'fatal', 'crit', 'severe')):
+        return 'error'
+    if normalized.startswith('warn'):
+        return 'warning'
+    if normalized.startswith('info'):
+        return 'info'
+    if normalized.startswith(('debug', 'dbg')):
+        return 'debug'
+    return ''
+
+
 def _detect_level(message, attributes=None):
     attributes = attributes or {}
-    explicit = attributes.get('level') or attributes.get('severity') or attributes.get('log.level')
-    if explicit:
-        explicit = str(explicit).lower()
-        if explicit.startswith(('err', 'fatal', 'crit')):
-            return 'error'
-        if explicit.startswith('warn'):
-            return 'warning'
-        if explicit.startswith('debug'):
-            return 'debug'
-        if explicit.startswith('info'):
-            return 'info'
+    explicit_keys = (
+        'detected_level',
+        'detectedLevel',
+        'level',
+        'severity',
+        'log.level',
+        'severity_text',
+        'severityText',
+        'severityLabel',
+        'priority',
+    )
+    for key in explicit_keys:
+        raw_level = attributes.get(key)
+        if raw_level in (None, '') and '.' in key:
+            raw_level = _get_nested(attributes, key)
+        level = _normalize_level(raw_level)
+        if level:
+            return level
 
-    lower = str(message).lower()
-    if any(token in lower for token in ('error', 'fatal', 'panic', 'exception', 'traceback')):
+    text = str(message or '')
+    if text.strip().startswith(('{', '[')):
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            for key in explicit_keys:
+                raw_level = parsed.get(key)
+                if raw_level in (None, '') and '.' in key:
+                    raw_level = _get_nested(parsed, key)
+                level = _normalize_level(raw_level)
+                if level:
+                    return level
+
+    explicit_match = re.search(
+        r'(?<![A-Za-z0-9_])["\']?(?:detected_level|detectedLevel|level|severity|log\.level)["\']?\s*[:=]\s*["\']?'
+        r'(error|err|fatal|critical|crit|warn|warning|info|information|debug|trace)["\']?',
+        text,
+        flags=re.IGNORECASE,
+    )
+    if explicit_match:
+        return _normalize_level(explicit_match.group(1))
+
+    token_match = re.search(
+        r'(?<![A-Za-z0-9_])(error|err|fatal|critical|crit|warn|warning|info|information|debug)\b',
+        text,
+        flags=re.IGNORECASE,
+    )
+    if token_match:
+        return _normalize_level(token_match.group(1))
+
+    lower = text.lower()
+    if any(token in lower for token in ('fatal', 'panic', 'exception', 'traceback')):
         return 'error'
-    if 'warn' in lower:
+    if re.search(r'(?<![a-z0-9_])error(?![a-z0-9_])', lower):
+        return 'error'
+    if re.search(r'(?<![a-z0-9_])warn(?:ing)?(?![a-z0-9_])', lower):
         return 'warning'
-    if 'debug' in lower or 'trace' in lower:
+    if re.search(r'(?<![a-z0-9_])debug(?![a-z0-9_])', lower):
         return 'debug'
-    if 'info' in lower:
-        return 'info'
     return 'unknown'
 
 

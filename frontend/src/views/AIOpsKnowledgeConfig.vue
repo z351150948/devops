@@ -73,9 +73,6 @@
         <el-table-column label="事件中心环境" min-width="170">
           <template #default="{ row }"><TagList :items="row.event_environments" /></template>
         </el-table-column>
-        <el-table-column label="告警环境" min-width="160">
-          <template #default="{ row }"><TagList :items="row.alert_environments" /></template>
-        </el-table-column>
         <el-table-column label="可观测性来源" min-width="260">
           <template #default="{ row }"><TagList :items="observabilityNames(row)" /></template>
         </el-table-column>
@@ -120,16 +117,16 @@
             <el-option v-for="item in catalog.event_environments" :key="item" :label="item" :value="item" />
           </el-select>
         </el-form-item>
-        <el-form-item label="告警中心环境">
-          <el-select v-model="form.alert_environments" multiple filterable clearable placeholder="选择一个或多个告警中心环境">
-            <el-option v-for="item in catalog.alert_environments" :key="item" :label="item" :value="item" />
-          </el-select>
-        </el-form-item>
         <div class="form-group-card">
           <div class="form-group-card__head">
             <strong>可观测性关联配置</strong>
-            <span>系统态势归类到可观测性，和日志、链路、看板、跳转关联一起作为分析证据。</span>
+            <span>告警、系统态势、日志、链路、看板和跳转关联统一作为分析证据。</span>
           </div>
+          <el-form-item label="告警中心环境">
+            <el-select v-model="form.alert_environments" multiple filterable clearable placeholder="选择一个或多个告警中心环境">
+              <el-option v-for="item in catalog.alert_environments" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="系统态势环境">
             <el-select v-model="form.posture_environments" multiple filterable clearable placeholder="选择一个或多个系统态势环境">
               <el-option v-for="item in catalog.posture_environments" :key="item.key" :label="postureEnvironmentLabel(item)" :value="item.key" />
@@ -156,36 +153,48 @@
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="K8s 集群">
-          <el-select v-model="form.k8s_cluster_ids" multiple filterable clearable placeholder="选择此图谱所在的 K8s 集群">
-            <el-option v-for="item in catalog.k8s_clusters" :key="item.id" :label="k8sClusterLabel(item)" :value="item.id" />
-          </el-select>
-        </el-form-item>
-        <div v-if="selectedK8sClusters.length" class="namespace-config">
-          <div class="namespace-config-title">K8s 命名空间范围</div>
-          <div v-for="cluster in selectedK8sClusters" :key="cluster.id" class="namespace-row">
-            <div class="namespace-cluster">
-              <strong>{{ cluster.name }}</strong>
-              <span>不选则读取该集群全部命名空间</span>
-            </div>
-            <el-select
-              v-model="form.k8s_namespaces[String(cluster.id)]"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              clearable
-              placeholder="选择业务服务所在命名空间"
-            >
-              <el-option v-for="namespace in namespaceOptionsForCluster(cluster)" :key="namespace" :label="namespace" :value="namespace" />
-            </el-select>
+        <div class="form-group-card">
+          <div class="form-group-card__head">
+            <strong>容器与资源底座环境</strong>
+            <span>运行环境用于选择服务所在载体，K8s 集群和 Docker 环境按实际部署形态选择一种即可。</span>
           </div>
+          <el-form-item label="K8s 集群">
+            <el-select v-model="form.k8s_cluster_ids" multiple filterable clearable placeholder="选择此图谱所在的 K8s 集群">
+              <el-option v-for="item in catalog.k8s_clusters" :key="item.id" :label="k8sClusterLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <div v-if="selectedK8sClusters.length" class="namespace-config">
+            <div class="namespace-config-title">K8s 命名空间范围</div>
+            <div v-for="cluster in selectedK8sClusters" :key="cluster.id" class="namespace-row">
+              <div class="namespace-cluster">
+                <strong>{{ cluster.name }}</strong>
+                <span>不选则读取该集群全部命名空间</span>
+              </div>
+              <el-select
+                v-model="form.k8s_namespaces[String(cluster.id)]"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                placeholder="选择业务服务所在命名空间"
+              >
+                <el-option v-for="namespace in namespaceOptionsForCluster(cluster)" :key="namespace" :label="namespace" :value="namespace" />
+              </el-select>
+            </div>
+          </div>
+          <el-form-item label="Docker 环境">
+            <el-select v-model="form.docker_host_ids" multiple filterable clearable placeholder="选择此图谱所在的 Docker 环境">
+              <el-option v-for="item in catalog.docker_hosts" :key="item.id" :label="dockerHostLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <div class="field-hint">资源底座环境用于 AIOps 生成巡检、脚本执行等任务时确定可选目标资源范围。</div>
+          <el-form-item label="资源底座环境">
+            <el-select v-model="form.task_resource_environment_ids" multiple filterable clearable placeholder="选择任务中心资源底座环境">
+              <el-option v-for="item in catalog.task_resource_environments" :key="item.id" :label="taskResourceEnvironmentLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
         </div>
-        <el-form-item label="Docker 环境">
-          <el-select v-model="form.docker_host_ids" multiple filterable clearable placeholder="选择此图谱所在的 Docker 环境">
-            <el-option v-for="item in catalog.docker_hosts" :key="item.id" :label="dockerHostLabel(item)" :value="item.id" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="启用">
           <el-switch v-model="form.is_enabled" />
         </el-form-item>
@@ -247,6 +256,7 @@ const catalog = reactive({
   posture_environments: [],
   k8s_clusters: [],
   docker_hosts: [],
+  task_resource_environments: [],
 })
 const dialog = reactive({ visible: false, editingId: null })
 const form = reactive({
@@ -263,6 +273,7 @@ const form = reactive({
   k8s_cluster_ids: [],
   k8s_namespaces: {},
   docker_host_ids: [],
+  task_resource_environment_ids: [],
   is_enabled: true,
 })
 
@@ -280,7 +291,8 @@ const totalBindingCount = computed(() => environments.value.reduce((total, item)
   + (item.alert_environments?.length || 0)
   + (item.posture_environments?.length || 0)
   + (item.k8s_cluster_ids?.length || 0)
-  + (item.docker_host_ids?.length || 0), 0))
+  + (item.docker_host_ids?.length || 0)
+  + (item.task_resource_environment_ids?.length || 0), 0))
 
 const selectedK8sClusters = computed(() => {
   const selected = new Set((form.k8s_cluster_ids || []).map(id => Number(id)))
@@ -302,6 +314,7 @@ function resetForm(row = null) {
   form.k8s_cluster_ids = [...(row?.k8s_cluster_ids || [])]
   form.k8s_namespaces = { ...(row?.k8s_namespaces || {}) }
   form.docker_host_ids = [...(row?.docker_host_ids || [])]
+  form.task_resource_environment_ids = [...(row?.task_resource_environment_ids || [])]
   form.is_enabled = row?.is_enabled ?? true
 }
 
@@ -316,6 +329,7 @@ function hasAnyBinding() {
     form.posture_environments,
     form.k8s_cluster_ids,
     form.docker_host_ids,
+    form.task_resource_environment_ids,
   ].some(items => items.length)
 }
 
@@ -362,6 +376,11 @@ function dockerHostLabel(item) {
   return item.ip_address ? `${item.name} / ${item.ip_address}` : item.name
 }
 
+function taskResourceEnvironmentLabel(item) {
+  const suffix = Number(item.resource_count || 0) ? ` / ${item.resource_count} 个资源` : ''
+  return `${item.name}${suffix}`
+}
+
 function postureEnvironmentNames(keys = []) {
   const nameMap = new Map(catalog.posture_environments.map(item => [item.key, postureEnvironmentLabel(item)]))
   return keys.map(key => nameMap.get(key) || key)
@@ -374,6 +393,7 @@ function observabilityLinkNames(ids = []) {
 
 function observabilityNames(row) {
   return [
+    ...(row.alert_environments || []).map(name => `告警: ${name}`),
     ...(row.posture_environments || []).map(name => `系统态势: ${postureEnvironmentNames([name])[0]}`),
     ...(row.observability_link_ids || []).map(name => `关联: ${observabilityLinkNames([name])[0]}`),
     ...(row.grafana_folder_keys || []).map(name => `看板: ${name}`),
@@ -385,6 +405,7 @@ function observabilityNames(row) {
 function infrastructureNames(row) {
   const k8sMap = new Map(catalog.k8s_clusters.map(item => [Number(item.id), `K8s: ${item.name}`]))
   const dockerMap = new Map(catalog.docker_hosts.map(item => [Number(item.id), `Docker: ${item.name}`]))
+  const resourceEnvMap = new Map(catalog.task_resource_environments.map(item => [Number(item.id), `资源底座环境: ${item.name}`]))
   return [
     ...(row.k8s_cluster_ids || []).map((id) => {
       const namespaces = row.k8s_namespaces?.[String(id)] || []
@@ -392,6 +413,7 @@ function infrastructureNames(row) {
       return `${k8sMap.get(Number(id)) || `K8s ID ${id}`}${suffix}`
     }),
     ...(row.docker_host_ids || []).map(id => dockerMap.get(Number(id)) || `Docker ID ${id}`),
+    ...(row.task_resource_environment_ids || []).map(id => resourceEnvMap.get(Number(id)) || `资源底座环境 ID ${id}`),
   ]
 }
 
@@ -413,6 +435,7 @@ async function loadData() {
       posture_environments: options.posture_environments || [],
       k8s_clusters: options.k8s_clusters || [],
       docker_hosts: options.docker_hosts || [],
+      task_resource_environments: options.task_resource_environments || [],
     })
   } finally {
     loading.value = false
@@ -427,7 +450,7 @@ function openDialog(row = null) {
 async function submitForm() {
   await formRef.value?.validate()
   if (!hasAnyBinding()) {
-    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群或 Docker 环境来源')
+    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群、Docker 环境或资源底座环境来源')
     return
   }
   saving.value = true
@@ -446,6 +469,7 @@ async function submitForm() {
       k8s_cluster_ids: form.k8s_cluster_ids,
       k8s_namespaces: form.k8s_namespaces,
       docker_host_ids: form.docker_host_ids,
+      task_resource_environment_ids: form.task_resource_environment_ids,
       is_enabled: form.is_enabled,
     }
     if (dialog.editingId) {
@@ -639,6 +663,12 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   font-size: 12px;
 }
 
+.field-hint {
+  margin: -2px 0 10px 128px;
+  color: #64748b;
+  font-size: 12px;
+}
+
 .env-name {
   color: #0f172a;
   font-weight: 700;
@@ -696,6 +726,10 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   }
 
   .form-group-card__head {
+    margin-left: 0;
+  }
+
+  .field-hint {
     margin-left: 0;
   }
 

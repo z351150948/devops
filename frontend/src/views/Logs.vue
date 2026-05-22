@@ -248,7 +248,7 @@
           <button class="log-main" @click="toggleRow(index)">
             <div class="log-meta">
               <span>{{ formatTimestamp(item.timestamp) }}</span>
-              <el-tag size="small" :type="levelTagType(item.level)">{{ levelLabel(item.level) }}</el-tag>
+              <el-tag size="small" :type="levelTagType(item)">{{ levelLabel(item) }}</el-tag>
               <span>{{ item.source }}</span>
             </div>
             <div class="log-message" v-html="formatMessage(item.message)"></div>
@@ -325,7 +325,7 @@ const queryLabel = computed(() => {
   if (isElk.value) return 'Lucene query syntax'
   return 'Aliyun SLS query syntax'
 })
-const errorCount = computed(() => results.logs.filter((item) => item.level === 'error').length)
+const errorCount = computed(() => results.logs.filter((item) => normalizeLogLevel(item) === 'error').length)
 const generatedLokiQuery = computed(() => {
   const selector = labelFilters.value
     .filter((item) => item.key && item.value)
@@ -553,7 +553,7 @@ function bucketize() {
     if (Number.isNaN(time)) return
     const index = Math.min(count - 1, Math.floor((time - min) / step))
     buckets[index].total += 1
-    if (item.level === 'error') buckets[index].error += 1
+    if (normalizeLogLevel(item) === 'error') buckets[index].error += 1
   })
 
   return buckets.map((item) => ({
@@ -608,12 +608,32 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-function levelTagType(level) {
-  return { error: 'danger', warning: 'warning', info: 'success', debug: 'info' }[level] || ''
+function rawLogLevel(item) {
+  if (item && typeof item === 'object') {
+    return item.attributes?.detected_level || item.attributes?.detectedLevel || item.attributes?.level || item.level
+  }
+  return item
 }
 
-function levelLabel(level) {
-  return { error: 'Error', warning: 'Warning', info: 'Info', debug: 'Debug', unknown: 'Unknown' }[level] || 'Unknown'
+function normalizeLevel(level) {
+  const normalized = String(level || '').trim().toLowerCase()
+  if (['error', 'err', 'fatal', 'critical', 'crit'].includes(normalized)) return 'error'
+  if (['warning', 'warn'].includes(normalized)) return 'warning'
+  if (['info', 'information', 'notice'].includes(normalized)) return 'info'
+  if (['debug', 'trace', 'verbose'].includes(normalized)) return 'debug'
+  return 'unknown'
+}
+
+function normalizeLogLevel(item) {
+  return normalizeLevel(rawLogLevel(item))
+}
+
+function levelTagType(item) {
+  return { error: 'danger', warning: 'warning', info: 'success', debug: 'info' }[normalizeLogLevel(item)] || ''
+}
+
+function levelLabel(item) {
+  return { error: 'ERROR', warning: 'WARN', info: 'INFO', debug: 'DEBUG', unknown: 'UNKNOWN' }[normalizeLogLevel(item)] || 'UNKNOWN'
 }
 
 function handleResize() {

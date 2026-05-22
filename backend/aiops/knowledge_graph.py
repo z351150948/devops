@@ -21,6 +21,8 @@ from ops.models import (
     ObservabilityDataSourceLink,
     SystemPostureEnvironment,
     SystemPostureSystem,
+    TaskResource,
+    TaskResourceGroup,
     TracingDataSource,
 )
 from marketplace.models import ServiceDeployment
@@ -64,13 +66,20 @@ def _repair_text(value):
     text = str(value or '').strip()
     if not text:
         return ''
+    if any('\u4e00' <= char <= '\u9fff' for char in text) and _mojibake_score(text) == 0:
+        return text
     candidates = [text]
     for encoding in ('latin1', 'gbk', 'gb18030'):
         try:
             repaired = text.encode(encoding).decode('utf-8')
         except (UnicodeEncodeError, UnicodeDecodeError):
             continue
-        if repaired and any('\u4e00' <= char <= '\u9fff' for char in repaired):
+        if (
+            repaired
+            and any('\u4e00' <= char <= '\u9fff' for char in repaired)
+            and '?' not in repaired
+            and _mojibake_score(repaired) < _mojibake_score(text)
+        ):
             candidates.append(repaired)
     return min(candidates, key=lambda item: (_mojibake_score(item), len(item)))
 
@@ -362,6 +371,7 @@ def _empty_graph(filters=None):
             {'key': 'capability_event_source', 'label': '能力接入事件源'},
             {'key': 'environment_observability', 'label': '环境关联可观测性'},
             {'key': 'environment_infrastructure', 'label': '环境运行于基础设施'},
+            {'key': 'environment_resource_base', 'label': '环境关联资源底座'},
             {'key': 'service_deployment', 'label': '部署在'},
             {'key': 'infrastructure_member', 'label': '集群包含主机'},
             {'key': 'service_runtime', 'label': '服务依赖'},
@@ -423,6 +433,9 @@ def resolve_knowledge_environment(name):
         'k8s_cluster_ids': _int_list(config.k8s_cluster_ids),
         'k8s_namespaces': config.k8s_namespaces if isinstance(config.k8s_namespaces, dict) else {},
         'docker_host_ids': _int_list(config.docker_host_ids),
+        'task_resource_environment_ids': _int_list(getattr(config, 'task_resource_environment_ids', []) or []),
+        'association_snapshot': config.association_snapshot if isinstance(config.association_snapshot, dict) else {},
+        'child_node_snapshot': config.child_node_snapshot if isinstance(config.child_node_snapshot, dict) else {},
     }
 
 
@@ -1501,6 +1514,7 @@ def build_knowledge_graph(params=None):
     selected_k8s_cluster_ids = set()
     selected_k8s_namespaces = defaultdict(set)
     selected_docker_host_ids = set()
+    selected_task_resource_environment_ids = set()
     if use_knowledge_env:
         selected_env = {config.name for config in selected_knowledge_configs}
         for config in selected_knowledge_configs:
@@ -1524,6 +1538,7 @@ def build_knowledge_graph(params=None):
             for cluster_id in config_k8s_cluster_ids:
                 selected_k8s_namespaces[cluster_id].update(_namespaces_for_cluster(config, cluster_id))
             selected_docker_host_ids.update(_int_list(config.docker_host_ids))
+            selected_task_resource_environment_ids.update(_int_list(getattr(config, 'task_resource_environment_ids', []) or []))
 
     if use_knowledge_env and selected_observability_link_ids:
         for link in ObservabilityDataSourceLink.objects.filter(id__in=selected_observability_link_ids, is_enabled=True):
@@ -1722,6 +1737,7 @@ def build_knowledge_graph(params=None):
 
     k8s_clusters = list(K8sCluster.objects.filter(id__in=selected_k8s_cluster_ids).order_by('name', 'id')) if use_knowledge_env and selected_k8s_cluster_ids else []
     docker_hosts = list(DockerHost.objects.filter(id__in=selected_docker_host_ids).order_by('name', 'id')) if use_knowledge_env and selected_docker_host_ids else []
+    task_resource_env_groups = list(TaskResourceGroup.objects.filter(id__in=selected_task_resource_environment_ids, group_type=TaskResourceGroup.GROUP_ENVIRONMENT).order_by('sort_order', 'name', 'id')) if use_knowledge_env and selected_task_resource_environment_ids else []
     infrastructure_inventory = _cached_external_batch([
         (
             ('k8s_pods', cluster.id),
@@ -2156,6 +2172,29 @@ def build_knowledge_graph(params=None):
                 ],
             )
             add_edge(env_id, node_id, '运行于', 'environment_infrastructure', 2)
+            infrastructure_node_ids.append(node_id)
+
+        for resource_env in task_resource_env_groups:
+            resource_count = TaskResource.objects.filter(environment=resource_env).count()
+            node_id = _node_key('infrastructure', 'task_resource_env', resource_env.id)
+            add_node(
+                node_id,
+                resource_env.name,
+                'infrastructure',
+                '资源底座环境',
+                route='/tasks/resources',
+                status='active',
+                metric=resource_count,
+                description=resource_env.description or f'任务中心资源底座环境，资源 {resource_count} 个',
+                environment=environment,
+                infra_type='task_resource_environment',
+                details=[
+                    {'label': '类型', 'value': '任务资源底座环境'},
+                    {'label': '编码', 'value': resource_env.code or '-'},
+                    {'label': '资源数', 'value': resource_count},
+                ],
+            )
+            add_edge(env_id, node_id, '关联资源底座', 'environment_resource_base', max(resource_count, 1))
             infrastructure_node_ids.append(node_id)
 
     def ensure_runtime_component_node(component):

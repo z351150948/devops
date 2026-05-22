@@ -122,6 +122,7 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
             'id', 'name', 'aliases', 'description', 'event_environments', 'grafana_folder_keys',
             'log_datasource_ids', 'tracing_datasource_ids', 'observability_link_ids', 'alert_environments',
             'posture_environments', 'k8s_cluster_ids', 'k8s_namespaces', 'docker_host_ids',
+            'task_resource_environment_ids',
             'is_enabled', 'created_by', 'updated_by', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
@@ -144,6 +145,7 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
             'posture_environments',
             'k8s_cluster_ids',
             'docker_host_ids',
+            'task_resource_environment_ids',
         ]
         for field in list_fields:
             if field not in attrs:
@@ -197,7 +199,7 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
             attrs.get(field, getattr(instance, field, [])) for field in association_fields
         )
         if not has_association:
-            raise serializers.ValidationError('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群或 Docker 环境来源')
+            raise serializers.ValidationError('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群、Docker 环境或任务资源底座来源')
         return attrs
 
 
