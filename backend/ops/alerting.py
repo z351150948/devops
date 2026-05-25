@@ -680,7 +680,11 @@ def apply_alert_suppression(alert):
 def _base_url(request=None):
     if request:
         return request.build_absolute_uri('/').rstrip('/')
-    return str(getattr(settings, 'AGDEVOPS_PUBLIC_BASE_URL', '') or '').rstrip('/')
+    return str(
+        getattr(settings, 'SXDEVOPS_PUBLIC_BASE_URL', '')
+        or getattr(settings, 'AGDEVOPS_PUBLIC_BASE_URL', '')
+        or ''
+    ).rstrip('/')
 
 
 def _interaction_url(alert, action, provider='', request=None):

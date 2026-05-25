@@ -23,6 +23,15 @@ for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
 }
 
 const authStore = useAuthStore(pinia)
+
+router.afterEach((to) => {
+    const title = typeof to.meta?.title === 'string' && to.meta.title.trim()
+        ? `${to.meta.title} - SxDevOps`
+        : 'SxDevOps 运维智能体平台'
+    document.title = title
+})
+
 authStore.bootstrap().finally(() => {
     app.mount('#app')
 })
+

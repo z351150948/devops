@@ -1198,7 +1198,7 @@ async function handleConfirmAction(action) {
   try {
     const result = await confirmAIOpsAction(action.id)
     if (result?.task_draft) {
-      sessionStorage.setItem('agdevops.task-center.prefill-draft', JSON.stringify(result.task_draft))
+      sessionStorage.setItem('sxdevops.task-center.prefill-draft', JSON.stringify(result.task_draft))
       ElMessage.success(`已载入任务草稿 ${result.task_name}`)
       router.push({ path: '/tasks/workbench', query: { aiopsDraft: String(Date.now()) } })
       closePanel()

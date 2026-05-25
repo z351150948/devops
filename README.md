@@ -193,7 +193,7 @@ pip install -r requirements.txt
 python manage.py migrate
 python manage.py seed_data
 python manage.py seed_templates
-python -m daphne -b 0.0.0.0 -p 8000 agdevops.asgi:application
+python -m daphne -b 0.0.0.0 -p 8000 sxdevops.asgi:application
 ```
 
 后端默认地址：`http://localhost:8000`

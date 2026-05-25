@@ -645,7 +645,7 @@ const props = defineProps({
 })
 
 const router = useRouter()
-const TASK_DRAFT_STORAGE_KEY = 'agdevops.task-center.prefill-draft'
+const TASK_DRAFT_STORAGE_KEY = 'sxdevops.task-center.prefill-draft'
 
 const innerTabs = [
   { key: 'planner', label: '任务编排', desc: '配置时间规则、执行方式与目标主机' },

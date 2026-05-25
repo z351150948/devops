@@ -587,7 +587,7 @@ defineProps({
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const lastSystemStorageKey = 'agdevops:observability:system-posture:last-system'
+const lastSystemStorageKey = 'sxdevops:observability:system-posture:last-system'
 const loading = ref(false)
 const systemSubmitting = ref(false)
 const environmentSorting = ref(false)

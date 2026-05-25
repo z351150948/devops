@@ -6,7 +6,7 @@
           <div class="brand-identity">
             <img src="@/assets/brand-mark.svg" alt="SxDevOps" class="brand-mark-image" />
             <div class="brand-copy">
-              <strong>SxDevOps · AI AGENT</strong>
+              <strong>SxDevOps · AI Agent</strong>
               <span class="brand-motto">
                 <span>思而后行</span>
                 <el-icon class="brand-motto-icon"><TrendCharts /></el-icon>
@@ -722,3 +722,4 @@ async function handleLogin() {
   }
 }
 </style>
+

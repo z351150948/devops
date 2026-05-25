@@ -163,7 +163,7 @@ Clear-DevPort -Port 3000 -AllowedNames @('node')
 $backend = Start-ServiceProcess `
     -Name 'Backend' `
     -FilePath 'python' `
-    -ArgumentList @('-m', 'daphne', '-b', '0.0.0.0', '-p', '8000', 'agdevops.asgi:application') `
+    -ArgumentList @('-m', 'daphne', '-b', '0.0.0.0', '-p', '8000', 'sxdevops.asgi:application') `
     -WorkingDirectory $backendDir `
     -StdOut $backendOut `
     -StdErr $backendErr `

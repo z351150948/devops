@@ -21,7 +21,7 @@ from .models import ServiceDeployment
 
 logger = logging.getLogger(__name__)
 
-DEPLOY_BASE = '/opt/agdevops'
+DEPLOY_BASE = '/opt/sxdevops'
 
 
 def _render_template(template_str, context):
@@ -68,7 +68,7 @@ def _ssh_exec(client, cmd):
 
 def _k8s_common_labels(deployment):
     return {
-        'app.kubernetes.io/managed-by': 'agdevops',
+        'app.kubernetes.io/managed-by': 'sxdevops',
         'app.kubernetes.io/instance': deployment.release_name,
         'app.kubernetes.io/name': _service_slug(deployment.template.name),
     }
@@ -140,7 +140,7 @@ def _ensure_k8s_namespace(client_module, namespace):
     namespace_body = client_module.V1Namespace(
         metadata=client_module.V1ObjectMeta(
             name=namespace,
-            labels={'app.kubernetes.io/managed-by': 'agdevops'},
+            labels={'app.kubernetes.io/managed-by': 'sxdevops'},
         )
     )
     v1.create_namespace(namespace_body)

@@ -21,7 +21,7 @@ from .models import Deployment
 
 logger = logging.getLogger(__name__)
 
-DEPLOY_BASE = '/opt/agdevops/apps'
+DEPLOY_BASE = '/opt/sxdevops/apps'
 SERVICE_STATUS_CACHE_TTL = 8
 SERVICE_STATUS_STALE_CACHE_TTL = 300
 CMDB_ENV_MAP = {
@@ -318,10 +318,10 @@ def _build_k8s_documents(deployment):
     release_name = deployment.release_name_display
     namespace = deployment.namespace or 'default'
     labels = {
-        'app.kubernetes.io/managed-by': 'agdevops',
+        'app.kubernetes.io/managed-by': 'sxdevops',
         'app.kubernetes.io/name': _app_slug(deployment.app_name),
         'app.kubernetes.io/instance': release_name,
-        'agdevops/environment': deployment.environment,
+        'sxdevops/environment': deployment.environment,
     }
     env_items = [{'name': str(key).upper(), 'value': str(value)} for key, value in (deployment.env_config or {}).items()]
     container = {
@@ -455,7 +455,7 @@ def _ensure_k8s_namespace(client_module, namespace):
         if exc.status != 404:
             raise
     namespace_body = client_module.V1Namespace(
-        metadata=client_module.V1ObjectMeta(name=namespace, labels={'app.kubernetes.io/managed-by': 'agdevops'})
+        metadata=client_module.V1ObjectMeta(name=namespace, labels={'app.kubernetes.io/managed-by': 'sxdevops'})
     )
     core_v1.create_namespace(namespace_body)
     return True
@@ -465,7 +465,7 @@ def _label_selector(deployment):
     return ','.join([
         f'app.kubernetes.io/name={_app_slug(deployment.app_name)}',
         f'app.kubernetes.io/instance={deployment.release_name_display}',
-        f'agdevops/environment={deployment.environment}',
+        f'sxdevops/environment={deployment.environment}',
     ])
 
 

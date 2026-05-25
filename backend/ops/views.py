@@ -1796,7 +1796,7 @@ class AlertNotificationChannelViewSet(EventWallModelViewSetMixin, RBACPermission
             alert = Alert.objects.create(
                 title='告警通知测试',
                 level='info',
-                source='AgDevOps',
+                source='SxDevOps',
                 source_type=Alert.SOURCE_GENERIC,
                 message='这是一条用于验证通知渠道的测试告警。',
                 status=Alert.STATUS_ACTIVE,
@@ -1927,7 +1927,13 @@ class AlertActionViewSet(RBACPermissionMixin, viewsets.ReadOnlyModelViewSet):
 @permission_classes([AllowAny])
 def alert_webhook(request, provider, token=''):
     provider = normalize_provider(provider)
-    supplied_token = token or request.query_params.get('token') or request.headers.get('X-Alert-Token') or request.headers.get('X-Agdevops-Token')
+    supplied_token = (
+        token
+        or request.query_params.get('token')
+        or request.headers.get('X-Alert-Token')
+        or request.headers.get('X-Sxdevops-Token')
+        or request.headers.get('X-SxDevOps-Token')
+    )
     if provider != Alert.SOURCE_GENERIC and not supplied_token:
         return Response({'detail': '该告警接入源必须携带有效令牌。'}, status=status.HTTP_403_FORBIDDEN)
     integration = resolve_integration(provider, supplied_token)
@@ -2020,5 +2026,6 @@ def dashboard_stats(request):
         'recent_deploys': recent_deploys,
         'recent_alerts': recent_alerts,
     })
+
 
 

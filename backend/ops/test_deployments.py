@@ -290,7 +290,7 @@ class AppReleaseRuntimeTests(TestCase):
             approval_status='approved',
             status='running',
             is_current=True,
-            deploy_dir='/opt/agdevops/apps/order-service-test',
+            deploy_dir='/opt/sxdevops/apps/order-service-test',
         )
 
         payload = deployer.get_service_status(deployment)
@@ -310,7 +310,7 @@ class AppReleaseRuntimeTests(TestCase):
             approval_status='approved',
             status='running',
             is_current=True,
-            deploy_dir='/opt/agdevops/apps/order-center-test',
+            deploy_dir='/opt/sxdevops/apps/order-center-test',
             release_strategy='batch',
             batch_total=3,
             batch_current=2,
