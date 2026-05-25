@@ -1,42 +1,17 @@
 ﻿<template>
-  <div class="aiops-config-page">
+  <div class="fade-in aiops-config-page">
     <section class="hero panel">
-      <div class="release-hero-copy">
-        <div class="release-hero-title-row release-hero-title-inline">
+      <div class="hero-copy">
+        <div class="hero-title-row">
           <span class="hero-icon"><el-icon><ChatDotSquare /></el-icon></span>
           <h2>智能体配置</h2>
-          <p class="page-desc inline-subtitle">统一管理智能助手的策略、MCP、Skill、模型提供商与审计能力。</p>
+          <p class="page-inline-desc">统一管理智能助手的策略、MCP、Skill、模型提供商与审计能力。</p>
         </div>
       </div>
       <div class="hero-actions">
         <el-button size="small" :loading="loading.page" @click="loadAll">刷新</el-button>
-        <el-button size="small" type="primary" :loading="saving.config" @click="saveConfig">保存策略</el-button>
       </div>
     </section>
-
-    <div class="stats-grid release-stats">
-      <div class="stat-card release-stat-card">
-        <div class="stat-value">{{ providers.length }}</div>
-        <div class="stat-label">模型提供商</div>
-      </div>
-      <div class="stat-card release-stat-card success-card">
-        <div class="stat-value">{{ enabledMcpCount }}</div>
-        <div class="stat-label">启用中的 MCP</div>
-      </div>
-      <div class="stat-card release-stat-card warning-card">
-        <div class="stat-value">{{ enabledSkillCount }}</div>
-        <div class="stat-label">启用中的 Skill</div>
-      </div>
-      <div class="stat-card release-stat-card">
-        <div class="stat-value">{{ auditOverview.sessions_today || 0 }}</div>
-        <div class="stat-label">今日会话数</div>
-      </div>
-    </div>
-
-    <div class="runtime-strip">
-      <el-icon><InfoFilled /></el-icon>
-      <span>模型 Key 加密保存；高风险动作默认二次确认；MCP 与 Skill 受控接入。</span>
-    </div>
 
     <section class="tabs-card">
       <el-tabs v-model="activeTab" class="event-like-tabs">
@@ -75,8 +50,15 @@
 
     <section class="panel">
       <template v-if="activeTab === 'strategy'">
+        <div class="section-toolbar strategy-actions">
+          <div class="toolbar-head">
+            <span class="toolbar-title">智能体策略</span>
+            <span class="toolbar-desc">统一配置默认模型、欢迎语与运行安全开关</span>
+          </div>
+          <el-button size="small" type="primary" :loading="saving.config" @click="saveConfig">保存策略</el-button>
+        </div>
         <div class="config-grid">
-          <div class="config-section">
+          <div class="config-section surface-card">
             <div class="section-title">基础策略</div>
             <el-form :model="configForm" label-width="118px">
               <el-form-item label="默认提供商">
@@ -111,7 +93,7 @@
               </el-form-item>
             </el-form>
           </div>
-          <div class="config-section">
+          <div class="config-section surface-card">
             <div class="section-title">运行与安全</div>
             <div class="switch-list">
               <div class="switch-item">
@@ -153,19 +135,18 @@
 
       <template v-else-if="activeTab === 'providers'">
         <div class="section-toolbar">
+          <div class="toolbar-head">
+            <span class="toolbar-title">模型供应商</span>
+            <span class="toolbar-desc">管理外部 LLM 接入配置与默认模型</span>
+          </div>
           <el-button size="small" type="primary" @click="openProviderDialog()">新增提供商</el-button>
         </div>
-        <el-table :data="providers" stripe>
-          <el-table-column prop="name" label="名称" min-width="140" />
+        <el-table :data="providers" stripe class="console-table">
+          <el-table-column prop="name" label="名称" min-width="180" />
           <el-table-column prop="provider_type" label="类型" width="150" />
           <el-table-column prop="base_url" label="Base URL" min-width="220" show-overflow-tooltip />
           <el-table-column prop="default_model" label="默认模型" width="160" />
-          <el-table-column label="Key" width="90">
-            <template #default="{ row }">
-              <el-tag size="small" :type="row.has_api_key ? 'success' : 'info'">{{ row.has_api_key ? '已配置' : '未配置' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="可用性" width="118">
+          <el-table-column label="可用性" width="96">
             <template #default="{ row }">
               <el-tooltip :content="providerRuntimeHint(row)" placement="top" :disabled="row.runtime_ready">
                 <el-tag size="small" :type="providerRuntimeTagType(row)">{{ providerRuntimeLabel(row) }}</el-tag>
@@ -177,11 +158,13 @@
               <el-tag size="small" :type="row.is_enabled ? 'success' : 'info'">{{ row.is_enabled ? '启用' : '停用' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
+          <el-table-column label="操作" width="220" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openProviderDialog(row)">编辑</el-button>
-              <el-button link type="success" @click="handleTestProvider(row)">测试</el-button>
-              <el-button link type="danger" @click="handleDeleteProvider(row)">删除</el-button>
+              <div class="table-actions">
+                <el-button link type="primary" @click="openProviderDialog(row)">编辑</el-button>
+                <el-button link type="success" @click="handleTestProvider(row)">测试</el-button>
+                <el-button link type="danger" @click="handleDeleteProvider(row)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -189,9 +172,13 @@
 
       <template v-else-if="activeTab === 'mcp'">
         <div class="section-toolbar">
+          <div class="toolbar-head">
+            <span class="toolbar-title">MCP</span>
+            <span class="toolbar-desc">管理平台内置与外部 MCP 的接入、鉴权和运行边界</span>
+          </div>
           <el-button size="small" type="primary" @click="openMcpDialog()">新增 MCP</el-button>
         </div>
-        <el-table :data="mcpServers" stripe>
+        <el-table :data="mcpServers" stripe class="console-table">
           <el-table-column prop="name" label="名称" min-width="150" />
           <el-table-column label="类型" width="110">
             <template #default="{ row }">
@@ -214,12 +201,14 @@
               <el-tag size="small" :type="row.is_enabled ? 'success' : 'info'">{{ row.is_enabled ? '是' : '否' }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="260" fixed="right">
+          <el-table-column label="操作" width="248" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openMcpDialog(row)">编辑</el-button>
-              <el-button link type="success" @click="handleTestMcp(row)">测试</el-button>
-              <el-button link @click="handleListMcpTools(row)">工具</el-button>
-              <el-button link type="danger" :disabled="row.is_builtin" @click="handleDeleteMcp(row)">删除</el-button>
+              <div class="table-actions">
+                <el-button link type="primary" @click="openMcpDialog(row)">编辑</el-button>
+                <el-button link type="success" @click="handleTestMcp(row)">测试</el-button>
+                <el-button link @click="handleListMcpTools(row)">工具</el-button>
+                <el-button link type="danger" :disabled="row.is_builtin" @click="handleDeleteMcp(row)">删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -227,9 +216,13 @@
 
       <template v-else-if="activeTab === 'skills'">
         <div class="section-toolbar">
+          <div class="toolbar-head">
+            <span class="toolbar-title">Skill</span>
+            <span class="toolbar-desc">管理内置与本地 Skill 的启用和内容</span>
+          </div>
           <el-button size="small" type="primary" @click="openSkillDialog()">新增 Skill</el-button>
         </div>
-        <el-table :data="skills" stripe>
+        <el-table :data="skills" stripe class="console-table">
           <el-table-column prop="name" label="名称" min-width="150" />
           <el-table-column prop="slug" label="标识" width="140" />
           <el-table-column label="类型" width="110">
@@ -256,19 +249,19 @@
 
       <template v-else>
         <div class="audit-grid">
-          <div class="audit-card">
+          <div class="audit-card audit-card--info">
             <span>今日会话</span>
             <strong>{{ auditOverview.sessions_today || 0 }}</strong>
           </div>
-          <div class="audit-card">
+          <div class="audit-card audit-card--success">
             <span>今日消息</span>
             <strong>{{ auditOverview.messages_today || 0 }}</strong>
           </div>
-          <div class="audit-card">
+          <div class="audit-card audit-card--warning">
             <span>今日动作</span>
             <strong>{{ auditOverview.actions_today || 0 }}</strong>
           </div>
-          <div class="audit-card">
+          <div class="audit-card audit-card--danger">
             <span>失败动作</span>
             <strong>{{ auditOverview.failed_actions_today || 0 }}</strong>
           </div>
@@ -290,7 +283,7 @@
               </el-button>
             </div>
           </div>
-          <el-table :data="auditSessions" stripe size="small" @selection-change="handleAuditSessionSelectionChange">
+          <el-table :data="auditSessions" stripe size="small" class="console-table" @selection-change="handleAuditSessionSelectionChange">
             <el-table-column v-if="canManageAudit" type="selection" width="42" />
             <el-table-column prop="title" label="会话标题" min-width="220" show-overflow-tooltip />
             <el-table-column prop="username" label="用户" width="120" />
@@ -315,7 +308,7 @@
         </div>
         <div class="audit-section">
           <div class="section-title">最近工具调用</div>
-          <el-table :data="auditTools.slice(0, 8)" stripe size="small">
+          <el-table :data="auditTools.slice(0, 8)" stripe size="small" class="console-table">
             <el-table-column prop="tool_name" label="工具" width="180" />
             <el-table-column prop="username" label="用户" width="120" />
             <el-table-column prop="status" label="状态" width="100" />
@@ -325,7 +318,7 @@
         </div>
         <div class="audit-section">
           <div class="section-title">最近动作</div>
-          <el-table :data="auditActions.slice(0, 8)" stripe size="small">
+          <el-table :data="auditActions.slice(0, 8)" stripe size="small" class="console-table">
             <el-table-column prop="title" label="动作标题" min-width="180" />
             <el-table-column prop="risk_level_display" label="风险" width="100" />
             <el-table-column prop="status_display" label="状态" width="120" />
@@ -336,7 +329,7 @@
       </template>
     </section>
 
-    <el-dialog v-model="providerDialogVisible" :title="providerForm.id ? '编辑提供商' : '新增提供商'" width="760px" destroy-on-close>
+    <el-dialog v-model="providerDialogVisible" :title="providerForm.id ? '编辑提供商' : '新增提供商'" width="760px" destroy-on-close append-to-body>
       <el-form :model="providerForm" label-width="102px">
         <el-form-item label="名称"><el-input v-model="providerForm.name" /></el-form-item>
         <el-form-item label="类型"><el-select v-model="providerForm.provider_type" style="width:100%"><el-option label="OpenAI Compatible" value="openai_compatible" /></el-select></el-form-item>
@@ -392,7 +385,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="mcpDialogVisible" :title="mcpForm.id ? '编辑 MCP' : '新增 MCP'" width="680px" destroy-on-close>
+    <el-dialog v-model="mcpDialogVisible" :title="mcpForm.id ? '编辑 MCP' : '新增 MCP'" width="680px" destroy-on-close append-to-body>
       <el-form :model="mcpForm" label-width="102px">
         <el-form-item label="名称"><el-input v-model="mcpForm.name" /></el-form-item>
         <el-form-item label="类型"><el-select v-model="mcpForm.server_type" style="width:100%"><el-option label="HTTP" value="http" /><el-option label="STDIO" value="stdio" /><el-option label="平台内置" value="platform_builtin" /></el-select></el-form-item>
@@ -420,7 +413,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="skillDialogVisible" :title="skillForm.id ? '编辑 Skill' : '新增 Skill'" width="760px" destroy-on-close>
+    <el-dialog v-model="skillDialogVisible" :title="skillForm.id ? '编辑 Skill' : '新增 Skill'" width="760px" destroy-on-close append-to-body>
       <div v-if="skillForm.id" class="skill-detail-card">
         <div class="skill-detail-title">Skill 详情</div>
         <div class="skill-detail-meta">
@@ -478,7 +471,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ChatDotSquare, Connection, Cpu, InfoFilled, Message, Setting, Tickets, Tools } from '@element-plus/icons-vue'
+import { ChatDotSquare, Connection, Cpu, Message, Setting, Tickets, Tools } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import {
@@ -559,8 +552,6 @@ const mcpToolsList = ref([])
 const mcpToolDiagnostics = ref([])
 const currentMcpToolsTitle = ref('')
 
-const enabledMcpCount = computed(() => mcpServers.value.filter(item => item.is_enabled).length)
-const enabledSkillCount = computed(() => skills.value.filter(item => item.is_enabled).length)
 const canManageAudit = computed(() => authStore.hasPermission('aiops.audit.manage'))
 const selectedProviderPresetDetail = computed(() => providerPresets.value.find(item => item.key === selectedProviderPreset.value) || null)
 const providerApiKeyPlaceholder = computed(() => {
@@ -1003,50 +994,536 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.aiops-config-page{display:flex;flex-direction:column;gap:8px}
-.panel{background:linear-gradient(180deg,#fff 0%,#fffdf8 100%);border:1px solid rgba(148,163,184,.16);border-radius:20px;box-shadow:0 12px 28px rgba(15,23,42,.05);padding:14px 16px}
-.hero,.release-hero-copy,.release-hero-title-row,.hero-actions,.config-grid,.switch-list,.section-toolbar,.audit-grid{display:flex;gap:8px}
-.hero-actions{align-items:center;flex-wrap:wrap}
-.hero-actions :deep(.el-button){min-height:38px;padding:0 16px;border-radius:12px}
-.hero{align-items:center;justify-content:space-between;background:linear-gradient(135deg,#fff7ed 0%,#f8fbff 100%)}
-.release-hero-title-row{align-items:center}
-.release-hero-title-inline{flex-wrap:wrap}
-.hero-icon{width:42px;height:42px;border-radius:14px;display:inline-flex;align-items:center;justify-content:center;color:#fff;background:linear-gradient(135deg,#0f766e,#0ea5e9)}
-.hero h2{margin:0;font-size:24px;color:#0f172a}
-.page-desc.inline-subtitle{margin:0;color:#64748b;font-size:13px;line-height:1.6}
-.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.release-stat-card{position:relative;min-height:76px;padding:14px 16px;border-radius:16px;background:linear-gradient(145deg,#ffffff 0%,#f6faff 100%);border:1px solid rgba(148,163,184,.16);box-shadow:0 12px 26px rgba(15,23,42,.05);overflow:hidden}.release-stat-card::after{content:'';position:absolute;inset:auto -24px -30px auto;width:108px;height:108px;border-radius:50%;background:radial-gradient(circle,rgba(64,158,255,.16) 0%,rgba(64,158,255,0) 70%)}.stat-value{position:relative;font-size:28px;font-weight:700;color:#0f172a}.stat-label{position:relative;margin-top:6px;color:#64748b;font-size:13px}.success-card::after{background:radial-gradient(circle,rgba(16,185,129,.18) 0%,rgba(16,185,129,0) 70%)}.warning-card::after{background:radial-gradient(circle,rgba(245,158,11,.18) 0%,rgba(245,158,11,0) 70%)}
-.runtime-strip{display:flex;align-items:center;gap:0;padding:8px 11px;border-radius:10px;background:linear-gradient(90deg,rgba(59,130,246,.08) 0%,rgba(14,165,233,.04) 100%);color:#64748b;border:1px solid rgba(59,130,246,.14);font-size:12px;line-height:1.45;margin-top:-10px}.runtime-strip :deep(.el-icon){display:none}
-.tabs-card{display:flex;align-items:flex-start;width:100%;padding:4px;border:1px solid rgba(148,163,184,.16);border-radius:12px;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(248,250,252,.9));box-shadow:0 12px 26px rgba(15,23,42,.04)}.event-like-tabs{width:100%}.event-like-tabs :deep(.el-tabs__header){margin:0}.event-like-tabs :deep(.el-tabs__nav-wrap){display:block;max-width:100%;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}.event-like-tabs :deep(.el-tabs__nav-wrap::after),.event-like-tabs :deep(.el-tabs__active-bar){display:none}.event-like-tabs :deep(.el-tabs__content){display:none}.event-like-tabs :deep(.el-tabs__nav-scroll){overflow:visible}.event-like-tabs :deep(.el-tabs__nav){display:flex;gap:8px;border:0}.event-like-tabs :deep(.el-tabs__item){min-height:38px;height:38px;padding:0 20px!important;border-radius:8px;color:#4e5969;font-size:13px;font-weight:700;line-height:38px}.event-like-tabs :deep(.el-tabs__item:hover){background:rgba(51,112,255,.06);color:#245bdb}.event-like-tabs :deep(.el-tabs__item.is-active){background:#e8f0ff;color:#245bdb;box-shadow:inset 0 0 0 1px rgba(51,112,255,.08)}.tab-label{display:inline-flex;align-items:center;gap:6px}.tab-label :deep(.el-icon){font-size:15px}
-.config-grid{align-items:flex-start}.config-section{flex:1;padding:8px 0}.section-title{font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px}.switch-list{flex-direction:column}.switch-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
-.section-toolbar{justify-content:flex-end;margin-bottom:8px}.dialog-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 10px}.audit-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.audit-card{padding:16px;border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;display:flex;flex-direction:column;gap:8px}.audit-card strong{font-size:28px;color:#0f172a}
-.model-discovery-strip{display:flex;align-items:center;gap:8px;margin:-2px 0 12px 102px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
-.model-discovery-hint{display:inline-flex;align-items:center;gap:6px;color:#64748b;font-size:12px;line-height:1.4}
-.provider-preset-option{float:right;margin-left:18px;color:#94a3b8;font-size:12px}
-.provider-preset-card{display:flex;align-items:center;gap:10px;margin:-4px 0 12px 102px;padding:9px 11px;border-radius:12px;background:linear-gradient(135deg,#f8fafc,#eff6ff);border:1px solid #dbeafe;color:#475569;font-size:12px;line-height:1.5}
-.provider-preset-card strong{color:#0f172a;font-size:13px}.provider-preset-card a{color:#2563eb;text-decoration:none}
-.mcp-guard-card{display:flex;flex-direction:column;gap:4px;margin:-2px 0 12px 102px;padding:10px 12px;border-radius:12px;background:linear-gradient(135deg,#f8fafc,#fff7ed);border:1px solid #e2e8f0;color:#64748b;font-size:12px;line-height:1.5}
-.mcp-guard-card strong{color:#0f172a;font-size:13px}
-.mcp-diagnostic-list{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding:10px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0}
-.mcp-diagnostic-item{display:flex;align-items:center;gap:8px;color:#475569;font-size:12px;line-height:1.5}
-.muted-text{color:#94a3b8}
-.audit-section{margin-top:8px}
-.audit-toolbar{justify-content:space-between;align-items:center}
-.audit-toolbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.audit-hint{color:#64748b;font-size:12px}
-.pagination-row{display:flex;justify-content:flex-end;margin-top:10px}
-.empty-panel{padding:18px 4px 8px}
-.empty-copy{min-height:120px;padding:16px 18px;border-radius:14px;background:linear-gradient(180deg,#fff 0%,#f8fafc 100%);border:1px dashed rgba(148,163,184,.35);color:#64748b;font-size:13px;line-height:1.8}
-.skill-detail-card{margin-bottom:16px;padding:12px 14px;border-radius:14px;background:linear-gradient(145deg,#fff7ed 0%,#f8fafc 100%);border:1px solid rgba(148,163,184,.2)}
-.skill-detail-title{font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px}
-.skill-detail-meta{display:flex;flex-wrap:wrap;gap:8px 16px;color:#475569;font-size:13px}
-.skill-detail-desc{margin-top:8px;color:#64748b;font-size:13px;line-height:1.6}
-.type-tag{border-width:1px}
-.type-tag--platform_builtin{color:#166534;border-color:#86efac;background:#f0fdf4}
-.type-tag--stdio{color:#1d4ed8;border-color:#93c5fd;background:#eff6ff}
-.type-tag--http{color:#92400e;border-color:#fcd34d;background:#fffbeb}
-.type-tag--local{color:#7c3aed;border-color:#c4b5fd;background:#f5f3ff}
-@media (max-width: 960px){.stats-grid,.audit-grid,.dialog-grid{grid-template-columns:1fr}.config-grid{flex-direction:column}}
-.hero.panel { border-radius: 20px; }
+.aiops-config-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel {
+  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.05);
+  padding: 14px 16px;
+}
+
+.aiops-config-page :deep(.el-button) {
+  border-radius: 10px;
+}
+
+.hero-actions :deep(.el-button),
+.section-toolbar :deep(.el-button),
+.audit-toolbar-actions :deep(.el-button) {
+  min-height: 26px;
+  padding: 0 9px;
+  font-weight: 500;
+}
+
+.hero-actions :deep(.el-button:not(.el-button--primary)),
+.section-toolbar :deep(.el-button:not(.el-button--primary)),
+.audit-toolbar-actions :deep(.el-button:not(.el-button--primary)) {
+  border-color: rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: #475569;
+  box-shadow: none;
+}
+
+.hero-actions :deep(.el-button:not(.is-link):hover),
+.section-toolbar :deep(.el-button:not(.is-link):hover),
+.audit-toolbar-actions :deep(.el-button:not(.is-link):hover) {
+  border-color: rgba(59, 130, 246, 0.18);
+  color: #1d4ed8;
+  background: #f8fbff;
+}
+
+.hero,
+.hero-copy,
+.hero-title-row,
+.hero-actions,
+.config-grid,
+.switch-list,
+.audit-grid,
+.audit-toolbar-actions,
+.skill-detail-meta {
+  display: flex;
+  gap: 8px;
+}
+
+.hero {
+  min-height: 68px;
+  padding: 12px 14px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hero-copy {
+  gap: 4px;
+}
+
+.hero-title-row {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.hero-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #0f766e, #2563eb);
+}
+
+.hero h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.1;
+  color: #0f172a;
+}
+
+.page-inline-desc {
+  margin: 0;
+  color: #646a73;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.hero-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.hero-actions :deep(.el-button) {
+  min-height: 38px;
+  padding: 0 16px;
+  border-radius: 12px;
+}
+
+.tabs-card {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.9));
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.04);
+}
+
+.event-like-tabs {
+  width: 100%;
+}
+
+.event-like-tabs :deep(.el-tabs__header) {
+  margin: 0;
+}
+
+.event-like-tabs :deep(.el-tabs__nav-wrap) {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.event-like-tabs :deep(.el-tabs__nav-wrap::after),
+.event-like-tabs :deep(.el-tabs__active-bar),
+.event-like-tabs :deep(.el-tabs__content) {
+  display: none;
+}
+
+.event-like-tabs :deep(.el-tabs__nav-scroll) {
+  overflow: visible;
+}
+
+.event-like-tabs :deep(.el-tabs__nav) {
+  display: flex;
+  gap: 8px;
+  border: 0;
+}
+
+.event-like-tabs :deep(.el-tabs__item) {
+  min-height: 38px;
+  height: 38px;
+  padding: 0 20px !important;
+  border-radius: 8px;
+  color: #4e5969;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 38px;
+}
+
+.event-like-tabs :deep(.el-tabs__item:hover) {
+  background: rgba(51, 112, 255, 0.06);
+  color: #245bdb;
+}
+
+.event-like-tabs :deep(.el-tabs__item.is-active) {
+  background: #e8f0ff;
+  color: #245bdb;
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.08);
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-label :deep(.el-icon) {
+  font-size: 15px;
+}
+
+.config-grid {
+  align-items: flex-start;
+}
+
+.config-section {
+  flex: 1;
+}
+
+.surface-card {
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.94));
+  border: 1px solid #e2e8f0;
+}
+
+.section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.switch-list {
+  flex-direction: column;
+}
+
+.switch-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.section-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.toolbar-head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolbar-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.toolbar-desc {
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.strategy-actions {
+  margin-top: 0;
+}
+
+.dialog-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 10px;
+}
+
+.audit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.audit-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audit-card strong {
+  font-size: 28px;
+  color: #0f172a;
+}
+
+.audit-card--info {
+  background: linear-gradient(145deg, #eff6ff 0%, #ffffff 100%);
+}
+
+.audit-card--success {
+  background: linear-gradient(145deg, #ecfdf5 0%, #ffffff 100%);
+}
+
+.audit-card--warning {
+  background: linear-gradient(145deg, #fffbeb 0%, #ffffff 100%);
+}
+
+.audit-card--danger {
+  background: linear-gradient(145deg, #fef2f2 0%, #ffffff 100%);
+}
+
+.console-table {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+
+.console-table :deep(th.el-table__cell) {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+}
+
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.model-discovery-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px 0 12px 102px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.model-discovery-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.provider-preset-option {
+  float: right;
+  margin-left: 18px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.provider-preset-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 12px 102px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fafc, #eff6ff);
+  border: 1px solid #dbeafe;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.provider-preset-card strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.provider-preset-card a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.mcp-guard-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -2px 0 12px 102px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fafc, #fff7ed);
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-guard-card strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.mcp-diagnostic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.mcp-diagnostic-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.muted-text {
+  color: #94a3b8;
+}
+
+.audit-section {
+  margin-top: 12px;
+}
+
+.audit-toolbar {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.audit-toolbar-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.audit-hint {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.empty-panel {
+  padding: 18px 4px 8px;
+}
+
+.empty-copy {
+  min-height: 120px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.skill-detail-card {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #fff7ed 0%, #f8fafc 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.skill-detail-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 8px;
+}
+
+.skill-detail-meta {
+  flex-wrap: wrap;
+  color: #475569;
+  font-size: 13px;
+}
+
+.skill-detail-desc {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.type-tag {
+  border-width: 1px;
+}
+
+.type-tag--platform_builtin {
+  color: #166534;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.type-tag--stdio {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.type-tag--http {
+  color: #92400e;
+  border-color: #fcd34d;
+  background: #fffbeb;
+}
+
+.type-tag--local {
+  color: #7c3aed;
+  border-color: #c4b5fd;
+  background: #f5f3ff;
+}
+
+@media (max-width: 960px) {
+  .audit-grid,
+  .dialog-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-grid {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 760px) {
+  .hero,
+  .switch-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .model-discovery-strip,
+  .provider-preset-card,
+  .mcp-guard-card {
+    margin-left: 0;
+  }
+}
 </style>
 
 
