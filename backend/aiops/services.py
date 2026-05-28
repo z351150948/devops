@@ -2870,9 +2870,9 @@ def _infer_alert_root_cause(
             add_evidence('系统态势', f'严重系统 {critical} 个，风险系统 {warning} 个')
             add_cause('系统态势', '该环境系统态势已出现健康或 SLA 风险，告警可能已影响系统级目标')
         for system in systems[:3]:
-            north_star = system.north_star if isinstance(system.north_star, dict) else {}
-            sla = north_star.get('value')
-            target = north_star.get('target')
+            core_metric = system.core_metric if isinstance(system.core_metric, dict) else {}
+            sla = core_metric.get('value')
+            target = core_metric.get('target')
             if sla is not None or target is not None:
                 add_evidence('系统态势', f"{system.name} SLA {sla if sla is not None else '--'}，目标 {target if target is not None else '--'}")
 
@@ -3157,12 +3157,12 @@ def query_system_posture(session, user_message, user, query='', limit=6, analysi
     items = []
     for system in systems:
         history = latest_history.get(system.name)
-        north_star = system.north_star if isinstance(system.north_star, dict) else {}
-        sla_value = history.sla_value if history else north_star.get('value')
-        sla_target = history.sla_target if history else north_star.get('target')
+        core_metric = system.core_metric if isinstance(system.core_metric, dict) else {}
+        sla_value = history.sla_value if history else core_metric.get('value')
+        sla_target = history.sla_target if history else core_metric.get('target')
         health_score = history.health_score if history else system.health_score
-        metric_label = history.metric_label if history else (north_star.get('label') or 'SLA')
-        metric_unit = history.metric_unit if history else (north_star.get('unit') or '%')
+        metric_label = history.metric_label if history else (core_metric.get('label') or 'SLA')
+        metric_unit = history.metric_unit if history else (core_metric.get('unit') or '%')
         items.append(
             f"{system.name} / {system.environment} / {system.get_base_status_display()} / 健康度 {health_score if health_score is not None else '--'} / {metric_label} {sla_value if sla_value is not None else '--'}{metric_unit} / 目标 {sla_target if sla_target is not None else '--'}{metric_unit}"
         )

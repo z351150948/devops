@@ -131,7 +131,7 @@ class AIOpsApiTests(TestCase):
             keywords=['order-service', '订单', '订单服务'],
             service_specs=[{'id': 'order', 'name': '订单服务'}, {'id': 'order-service', 'name': 'order-service'}],
             dependencies=[{'id': 'postgresql', 'name': '订单数据库'}, {'id': 'kafka', 'name': 'Kafka'}],
-            north_star={'label': '下单成功率', 'value': 93.8, 'target': 90, 'unit': '%'},
+            core_metric={'label': '下单成功率', 'value': 93.8, 'target': 90, 'unit': '%'},
             is_enabled=True,
         )
         TaskResource.objects.create(
@@ -541,7 +541,7 @@ class AIOpsApiTests(TestCase):
             environment='posture-prod',
             health_score=91,
             service_specs=[{'id': 'checkout', 'name': 'checkout'}],
-            north_star={'label': 'SLA', 'value': 99.92, 'target': 99.9, 'unit': '%'},
+            core_metric={'label': 'SLA', 'value': 99.92, 'target': 99.9, 'unit': '%'},
             is_enabled=True,
         )
         LogEntry.objects.create(service='checkout', level='error', message='checkout failed')
@@ -1252,7 +1252,7 @@ class AIOpsApiTests(TestCase):
             name='交易系统',
             environment='posture-prod',
             health_score=88,
-            north_star={'label': 'SLA', 'value': 99.7, 'target': 99.9, 'unit': '%'},
+            core_metric={'label': 'SLA', 'value': 99.7, 'target': 99.9, 'unit': '%'},
             is_enabled=True,
         )
         SystemPostureSystem.objects.create(
@@ -2923,7 +2923,7 @@ class AIOpsApiTests(TestCase):
             name='checkout',
             environment='prod-posture',
             health_score=92,
-            north_star={'label': 'SLA', 'value': 99.95, 'target': 99.9, 'unit': '%'},
+            core_metric={'label': 'SLA', 'value': 99.95, 'target': 99.9, 'unit': '%'},
             is_enabled=True,
         )
         session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-posture'}, format='json')
