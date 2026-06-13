@@ -39,6 +39,7 @@ from .models import (
     K8sCluster,
     LogDataSource,
     LogEntry,
+    MetricDataSource,
     NginxCertificate,
     NginxDomain,
     NginxEnvironment,
@@ -60,6 +61,16 @@ LOG_SENSITIVE_KEYS = {
     'bearer_token',
     'access_key_id',
     'access_key_secret',
+    'authorization',
+    'client_secret',
+}
+
+METRIC_SENSITIVE_KEYS = {
+    'password',
+    'prometheus.password',
+    'token',
+    'bearer_token',
+    'api_key',
     'authorization',
     'client_secret',
 }
@@ -1646,6 +1657,108 @@ class TracingDataSourceSerializer(serializers.ModelSerializer):
         for key, value in (instance.config or {}).items():
             if key in LOG_SENSITIVE_KEYS and not is_demo:
                 masked[key] = 'configured' if value else ''
+            else:
+                masked[key] = value
+        data['config'] = masked
+        return data
+
+
+class MetricDataSourceSerializer(serializers.ModelSerializer):
+    provider_display = serializers.CharField(source='get_provider_display', read_only=True)
+
+    class Meta:
+        model = MetricDataSource
+        fields = '__all__'
+
+    def validate_config(self, value):
+        if value in (None, ''):
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('config 必须是对象')
+        return value
+
+    def validate(self, attrs):
+        provider = attrs.get('provider') or getattr(self.instance, 'provider', MetricDataSource.PROVIDER_PROMETHEUS)
+        config = dict(getattr(self.instance, 'config', {}) or {})
+        incoming = attrs.get('config', {})
+
+        for key, value in incoming.items():
+            if key in METRIC_SENSITIVE_KEYS and value in ('', None, 'configured'):
+                if self.instance and key in config:
+                    continue
+                config.pop(key, None)
+                continue
+            if key in {'headers', 'prometheus.headers'} and isinstance(value, dict):
+                current_headers = dict(config.get(key) or {}) if isinstance(config.get(key), dict) else {}
+                for header_key, header_value in value.items():
+                    if str(header_key).lower() == 'authorization' and header_value in ('', None, 'configured'):
+                        if self.instance and header_key in current_headers:
+                            continue
+                        current_headers.pop(header_key, None)
+                        continue
+                    current_headers[header_key] = header_value
+                config[key] = current_headers
+                continue
+            if key == 'prometheus.basic' and isinstance(value, dict):
+                current_basic = dict(config.get(key) or {}) if isinstance(config.get(key), dict) else {}
+                for basic_key, basic_value in value.items():
+                    if basic_key in METRIC_SENSITIVE_KEYS and basic_value in ('', None, 'configured'):
+                        if self.instance and basic_key in current_basic:
+                            continue
+                        current_basic.pop(basic_key, None)
+                        continue
+                    current_basic[basic_key] = basic_value
+                config[key] = current_basic
+                continue
+            config[key] = value
+
+        if provider == MetricDataSource.PROVIDER_PROMETHEUS:
+            config.setdefault('query_url', '')
+            config.setdefault('headers', {})
+            config.setdefault('auth_type', 'none')
+            config.setdefault('timeout', 6)
+            config.setdefault('tls_skip_verify', False)
+        attrs['config'] = config
+        return attrs
+
+    def _sync_default(self, instance):
+        if instance.is_default:
+            queryset = MetricDataSource.objects.filter(is_default=True)
+            if instance.environment:
+                queryset = queryset.filter(environment=instance.environment)
+            else:
+                queryset = queryset.filter(environment='')
+            queryset.exclude(pk=instance.pk).update(is_default=False)
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self._sync_default(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        self._sync_default(instance)
+        return instance
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        masked = {}
+        for key, value in (instance.config or {}).items():
+            if key in METRIC_SENSITIVE_KEYS:
+                masked[key] = 'configured' if value else ''
+            elif key == 'prometheus.basic' and isinstance(value, dict):
+                masked[key] = {
+                    basic_key: ('configured' if basic_value else '') if basic_key in METRIC_SENSITIVE_KEYS else basic_value
+                    for basic_key, basic_value in value.items()
+                }
+            elif key == 'headers' and isinstance(value, dict):
+                safe_headers = {}
+                for header_key, header_value in value.items():
+                    if str(header_key).lower() == 'authorization':
+                        safe_headers[header_key] = 'configured' if header_value else ''
+                    else:
+                        safe_headers[header_key] = header_value
+                masked[key] = safe_headers
             else:
                 masked[key] = value
         data['config'] = masked

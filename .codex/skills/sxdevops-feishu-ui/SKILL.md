@@ -45,6 +45,7 @@ Read `references/ui-benchmarks.md` when you need the exact class patterns and sp
 
 - Use a top `hero panel`.
 - Keep one title row: icon + `h2` + concise inline subtitle.
+- Put the hero subtitle/description to the right of the title in the same row, using the `page-inline-desc` style from `AIOpsConfig.vue`; do not stack the description under the title on desktop.
 - Reuse the same visual language as `Deployments.vue` and `TaskWorkbench.vue`:
   - panel padding `14px 16px`
   - hero radius follows `Deployments.vue`: component-local `.hero.panel { border-radius: 20px; }`
@@ -109,6 +110,7 @@ Read `references/ui-benchmarks.md` when you need the exact class patterns and sp
   - `toolbar-head`
   - `toolbar-title`
   - `toolbar-desc`
+- In `toolbar-head`, keep `toolbar-title` and `toolbar-desc` on the same baseline row with `inline-flex`, a small gap, and wrapping only when width is constrained; avoid putting the description as a second line on desktop.
 - Filter row uses:
   - `workbench-toolbar workbench-toolbar--history`
 - Keep filter bar visually inside the card with its own outer border treatment.
@@ -122,6 +124,11 @@ Read `references/ui-benchmarks.md` when you need the exact class patterns and sp
 - Primary buttons are for create, confirm, or high-priority actions only.
 - Refresh and secondary actions should use the lighter workbench button treatment.
 - Buttons belong in section headers or filter rows, not the hero.
+
+### Dialogs
+
+- For Element Plus dialogs opened from management pages, especially create, edit, detail, and reset-password dialogs, set `append-to-body` by default so the modal is not clipped by nested cards, scroll containers, drawers, or page sub-windows.
+- Keep dialog width aligned with the form density already used on the page, and avoid making dialogs depend on the current panel's overflow or positioning context.
 
 ### Tables
 

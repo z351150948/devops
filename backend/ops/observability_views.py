@@ -25,12 +25,13 @@ from eventwall.services import record_event
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 from rbac.services import user_has_permissions
 from .alerting import _has_claimants
-from .models import Alert, Deployment, GrafanaSetting, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSLAHistory, SystemPostureSystem, TracingDataSource
+from .models import Alert, Deployment, GrafanaSetting, LogDataSource, LogEntry, MetricDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSLAHistory, SystemPostureSystem, TracingDataSource
 from .serializers import (
     AlertSerializer,
     SystemPostureEnvironmentSerializer,
     SystemPostureSystemSerializer,
     GrafanaSettingSerializer,
+    MetricDataSourceSerializer,
     ObservabilityDataSourceLinkSerializer,
     TracingDataSourceSerializer,
 )
@@ -74,6 +75,8 @@ def _observability_access(request):
         'alerts': _has_permission(request, 'ops.alert.view'),
         'trace': _has_permission(request, 'ops.trace.view'),
         'trace_datasource': _has_permission(request, 'ops.trace.datasource.view'),
+        'metric_query': _has_permission(request, 'ops.metric.query'),
+        'metric_datasource': _has_permission(request, 'ops.metric.datasource.view'),
         'links': _has_permission(request, 'ops.observability.link.view'),
         'grafana': _has_permission(request, 'ops.grafana.view'),
         'eventwall': _has_permission(request, 'eventwall.view'),
@@ -2006,6 +2009,124 @@ def _prometheus_headers(config):
     return headers
 
 
+def _metric_config_value(config, *keys, default=''):
+    if not isinstance(config, dict):
+        return default
+    for key in keys:
+        if key in config and config.get(key) not in (None, ''):
+            return config.get(key)
+    basic = config.get('prometheus.basic') if isinstance(config.get('prometheus.basic'), dict) else {}
+    for key in keys:
+        if key in basic and basic.get(key) not in (None, ''):
+            return basic.get(key)
+    return default
+
+
+def _metric_headers(config):
+    headers = {'Accept': 'application/json'}
+    configured = _metric_config_value(config, 'headers', 'prometheus.headers', default={})
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            header_key = str(key or '').strip()
+            if header_key and value not in (None, ''):
+                headers[header_key] = str(value)
+
+    auth_type = str(_metric_config_value(config, 'auth_type', default='none') or 'none').lower()
+    bearer_token = str(_metric_config_value(config, 'bearer_token', 'token', 'api_key', default='') or '').strip()
+    if auth_type in {'bearer', 'token'} and bearer_token and 'Authorization' not in headers:
+        headers['Authorization'] = f'Bearer {bearer_token}'
+    return headers
+
+
+def _metric_auth(config):
+    auth_type = str(_metric_config_value(config, 'auth_type', default='none') or 'none').lower()
+    username = str(_metric_config_value(config, 'username', 'user', 'prometheus.user', default='') or '').strip()
+    password = str(_metric_config_value(config, 'password', 'prometheus.password', default='') or '').strip()
+    if auth_type == 'basic' and username:
+        return (username, password)
+    if not auth_type or auth_type == 'none':
+        if username and password:
+            return (username, password)
+    return None
+
+
+def _metric_datasource_payload(datasource):
+    if not datasource:
+        return None
+    return {
+        'id': datasource.id,
+        'name': datasource.name,
+        'provider': datasource.provider,
+        'provider_display': datasource.get_provider_display(),
+        'environment': datasource.environment,
+        'cluster_name': datasource.cluster_name,
+        'tsdb_type': datasource.tsdb_type,
+        'is_default': datasource.is_default,
+    }
+
+
+def _select_metric_datasource(metric_datasource_id='', environment=''):
+    datasource_id = str(metric_datasource_id or '').strip()
+    if datasource_id:
+        try:
+            datasource = MetricDataSource.objects.get(pk=datasource_id)
+        except (MetricDataSource.DoesNotExist, ValueError) as exc:
+            raise ValueError('指标数据源不存在') from exc
+        if not datasource.is_enabled:
+            raise ValueError('指标数据源已停用')
+        return datasource
+
+    queryset = MetricDataSource.objects.filter(is_enabled=True)
+    env_text = str(environment or '').strip()
+    if env_text:
+        datasource = queryset.filter(environment=env_text, is_default=True).order_by('name').first()
+        if datasource:
+            return datasource
+        datasource = queryset.filter(environment=env_text).order_by('-is_default', 'name').first()
+        if datasource:
+            return datasource
+
+    datasource = queryset.filter(environment='', is_default=True).order_by('name').first()
+    if datasource:
+        return datasource
+    return queryset.order_by('-is_default', 'environment', 'name').first()
+
+
+def _resolve_metric_datasource_client(metric_datasource_id='', environment=''):
+    datasource = _select_metric_datasource(metric_datasource_id=metric_datasource_id, environment=environment)
+    if not datasource:
+        return None
+    config = datasource.config if isinstance(datasource.config, dict) else {}
+    query_url = str(_metric_config_value(
+        config,
+        'query_url',
+        'addr',
+        'prometheus.addr',
+        'internal_addr',
+        'prometheus.internal_addr',
+        default='',
+    ) or '').strip().rstrip('/')
+    if not query_url or _is_example_url(query_url):
+        return {
+            'ready': False,
+            'warning': '指标数据源未配置 Prometheus 地址',
+            'metric_datasource': _metric_datasource_payload(datasource),
+        }
+    timeout = _config_int(_metric_config_value(config, 'timeout', 'prometheus.timeout', default=6), 6)
+    tls_skip_verify = _config_bool(_metric_config_value(config, 'tls_skip_verify', 'insecure_skip_verify', default=False), False)
+    return {
+        'ready': True,
+        'base_url': query_url,
+        'headers': _metric_headers(config),
+        'auth': _metric_auth(config),
+        'timeout': timeout,
+        'verify': not tls_skip_verify,
+        'source': 'metric_datasource',
+        'description': f'{datasource.name} / {datasource.get_provider_display()}',
+        'metric_datasource': _metric_datasource_payload(datasource),
+    }
+
+
 def _prometheus_config():
     defaults = _observability_defaults()
     config = dict(defaults.get('prometheus') or {})
@@ -2087,6 +2208,8 @@ def _prometheus_query(client, query, at_time=None):
         params=params,
         headers=client.get('headers') or {},
         timeout=client.get('timeout') or 6,
+        auth=client.get('auth'),
+        verify=client.get('verify', True),
     )
     if response.status_code >= 400:
         raise RuntimeError(f'Prometheus HTTP {response.status_code}')
@@ -2108,6 +2231,8 @@ def _prometheus_query_range(client, query, start_time, end_time, step):
         params=params,
         headers=client.get('headers') or {},
         timeout=client.get('timeout') or 6,
+        auth=client.get('auth'),
+        verify=client.get('verify', True),
     )
     if response.status_code >= 400:
         raise RuntimeError(f'Prometheus HTTP {response.status_code}')
@@ -2194,7 +2319,7 @@ def _promql_result_sample(results, limit=5):
     return sample
 
 
-def execute_promql_query(query, *, range_query=False, start_time=None, end_time=None, step=60, datasource_uid='', datasource_id='', grafana_url=''):
+def execute_promql_query(query, *, range_query=False, start_time=None, end_time=None, step=60, datasource_uid='', datasource_id='', grafana_url='', metric_datasource_id='', environment='', prefer_metric_datasource=False):
     query = str(query or '').strip()
     if not query:
         raise ValueError('PromQL 不能为空')
@@ -2206,7 +2331,11 @@ def execute_promql_query(query, *, range_query=False, start_time=None, end_time=
         'grafana_datasource_id': str(datasource_id or '').strip(),
         'grafana_url': str(grafana_url or '').strip(),
     }
-    client = _resolve_prometheus_client(overrides)
+    client = None
+    if prefer_metric_datasource or metric_datasource_id or environment:
+        client = _resolve_metric_datasource_client(metric_datasource_id=metric_datasource_id, environment=environment)
+    if client is None:
+        client = _resolve_prometheus_client(overrides)
     if not client.get('ready'):
         raise RuntimeError(client.get('warning') or 'Prometheus/Grafana 数据源未就绪')
 
@@ -2230,6 +2359,7 @@ def execute_promql_query(query, *, range_query=False, start_time=None, end_time=
         'step': step_seconds,
         'source': client.get('source'),
         'description': client.get('description'),
+        'metric_datasource': client.get('metric_datasource'),
         'resultType': result_type,
         'result': results,
         'sample': _promql_result_sample(results),
@@ -4352,6 +4482,85 @@ class TracingDataSourceViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, 
             )
 
 
+class MetricDataSourceViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, viewsets.ModelViewSet):
+    queryset = MetricDataSource.objects.all().order_by('environment', '-is_default', 'name')
+    serializer_class = MetricDataSourceSerializer
+    pagination_class = None
+    event_module = 'ops'
+    event_resource_type = 'metric_datasource'
+    event_resource_label = '指标数据源'
+    event_resource_name_fields = ('name',)
+    event_exclude_fields = ('config',)
+    rbac_permissions = {
+        'list': ['ops.metric.datasource.view'],
+        'retrieve': ['ops.metric.datasource.view'],
+        'create': ['ops.metric.datasource.manage'],
+        'update': ['ops.metric.datasource.manage'],
+        'partial_update': ['ops.metric.datasource.manage'],
+        'destroy': ['ops.metric.datasource.manage'],
+        'test_connection': ['ops.metric.datasource.manage'],
+    }
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        provider = self.request.query_params.get('provider')
+        environment = self.request.query_params.get('environment')
+        is_enabled = self.request.query_params.get('is_enabled')
+        if provider:
+            queryset = queryset.filter(provider=provider)
+        if environment not in (None, ''):
+            queryset = queryset.filter(environment=environment)
+        if is_enabled in ('true', 'false'):
+            queryset = queryset.filter(is_enabled=is_enabled == 'true')
+        return queryset.order_by('environment', '-is_default', 'name')
+
+    @action(detail=True, methods=['post'])
+    def test_connection(self, request, pk=None):
+        datasource = self.get_object()
+        try:
+            client = _resolve_metric_datasource_client(metric_datasource_id=datasource.id)
+            if not client or not client.get('ready'):
+                raise RuntimeError((client or {}).get('warning') or '指标数据源未就绪')
+            results = _prometheus_query(client, request.data.get('query') or 'up')
+            record_event(
+                request=request,
+                module='ops',
+                category='execution',
+                action='test_metric_datasource',
+                title='测试指标数据源连通性',
+                summary=f'指标数据源 {datasource.name} 连通性测试成功',
+                resource_type='metric_datasource',
+                resource_id=datasource.id,
+                resource_name=datasource.name,
+                correlation_id=f'metric-datasource:{datasource.id}',
+                metadata={'provider': datasource.provider, 'series_count': len(results or [])},
+            )
+            return Response({
+                'success': True,
+                'message': f'{datasource.name} 连接成功',
+                'series_count': len(results or []),
+                'sample': _promql_result_sample(results),
+                'metric_datasource': _metric_datasource_payload(datasource),
+            })
+        except Exception as exc:
+            record_event(
+                request=request,
+                module='ops',
+                category='execution',
+                action='test_metric_datasource',
+                title='测试指标数据源连通性',
+                summary=f'指标数据源 {datasource.name} 连通性测试失败',
+                result=EventRecord.RESULT_FAILED,
+                severity=EventRecord.SEVERITY_WARNING,
+                resource_type='metric_datasource',
+                resource_id=datasource.id,
+                resource_name=datasource.name,
+                correlation_id=f'metric-datasource:{datasource.id}',
+                metadata={'provider': datasource.provider, 'error': str(exc)},
+            )
+            return Response({'success': False, 'message': '连接测试失败', 'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, build_rbac_permission('ops.trace.datasource.view')])
 def tracing_providers(request):
@@ -4406,6 +4615,31 @@ def grafana_setting_view(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('ops.metric.query')])
+def metrics_promql_query(request):
+    query = request.data.get('query') or request.data.get('promql') or ''
+    range_query = str(request.data.get('range') or request.data.get('query_type') or '').lower() in {'1', 'true', 'range', 'query_range'}
+    if request.data.get('range_query') is not None:
+        range_query = bool(request.data.get('range_query'))
+    try:
+        payload = execute_promql_query(
+            query,
+            range_query=range_query,
+            start_time=request.data.get('start') or request.data.get('start_time'),
+            end_time=request.data.get('end') or request.data.get('end_time'),
+            step=request.data.get('step') or 60,
+            metric_datasource_id=request.data.get('metric_datasource_id') or request.data.get('datasource_id') or '',
+            environment=request.data.get('environment') or '',
+            prefer_metric_datasource=True,
+        )
+    except ValueError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+    return Response(payload)
+
+
+@api_view(['POST'])
 @permission_classes([IsAuthenticated, build_rbac_permission('ops.grafana.view')])
 def grafana_promql_query(request):
     query = request.data.get('query') or request.data.get('promql') or ''
@@ -4422,6 +4656,8 @@ def grafana_promql_query(request):
             datasource_uid=request.data.get('datasource_uid') or '',
             datasource_id=request.data.get('datasource_id') or '',
             grafana_url=request.data.get('grafana_url') or '',
+            metric_datasource_id=request.data.get('metric_datasource_id') or '',
+            environment=request.data.get('environment') or '',
         )
     except ValueError as exc:
         return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -4685,7 +4921,7 @@ def observability_overview(request):
     access = _observability_access(request)
     denied = _deny_if_missing_any(
         request,
-        ['ops.observability.system_posture.view', 'ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view', 'ops.grafana.view'],
+        ['ops.observability.system_posture.view', 'ops.metric.query', 'ops.metric.datasource.view', 'ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view', 'ops.grafana.view'],
     )
     if denied:
         return denied
@@ -4707,6 +4943,8 @@ def observability_overview(request):
     navigation = []
     if access['system_posture']:
         navigation.append({'title': '系统态势', 'path': '/observability/system-posture', 'description': '查看业务系统健康、SLO 指标与依赖影响。', 'tone': 'danger'})
+    if access['metric_query'] or access['metric_datasource']:
+        navigation.append({'title': '指标查询', 'path': '/observability/metrics', 'description': '执行 PromQL 并维护 Prometheus 兼容指标数据源。', 'tone': 'success'})
     if access['log_query'] or access['log_datasource']:
         log_description = '统一进入日志查询与数据源管理。' if access['log_query'] and access['log_datasource'] else '进入日志中心并按当前权限查看可用标签。'
         navigation.append({'title': '日志中心', 'path': '/logs', 'description': log_description, 'tone': 'info'})
@@ -4728,6 +4966,10 @@ def observability_overview(request):
                 'datasource_count': TracingDataSource.objects.count() if access['trace'] or access['trace_datasource'] else 0,
             } if access['trace'] or access['trace_datasource'] else None)),
             'grafana': grafana,
+            'metrics': ({
+                'datasource_count': MetricDataSource.objects.count(),
+                'enabled_count': MetricDataSource.objects.filter(is_enabled=True).count(),
+            } if access['metric_query'] or access['metric_datasource'] else None),
             'logs': logs,
             'alerts': alerts,
         },
@@ -4737,6 +4979,7 @@ def observability_overview(request):
             'error_count': catalog['summary']['error_count'] if catalog else 0,
             'topology_nodes': catalog['summary']['topology_nodes'] if catalog else 0,
             'dashboard_count': grafana['dashboard_count'] if grafana else 0,
+            'metric_datasource_count': MetricDataSource.objects.count() if access['metric_query'] or access['metric_datasource'] else 0,
             'datasource_count': logs['datasource_count'] if logs else 0,
             'unacknowledged_alerts': alerts['unacknowledged'] if alerts else 0,
         },

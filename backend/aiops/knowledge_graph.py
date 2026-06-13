@@ -18,6 +18,7 @@ from ops.models import (
     K8sCluster,
     LogDataSource,
     LogEntry,
+    MetricDataSource,
     ObservabilityDataSourceLink,
     SystemPostureEnvironment,
     SystemPostureSystem,
@@ -48,6 +49,7 @@ MOJIBAKE_HINTS = {
 
 
 CAPABILITY_DEFS = [
+    ('metrics', '指标', 'datasource', '/observability/metrics'),
     ('logs', '日志', 'logs', '/logs'),
     ('tracing', '链路', 'tracing', '/observability/tracing'),
     ('dashboards', '看板', 'dashboard', '/observability/grafana'),
@@ -425,6 +427,7 @@ def resolve_knowledge_environment(name):
         'aliases': _clean_list(getattr(config, 'aliases', []) or []),
         'event_environments': _clean_list(config.event_environments),
         'grafana_folder_keys': _clean_list(config.grafana_folder_keys),
+        'metric_datasource_ids': _int_list(getattr(config, 'metric_datasource_ids', []) or []),
         'log_datasource_ids': _int_list(config.log_datasource_ids),
         'tracing_datasource_ids': _int_list(config.tracing_datasource_ids),
         'observability_link_ids': _int_list(getattr(config, 'observability_link_ids', []) or []),
@@ -1508,6 +1511,7 @@ def build_knowledge_graph(params=None):
     selected_alert_environments = set()
     selected_posture_environments = set()
     selected_grafana_folders = set()
+    selected_metric_datasource_ids = set()
     selected_log_datasource_ids = set()
     selected_tracing_datasource_ids = set()
     selected_observability_link_ids = set()
@@ -1530,6 +1534,7 @@ def build_knowledge_graph(params=None):
                 selected_posture_environments.add(environment)
                 source_env_to_graph.setdefault(environment, config.name)
             selected_grafana_folders.update(_clean_list(config.grafana_folder_keys))
+            selected_metric_datasource_ids.update(_int_list(getattr(config, 'metric_datasource_ids', []) or []))
             selected_log_datasource_ids.update(_int_list(config.log_datasource_ids))
             selected_tracing_datasource_ids.update(_int_list(config.tracing_datasource_ids))
             selected_observability_link_ids.update(_int_list(getattr(config, 'observability_link_ids', []) or []))
@@ -2355,6 +2360,28 @@ def build_knowledge_graph(params=None):
     log_datasource_queryset = LogDataSource.objects.filter(is_enabled=True).order_by('provider', 'name')
     if use_knowledge_env:
         log_datasource_queryset = log_datasource_queryset.filter(id__in=selected_log_datasource_ids) if selected_log_datasource_ids else LogDataSource.objects.none()
+    metric_datasource_queryset = MetricDataSource.objects.filter(is_enabled=True).order_by('environment', '-is_default', 'name')
+    if use_knowledge_env:
+        metric_datasource_queryset = metric_datasource_queryset.filter(id__in=selected_metric_datasource_ids) if selected_metric_datasource_ids else MetricDataSource.objects.none()
+    for datasource in metric_datasource_queryset:
+        if _is_demoish_text(datasource.name, datasource.description, datasource.provider):
+            continue
+        node_id = _node_key('metric_ds', datasource.id)
+        add_node(
+            node_id,
+            datasource.name,
+            'datasource',
+            '指标数据源',
+            route='/observability/metrics',
+            status='enabled',
+            description=datasource.description,
+            provider=datasource.provider,
+            environment=datasource.environment,
+        )
+        add_edge(_node_key('capability', 'metrics'), node_id, '接入指标源', 'capability_datasource')
+        if use_knowledge_env:
+            for config_name in associated_config_names('metric_datasource_ids', datasource.id):
+                add_edge(_node_key('environment', config_name), node_id, '关联指标源', 'environment_observability')
     for datasource in log_datasource_queryset:
         if _is_demoish_text(datasource.name, datasource.description, datasource.provider):
             continue

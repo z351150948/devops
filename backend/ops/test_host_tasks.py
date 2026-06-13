@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from aiops.models import AIOpsChatMessage, AIOpsChatSession, AIOpsPendingAction
 from ops.host_tasks import AnsibleControllerError
 from ops.models import Host, HostTask, HostTaskTemplate, K8sCluster, TaskResource, TaskResourceGroup
 from rbac.models import Role
@@ -413,6 +414,50 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(payload['trigger_source'], HostTask.TRIGGER_SOURCE_AIOPS)
         self.assertEqual(payload['source_context']['source'], 'aiops')
         self.assertEqual(payload['source_context']['session_id'], 88)
+
+    @patch('ops.host_tasks.open_ssh_client')
+    def test_create_task_links_aiops_pending_action(self, mock_open_ssh_client):
+        mock_open_ssh_client.return_value = self._mock_client({
+            'uptime': {'exit_status': 0, 'stdout': 'from-aiops'},
+        })
+        session = AIOpsChatSession.objects.create(user=self.user, title='aiops-task')
+        message = AIOpsChatMessage.objects.create(session=session, role=AIOpsChatMessage.ROLE_ASSISTANT, content='任务草稿')
+        pending_action = AIOpsPendingAction.objects.create(
+            session=session,
+            message=message,
+            action_type=AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK,
+            title='服务器巡检任务',
+            risk_level=AIOpsPendingAction.RISK_LOW,
+            status=AIOpsPendingAction.STATUS_EXECUTED,
+            action_payload={'name': '服务器巡检任务'},
+            result_payload={'draft_ready': True, 'task_name': '服务器巡检任务', 'materialized_in_task_center': False},
+        )
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': '服务器巡检任务',
+                'task_type': 'run_command',
+                'host_ids': [self.host.id],
+                'payload': {'command': 'uptime'},
+                'trigger_source': HostTask.TRIGGER_SOURCE_AIOPS,
+                'source_context': {
+                    'source': 'aiops',
+                    'session_id': session.id,
+                    'pending_action_id': pending_action.id,
+                    'request_summary': '帮我建个服务器巡检任务',
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        task_id = response.json()['id']
+        pending_action.refresh_from_db()
+        self.assertEqual(pending_action.result_payload['task_id'], task_id)
+        self.assertEqual(pending_action.result_payload['created_task_id'], task_id)
+        self.assertEqual(pending_action.result_payload['task_name'], '服务器巡检任务')
+        self.assertTrue(pending_action.result_payload['materialized_in_task_center'])
 
     @patch('ops.host_tasks.open_ssh_client')
     def test_rerun_reuses_original_targets_and_mode(self, mock_open_ssh_client):

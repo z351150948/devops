@@ -1,11 +1,11 @@
-﻿<template>
+<template>
   <div class="fade-in aiops-config-page">
     <section class="hero panel">
       <div class="hero-copy">
         <div class="hero-title-row">
           <span class="hero-icon"><el-icon><ChatDotSquare /></el-icon></span>
           <h2>智能体配置</h2>
-          <p class="page-inline-desc">统一管理智能助手的策略、MCP、Action、Skill 与模型提供商。</p>
+          <p class="page-inline-desc">统一管理智能助手的策略、Action、Skill、MCP 与模型提供商。</p>
         </div>
       </div>
       <div class="hero-actions">
@@ -20,9 +20,9 @@
             <span class="tab-label"><el-icon><Setting /></el-icon>智能体策略</span>
           </template>
         </el-tab-pane>
-        <el-tab-pane name="mcp">
+        <el-tab-pane name="actions">
           <template #label>
-            <span class="tab-label"><el-icon><Connection /></el-icon>MCP</span>
+            <span class="tab-label"><el-icon><Promotion /></el-icon>Action</span>
           </template>
         </el-tab-pane>
         <el-tab-pane name="skills">
@@ -30,9 +30,9 @@
             <span class="tab-label"><el-icon><Tools /></el-icon>Skill</span>
           </template>
         </el-tab-pane>
-        <el-tab-pane name="actions">
+        <el-tab-pane name="mcp">
           <template #label>
-            <span class="tab-label"><el-icon><Promotion /></el-icon>Action</span>
+            <span class="tab-label"><el-icon><Connection /></el-icon>MCP</span>
           </template>
         </el-tab-pane>
         <el-tab-pane name="orchestration">
@@ -479,7 +479,7 @@
             <span class="toolbar-title">Action Registry</span>
             <span class="toolbar-desc">定义 assistant 的任务入口、流程策略、预检查和结构化输出</span>
           </div>
-          <span class="audit-hint">已内置 10 个 P0 action</span>
+          <span class="audit-hint">已内置 {{ actionOverview.total }} 个 P0 action</span>
         </div>
         <div class="concept-note concept-note--action">
           <strong>Action = 任务入口</strong>
@@ -562,12 +562,12 @@
 
     </section>
 
-    <el-dialog v-model="providerDialogVisible" :title="providerForm.id ? '编辑提供商' : '新增提供商'" width="760px" destroy-on-close append-to-body>
+    <el-dialog v-model="providerDialogVisible" :title="providerForm.id ? '编辑提供商' : '新增提供商'" width="min(880px, 94vw)" destroy-on-close append-to-body>
       <el-form :model="providerForm" label-width="102px">
         <el-form-item label="名称"><el-input v-model="providerForm.name" /></el-form-item>
         <el-form-item label="类型"><el-select v-model="providerForm.provider_type" style="width:100%"><el-option label="OpenAI Compatible" value="openai_compatible" /></el-select></el-form-item>
         <el-form-item label="供应商预设">
-          <el-select v-model="selectedProviderPreset" filterable clearable placeholder="选择 DeepSeek / 智谱 GLM / MiniMax 等预设" style="width:100%" @change="applyProviderPreset">
+          <el-select v-model="providerForm.provider_preset" filterable clearable placeholder="选择 DeepSeek / 智谱 GLM / MiniMax 等预设" style="width:100%" @change="applyProviderPreset">
             <el-option v-for="item in providerPresets" :key="item.key" :label="item.name" :value="item.key">
               <span>{{ item.name }}</span>
               <span class="provider-preset-option">{{ item.default_model || '自定义模型' }}</span>
@@ -606,24 +606,35 @@
               <el-option v-for="item in providerModels" :key="item.id" :label="formatProviderModelLabel(item)" :value="item.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="温度"><el-input-number v-model="providerForm.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
-          <el-form-item label="最大 Tokens"><el-input-number v-model="providerForm.max_tokens" :min="100" :max="16000" :step="100" /></el-form-item>
-          <el-form-item label="超时"><el-input-number v-model="providerForm.timeout_seconds" :min="5" :max="120" /></el-form-item>
+        </div>
+        <div class="provider-inline-grid provider-runtime-grid">
+          <el-form-item label="温度"><el-input-number v-model="providerForm.temperature" class="provider-compact-number" :min="0" :max="2" :step="0.1" :controls="false" /></el-form-item>
+          <el-form-item label="最大 Tokens"><el-input-number v-model="providerForm.max_tokens" class="provider-compact-number provider-compact-number--wide" :min="100" :max="16000" :step="100" :controls="false" /></el-form-item>
+          <el-form-item label="超时">
+            <div class="provider-unit-input">
+              <el-input-number v-model="providerForm.timeout_seconds" class="provider-compact-number" :min="5" :max="120" :controls="false" />
+              <span>s</span>
+            </div>
+          </el-form-item>
+        </div>
+        <div class="provider-inline-grid provider-inline-grid--three provider-billing-grid">
           <el-form-item label="计费币种">
             <el-segmented v-model="providerForm.price_currency" :options="providerCurrencyOptions" />
           </el-form-item>
           <el-form-item label="输入单价">
             <div class="price-input-row">
-              <el-input-number v-model="providerForm.input_token_price_per_1m" :min="0" :precision="6" :step="0.000001" />
+              <el-input-number v-model="providerForm.input_token_price_per_1m" class="provider-price-input" :min="0" :precision="2" :step="0.01" :controls="false" />
               <span>{{ providerPriceUnitLabel }}</span>
             </div>
           </el-form-item>
           <el-form-item label="输出单价">
             <div class="price-input-row">
-              <el-input-number v-model="providerForm.output_token_price_per_1m" :min="0" :precision="6" :step="0.000001" />
+              <el-input-number v-model="providerForm.output_token_price_per_1m" class="provider-price-input" :min="0" :precision="2" :step="0.01" :controls="false" />
               <span>{{ providerPriceUnitLabel }}</span>
             </div>
           </el-form-item>
+        </div>
+        <div class="dialog-grid">
           <el-form-item label="启用"><el-switch v-model="providerForm.is_enabled" /></el-form-item>
         </div>
       </el-form>
@@ -884,6 +895,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ChatDotSquare, Connection, Cpu, Message, Promotion, Setting, Tools } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useRouteTabState } from '@/composables/useRouteTabState'
 import {
   archiveAIOpsRunbook,
   autoIngestAIOpsReviewKnowledge,
@@ -925,7 +937,11 @@ import {
   updateAIOpsSkill,
 } from '@/api/modules/aiops'
 
-const activeTab = ref('strategy')
+const configTabs = ['strategy', 'actions', 'skills', 'mcp', 'orchestration', 'providers']
+const { activeTab } = useRouteTabState({
+  tabs: configTabs,
+  defaultTab: 'strategy',
+})
 const authStore = useAuthStore()
 const loading = reactive({ page: false })
 const saving = reactive({ config: false, provider: false, models: false, mcp: false, skill: false })
@@ -994,7 +1010,12 @@ const statDetail = reactive({
 const providerForm = reactive({})
 const providerModels = ref([])
 const providerModelRecommendation = ref(null)
-const selectedProviderPreset = ref('')
+const selectedProviderPreset = computed({
+  get: () => providerForm.provider_preset || '',
+  set: (value) => {
+    providerForm.provider_preset = value || ''
+  },
+})
 const mcpForm = reactive({})
 const skillForm = reactive({})
 const a2aForm = reactive({})
@@ -1014,10 +1035,13 @@ const providerApiKeyPlaceholder = computed(() => {
   return providerForm.id ? '留空则保留原值' : 'API Key'
 })
 const providerCurrencyOptions = [
-  { label: '美元 USD', value: 'USD' },
-  { label: '人民币 CNY', value: 'CNY' },
+  { label: '人民币', value: 'CNY' },
+  { label: '美元', value: 'USD' },
 ]
-const providerPriceUnitLabel = computed(() => `${currencySymbol(providerForm.price_currency)}/百万 Token`)
+const providerPriceUnitLabel = computed(() => {
+  const currency = String(providerForm.price_currency || '').toUpperCase()
+  return currency === 'USD' ? '$/M Token' : `${currencySymbol(currency)}/百万 Token`
+})
 const mcpAuthConfig = computed(() => {
   try {
     const raw = mcpForm.auth_config_text?.trim()
@@ -1364,16 +1388,43 @@ function providerRuntimeHint(row = {}) {
 }
 
 function detectProviderPreset(provider = {}) {
+  if (provider.provider_preset) return provider.provider_preset
+  const normalizedBaseUrl = String(provider.base_url || '').replace(/\/+$/, '').toLowerCase()
+  const defaultModel = String(provider.default_model || '').toLowerCase()
+  const backupModel = String(provider.backup_model || '').toLowerCase()
+  const matchedPreset = providerPresets.value.find((preset) => {
+    if (preset.key === 'custom_openai_compatible') return false
+    const presetBaseUrl = String(preset.base_url || '').replace(/\/+$/, '').toLowerCase()
+    const presetDefaultModel = String(preset.default_model || '').toLowerCase()
+    const presetBackupModel = String(preset.backup_model || '').toLowerCase()
+    return Boolean(
+      (presetBaseUrl && normalizedBaseUrl === presetBaseUrl)
+      || (presetDefaultModel && defaultModel === presetDefaultModel)
+      || (presetBackupModel && backupModel === presetBackupModel),
+    )
+  })
+  if (matchedPreset) return matchedPreset.key
   const baseUrl = (provider.base_url || '').toLowerCase()
   if (baseUrl.includes('deepseek')) return 'deepseek'
   if (baseUrl.includes('bigmodel') || /^glm-/i.test(provider.default_model || '')) return 'zhipu_glm'
   if (baseUrl.includes('minimax') || /^minimax/i.test(provider.default_model || '')) return 'minimax'
+  if (String(provider.provider_type || '').toLowerCase() === 'openai_compatible') return 'custom_openai_compatible'
   return ''
 }
 
+function normalizeProviderList(data) {
+  const items = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+  return items.map(item => ({
+    ...item,
+    provider_preset: detectProviderPreset(item),
+  }))
+}
 function applyProviderPreset(key) {
   const preset = providerPresets.value.find(item => item.key === key)
-  if (!preset) return
+  if (!preset) {
+    providerForm.provider_preset = ''
+    return
+  }
   Object.assign(providerForm, {
     name: providerForm.name || preset.name,
     provider_type: preset.provider_type || 'openai_compatible',
@@ -1383,7 +1434,8 @@ function applyProviderPreset(key) {
     temperature: preset.temperature ?? providerForm.temperature,
     max_tokens: preset.max_tokens || providerForm.max_tokens,
     timeout_seconds: preset.timeout_seconds || providerForm.timeout_seconds,
-    price_currency: preset.price_currency || providerForm.price_currency || 'USD',
+    price_currency: preset.price_currency || providerForm.price_currency || 'CNY',
+    provider_preset: preset.key,
   })
   providerModels.value = []
   providerModelRecommendation.value = null
@@ -1399,11 +1451,12 @@ function resetProviderForm() {
     default_model: '',
     backup_model: '',
     temperature: 0.2,
-    max_tokens: 1200,
+    max_tokens: 10000,
     timeout_seconds: 30,
-    price_currency: 'USD',
+    price_currency: 'CNY',
     input_token_price_per_1m: 0,
     output_token_price_per_1m: 0,
+    provider_preset: '',
     is_enabled: true,
   })
   selectedProviderPreset.value = ''
@@ -1451,7 +1504,7 @@ function resetA2AForm() {
   Object.assign(a2aForm, {
     source_agent: 'web-console',
     title: '',
-    action_code: 'runbook.generate',
+    action_code: 'slo.analysis',
     input_payload_text: '{\n  "environment": "电商测试环境",\n  "service": "order-service"\n}',
   })
 }
@@ -1510,8 +1563,8 @@ async function loadAll() {
       optionalLoad(() => getAIOpsPlatformMcpManifest({ skipErrorMessage: true })),
     ])
     applyConfig(config)
-    providers.value = providerData || []
     providerPresets.value = presetData?.presets || []
+    providers.value = normalizeProviderList(providerData)
     mcpServers.value = mcpData || []
     skills.value = skillData || []
     skillMarketplace.value = marketData || { summary: {}, items: [] }
@@ -1600,6 +1653,7 @@ function openProviderDialog(row) {
   if (row) {
     Object.assign(providerForm, row, { api_key: '' })
     selectedProviderPreset.value = detectProviderPreset(row)
+    providerForm.provider_preset = selectedProviderPreset.value
   }
   providerDialogVisible.value = true
 }
@@ -1608,7 +1662,10 @@ async function saveProvider() {
   saving.provider = true
   try {
     const payload = { ...providerForm }
-    payload.price_currency = payload.price_currency || 'USD'
+    payload.provider_preset = selectedProviderPreset.value || payload.provider_preset || ''
+    payload.price_currency = payload.price_currency || 'CNY'
+    payload.input_token_price_per_1m = Number(payload.input_token_price_per_1m || 0).toFixed(2)
+    payload.output_token_price_per_1m = Number(payload.output_token_price_per_1m || 0).toFixed(2)
     if (!payload.api_key) delete payload.api_key
     if (providerForm.id) await updateAIOpsProvider(providerForm.id, payload)
     else await createAIOpsProvider(payload)
@@ -2264,20 +2321,83 @@ onMounted(async () => {
   gap: 0 10px;
 }
 
-.price-input-row {
-  display: flex;
+.provider-inline-grid {
+  display: grid;
+  gap: 0 10px;
+}
+
+.provider-inline-grid--three,
+.provider-runtime-grid,
+.provider-billing-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.provider-inline-grid :deep(.el-form-item) {
+  min-width: 0;
+}
+
+.provider-inline-grid :deep(.el-form-item__label) {
+  flex: 0 0 auto;
+  width: 90px !important;
+  padding-right: 8px;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+
+.provider-inline-grid :deep(.el-form-item:first-child .el-form-item__label) {
+  width: 102px !important;
+}
+
+.provider-inline-grid :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.provider-compact-number {
+  width: 84px;
+}
+
+.provider-compact-number--wide {
+  width: 100px;
+}
+
+.provider-compact-number :deep(.el-input__inner),
+.price-input-row :deep(.el-input__inner) {
+  text-align: left;
+}
+
+.provider-billing-grid :deep(.el-segmented) {
+  width: 150px;
+  max-width: 100%;
+  padding: 2px;
+}
+
+.provider-billing-grid :deep(.el-segmented__item) {
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.provider-unit-input {
+  display: inline-grid;
+  grid-template-columns: 84px auto;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+.price-input-row {
+  display: grid;
+  grid-template-columns: 76px minmax(72px, auto);
+  align-items: center;
+  gap: 6px;
   width: 100%;
 }
 
 .price-input-row .el-input-number {
-  flex: 1;
   min-width: 0;
+  width: 76px;
 }
 
+.provider-unit-input span,
 .price-input-row span {
-  flex: none;
   color: #64748b;
   font-size: 12px;
   font-weight: 700;
@@ -3038,6 +3158,11 @@ onMounted(async () => {
   .switch-item {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .provider-inline-grid--three,
+  .provider-runtime-grid {
+    grid-template-columns: 1fr;
   }
 
   .model-discovery-strip,

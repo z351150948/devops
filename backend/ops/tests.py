@@ -27,6 +27,7 @@ from ops.models import (
     K8sCluster,
     K8sConfigRevision,
     LogDataSource,
+    MetricDataSource,
     ObservabilityDataSourceLink,
     TracingDataSource,
 )
@@ -2195,6 +2196,62 @@ class ObservabilityViewsTests(TestCase):
         self.assertEqual(payload['series_count'], 1)
         self.assertIn('/api/datasources/uid/prometheus-infra', mock_get.call_args_list[0].args[0])
         self.assertIn('/api/datasources/proxy/12/api/v1/query', mock_get.call_args_list[1].args[0])
+
+    @patch('ops.observability_views.http_requests.get')
+    def test_metrics_query_uses_metric_datasource(self, mock_get):
+        datasource = MetricDataSource.objects.create(
+            name='Retail Test Prometheus',
+            environment='test',
+            is_default=True,
+            config={
+                'query_url': 'http://prometheus.test.local:9090',
+                'auth_type': 'bearer',
+                'bearer_token': 'secret-token',
+                'headers': {'X-Scope-OrgID': 'retail'},
+            },
+        )
+        mock_get.return_value = MockHttpResponse({
+            'status': 'success',
+            'data': {
+                'resultType': 'vector',
+                'result': [{'metric': {'job': 'api'}, 'value': [1710000000, '1']}],
+            },
+        })
+
+        response = self.client.post(
+            '/api/observability/metrics/query/',
+            {'query': 'up', 'metric_datasource_id': datasource.id},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['source'], 'metric_datasource')
+        self.assertEqual(payload['metric_datasource']['id'], datasource.id)
+        self.assertIn('/api/v1/query', mock_get.call_args.args[0])
+        self.assertEqual(mock_get.call_args.kwargs['headers']['Authorization'], 'Bearer secret-token')
+
+    def test_metric_datasource_serializer_masks_secrets(self):
+        datasource = MetricDataSource.objects.create(
+            name='Secure Prometheus',
+            config={
+                'query_url': 'http://prometheus.local:9090',
+                'password': 'secret',
+                'bearer_token': 'token',
+                'headers': {'Authorization': 'Bearer token', 'X-Team': 'ops'},
+                'prometheus.basic': {'prometheus.user': 'admin', 'prometheus.password': 'secret'},
+            },
+        )
+
+        response = self.client.get(f'/api/observability/metric/datasources/{datasource.id}/')
+
+        self.assertEqual(response.status_code, 200)
+        config = response.json()['config']
+        self.assertEqual(config['password'], 'configured')
+        self.assertEqual(config['bearer_token'], 'configured')
+        self.assertEqual(config['headers']['Authorization'], 'configured')
+        self.assertEqual(config['headers']['X-Team'], 'ops')
+        self.assertEqual(config['prometheus.basic']['prometheus.password'], 'configured')
 
     @patch('ops.observability_views.http_requests.get')
     def test_grafana_panel_query_fetches_dashboard_targets_and_runs_range_query(self, mock_get):

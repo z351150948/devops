@@ -471,7 +471,7 @@ BUILTIN_SKILLS = [
         'category': 'K8s 诊断',
         'description': '针对 K8s 相关告警组织集群、命名空间、工作负载、Pod、Event 和日志证据。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['alert.root_cause', 'k8s.diagnose', 'deploy.failure_diagnose'],
+        'applicable_actions': ['alert.root_cause', 'k8s.diagnose'],
         'examples': [
             '分析 app-prod-k8s 集群异常 Pod',
             'Deployment 副本不可用是什么原因',
@@ -513,7 +513,7 @@ BUILTIN_SKILLS = [
         'category': '回答规范',
         'description': '基于工具事实重组最终回答，输出更稳定的结构化结果。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['alert.root_cause', 'change.correlation', 'log.query_generate', 'k8s.diagnose', 'self_heal.recommend'],
+        'applicable_actions': ['alert.root_cause', 'change.correlation', 'log.query_generate', 'k8s.diagnose', 'self_heal.recommend', 'host_task.generate'],
         'examples': ['把工具结果整理成结论、证据、建议', '将任务草稿说明成待确认动作'],
         'builtin_tools': [],
         'recommended_tools': [],
@@ -539,7 +539,7 @@ BUILTIN_SKILLS = [
         'category': '日志查询',
         'description': '规范日志聚合、样本解释、错误模式归类和证据表达。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['alert.root_cause', 'log.query_generate', 'deploy.failure_diagnose'],
+        'applicable_actions': ['alert.root_cause', 'log.query_generate'],
         'examples': [
             '查询 order-service 最近 30 分钟 ERROR 日志',
             '登录失败日志按错误码聚合',
@@ -575,7 +575,7 @@ BUILTIN_SKILLS = [
         'category': '变更关联',
         'description': '规范发布、工单、事件与知识图谱依赖的时间线关联分析。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['alert.root_cause', 'change.correlation', 'deploy.failure_diagnose', 'self_heal.recommend'],
+        'applicable_actions': ['alert.root_cause', 'change.correlation', 'self_heal.recommend'],
         'examples': [
             '最近有哪些变更可能影响订单服务',
             '今天发布和告警时间是否接近',
@@ -672,7 +672,7 @@ BUILTIN_SKILLS = [
         'category': 'K8s 诊断',
         'description': '沉淀 K8s 常见异常的只读排障路径和输出格式。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['k8s.diagnose', 'alert.root_cause', 'deploy.failure_diagnose'],
+        'applicable_actions': ['k8s.diagnose', 'alert.root_cause'],
         'examples': ['Pod Pending 怎么排查', '探针失败如何判断', '节点资源不足会影响哪些服务'],
         'builtin_tools': ['query_k8s_cluster_summary', 'query_k8s_resources', 'query_logs'],
         'recommended_tools': ['query_alerts', 'query_knowledge_graph'],
@@ -701,7 +701,7 @@ BUILTIN_SKILLS = [
         'category': '安全护栏',
         'description': '限定容器和 K8s 场景只能通过平台后端接口取证，写操作必须走确认流。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['k8s.diagnose', 'self_heal.recommend', 'deploy.failure_diagnose'],
+        'applicable_actions': ['k8s.diagnose', 'self_heal.recommend'],
         'examples': ['能不能直接重启这个 Pod', '帮我扩容 Deployment', '删除异常 Pod 是否安全'],
         'builtin_tools': ['query_k8s_cluster_summary', 'query_k8s_resources', 'query_container_assets'],
         'recommended_tools': ['generate_host_task'],
@@ -728,7 +728,7 @@ BUILTIN_SKILLS = [
         'category': '变更关联',
         'description': '将事件墙、工单、发布、告警和知识图谱关系组织成可解释时间线。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['change.correlation', 'alert.root_cause', 'runbook.generate'],
+        'applicable_actions': ['change.correlation', 'alert.root_cause'],
         'examples': ['今天有哪些事件和告警时间接近', '把故障前后的操作整理成时间线', '找出最近发布相关事件'],
         'builtin_tools': ['query_event_wall', 'query_recent_changes', 'query_knowledge_graph'],
         'recommended_tools': ['query_alerts', 'query_logs'],
@@ -783,7 +783,7 @@ BUILTIN_SKILLS = [
         'category': '任务中心',
         'description': '约束 assistant 如何根据目标资源、环境和风险选择任务中心模板。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['self_heal.recommend', 'runbook.generate'],
+        'applicable_actions': ['self_heal.recommend', 'host_task.generate'],
         'examples': ['给生产环境生成巡检任务', '选择 Redis 检查模板', '帮我安排基础健康检查'],
         'builtin_tools': ['query_task_resources', 'generate_host_task', 'query_knowledge_graph'],
         'recommended_tools': ['query_alerts'],
@@ -806,7 +806,7 @@ BUILTIN_SKILLS = [
         'category': '发布回滚',
         'description': '规范发布回滚和变更撤销建议的前置验证、影响范围和失败处理。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
-        'applicable_actions': ['self_heal.recommend', 'change.correlation', 'deploy.failure_diagnose'],
+        'applicable_actions': ['self_heal.recommend', 'change.correlation'],
         'examples': ['这次发布是否需要回滚', '给出回滚前检查项', '回滚失败怎么处理'],
         'builtin_tools': ['query_recent_changes', 'query_event_wall', 'query_knowledge_graph'],
         'recommended_tools': ['query_alerts', 'query_logs', 'query_traces'],
@@ -1001,74 +1001,35 @@ BUILTIN_ACTION_REGISTRY = [
         ],
     },
     {
-        'code': 'metric.query_generate',
-        'display_name': '指标查询生成',
-        'category': '查询生成',
-        'description': '根据服务、指标目标和时间窗口生成 PromQL 或面板查询建议。',
+        'code': 'host_task.generate',
+        'display_name': '任务生成',
+        'category': '任务生成',
+        'description': '根据自然语言生成任务中心主机巡检、命令或 Playbook 待执行任务草稿。',
         'risk_level': 'draft',
         'agent_mode': 'direct',
-        'required_context': ['environment', 'service'],
+        'required_context': ['environment'],
         'allowed_tools': [
-            'query_grafana_promql',
-            'query_dashboard_panel_data',
-            'query_system_posture',
+            'query_task_resources',
+            'generate_host_task',
             'query_knowledge_graph',
         ],
         'skills': [
-            'sx-alert-evidence-checklist',
+            'sx-task-template-selection',
             'answer-formatter',
         ],
         'preflight_required': False,
         'preflight_fields': [
             {'name': 'environment', 'label': '环境', 'required': True},
-            {'name': 'service', 'label': '服务', 'required': False},
-            {'name': 'metric', 'label': '指标', 'required': False},
-            {'name': 'time_window', 'label': '时间窗口', 'required': False},
+            {'name': 'resource_scope', 'label': '资源范围', 'required': False},
+            {'name': 'task_goal', 'label': '任务目标', 'required': False},
         ],
-        'output_blocks': ['query_suggestion', 'chart_query', 'tool_trace', 'risk_notice'],
-        'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze'],
+        'output_blocks': ['approval_form', 'tool_trace', 'risk_notice'],
+        'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze', 'aiops.task.generate'],
         'suggested_questions': [
-            '帮我生成订单服务 QPS 和错误率的指标查询。',
-            '生成查看最近一小时接口 P95 延迟的 PromQL。',
-            '帮我写一个 PromQL 看订单服务错误率',
-        ],
-    },
-    {
-        'code': 'deploy.failure_diagnose',
-        'display_name': '发布失败诊断',
-        'category': '发布诊断',
-        'description': '结合发布记录、事件、K8s 状态、日志和知识图谱定位发布失败原因。',
-        'risk_level': 'read_only',
-        'agent_mode': 'plan_react',
-        'required_context': ['environment', 'deployment', 'service'],
-        'allowed_tools': [
-            'query_recent_changes',
-            'query_event_wall',
-            'query_k8s_resources',
-            'query_logs',
-            'query_alerts',
-            'query_knowledge_graph',
-        ],
-        'skills': [
-            'sx-change-impact-analysis',
-            'sx-k8s-troubleshooting',
-            'sx-log-pattern-analysis',
-            'sx-rollback-strategy',
-            'answer-formatter',
-        ],
-        'preflight_required': False,
-        'preflight_fields': [
-            {'name': 'environment', 'label': '环境', 'required': True},
-            {'name': 'deployment', 'label': '发布单', 'required': False},
-            {'name': 'service', 'label': '服务', 'required': False},
-            {'name': 'time_window', 'label': '时间窗口', 'required': False},
-        ],
-        'output_blocks': ['change_candidate', 'rollback_plan', 'evidence_timeline', 'risk_notice'],
-        'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze'],
-        'suggested_questions': [
-            '分析这次订单服务发布失败的可能原因。',
-            '最近一次发布失败是否和 K8s 事件或日志异常相关？',
-            '订单服务发布失败了，帮我诊断可能原因',
+            '帮我建个电商测试环境的服务器巡检任务',
+            '给生产环境生成主机巡检任务',
+            '帮我在电商测试环境安装 Redis',
+            '在电商测试环境生成一份服务器健康检查任务',
         ],
     },
     {
@@ -1078,7 +1039,7 @@ BUILTIN_ACTION_REGISTRY = [
         'description': '围绕可用性、错误率、延迟和关键告警分析服务健康与 SLO 风险。',
         'risk_level': 'read_only',
         'agent_mode': 'react',
-        'required_context': ['environment', 'service'],
+        'required_context': ['environment'],
         'allowed_tools': [
             'query_system_posture',
             'query_alerts',
@@ -1095,87 +1056,17 @@ BUILTIN_ACTION_REGISTRY = [
         'preflight_required': False,
         'preflight_fields': [
             {'name': 'environment', 'label': '环境', 'required': True},
-            {'name': 'service', 'label': '服务', 'required': True},
+            {'name': 'service', 'label': '服务', 'required': False},
             {'name': 'time_window', 'label': '时间窗口', 'required': False},
             {'name': 'slo_target', 'label': 'SLO 目标', 'required': False},
         ],
         'output_blocks': ['incident_card', 'chart_query', 'evidence_timeline', 'risk_notice'],
         'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze'],
         'suggested_questions': [
+            '分析下最近电商测试环境的 SLO 情况。',
             '分析订单服务最近一小时的 SLO 风险。',
             '当前服务健康度下降主要受哪些指标影响？',
             '订单服务健康度下降主要是延迟还是错误率导致的',
-        ],
-    },
-    {
-        'code': 'notification.policy_suggest',
-        'display_name': '通知和升级策略建议',
-        'category': '通知策略',
-        'description': '根据告警等级、影响范围和团队关系生成通知、升级与值班策略草案。',
-        'risk_level': 'draft',
-        'agent_mode': 'direct',
-        'required_context': ['environment', 'alert', 'team'],
-        'allowed_tools': [
-            'query_alerts',
-            'query_event_wall',
-            'query_knowledge_graph',
-        ],
-        'skills': [
-            'sx-alert-evidence-checklist',
-            'answer-formatter',
-        ],
-        'preflight_required': True,
-        'preflight_fields': [
-            {'name': 'environment', 'label': '环境', 'required': True},
-            {'name': 'alert_level', 'label': '告警等级', 'required': False},
-            {'name': 'team', 'label': '团队', 'required': False},
-            {'name': 'escalation_window', 'label': '升级窗口', 'required': False},
-        ],
-        'output_blocks': ['approval_form', 'risk_notice', 'tool_trace'],
-        'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze'],
-        'suggested_questions': [
-            '给生产严重告警设计一套通知和升级策略。',
-            '这个服务的告警应该通知哪些角色并如何升级？',
-            '生产环境 P1 告警应该通知谁，多久升级一次',
-        ],
-    },
-    {
-        'code': 'runbook.generate',
-        'display_name': 'Runbook 生成',
-        'category': '知识沉淀',
-        'description': '把告警、日志、链路、事件和处置过程整理成可复用 Runbook 草案。',
-        'risk_level': 'draft',
-        'agent_mode': 'direct',
-        'required_context': ['environment', 'incident'],
-        'allowed_tools': [
-            'query_alerts',
-            'query_logs',
-            'query_traces',
-            'query_recent_changes',
-            'query_event_wall',
-            'query_knowledge_graph',
-            'query_task_resources',
-        ],
-        'skills': [
-            'sx-alert-evidence-checklist',
-            'sx-change-impact-analysis',
-            'sx-event-timeline-correlation',
-            'sx-task-template-selection',
-            'answer-formatter',
-        ],
-        'preflight_required': False,
-        'preflight_fields': [
-            {'name': 'environment', 'label': '环境', 'required': True},
-            {'name': 'incident', 'label': '故障事件', 'required': False},
-            {'name': 'service', 'label': '服务', 'required': False},
-            {'name': 'time_window', 'label': '时间窗口', 'required': False},
-        ],
-        'output_blocks': ['tool_trace', 'evidence_timeline', 'risk_notice'],
-        'rbac_permissions': ['aiops.chat.view', 'aiops.chat.analyze'],
-        'suggested_questions': [
-            '基于这次故障生成一个 Runbook 草案。',
-            '把订单服务 5xx 告警的排障流程沉淀成 Runbook。',
-            '生成一个支付服务超时的排障手册草案',
         ],
     },
 ]
@@ -1187,7 +1078,7 @@ BUILTIN_MODEL_PROVIDER = {
     'default_model': 'gpt-4o-mini',
     'backup_model': 'gpt-4.1-mini',
     'temperature': 0.2,
-    'max_tokens': 1600,
+    'max_tokens': 10000,
     'timeout_seconds': 30,
     'price_currency': AIOpsModelProvider.CURRENCY_USD,
     'api_key': 'demo-openai-compatible-key',
@@ -1203,7 +1094,7 @@ MODEL_PROVIDER_PRESETS = [
         'default_model': 'deepseek-v4-flash',
         'backup_model': 'deepseek-v4-pro',
         'temperature': 0.2,
-        'max_tokens': 1600,
+        'max_tokens': 10000,
         'timeout_seconds': 60,
         'price_currency': AIOpsModelProvider.CURRENCY_CNY,
         'api_key_placeholder': 'DeepSeek API Key',
@@ -1218,7 +1109,7 @@ MODEL_PROVIDER_PRESETS = [
         'default_model': 'glm-5.1',
         'backup_model': 'glm-4.7',
         'temperature': 0.2,
-        'max_tokens': 1600,
+        'max_tokens': 10000,
         'timeout_seconds': 60,
         'price_currency': AIOpsModelProvider.CURRENCY_CNY,
         'api_key_placeholder': '智谱 API Key',
@@ -1233,7 +1124,7 @@ MODEL_PROVIDER_PRESETS = [
         'default_model': 'MiniMax-M2.7',
         'backup_model': 'MiniMax-M2.7-highspeed',
         'temperature': 1.0,
-        'max_tokens': 1600,
+        'max_tokens': 10000,
         'timeout_seconds': 60,
         'price_currency': AIOpsModelProvider.CURRENCY_CNY,
         'api_key_placeholder': 'MiniMax API Key',
@@ -1248,7 +1139,7 @@ MODEL_PROVIDER_PRESETS = [
         'default_model': '',
         'backup_model': '',
         'temperature': 0.2,
-        'max_tokens': 1600,
+        'max_tokens': 10000,
         'timeout_seconds': 60,
         'price_currency': AIOpsModelProvider.CURRENCY_USD,
         'api_key_placeholder': 'API Key',
@@ -1501,13 +1392,6 @@ def build_external_task_plan(action, payload=None):
         })
     for tool in action.get('allowed_tools') or []:
         steps.append(_action_plan_step(tool, title=f'调用 {tool}', risk_level=action.get('risk_level') or 'read_only'))
-    if action.get('code') == 'runbook.generate':
-        steps.append({
-            'tool': 'persist_runbook_draft',
-            'title': '沉淀 Runbook 草案',
-            'risk_level': 'draft',
-            'status': 'pending',
-        })
     if not steps:
         steps.append({
             'tool': 'answer',
@@ -1557,9 +1441,6 @@ def _agent_sequence_for_action(action):
     allowed_tools = set((action or {}).get('allowed_tools') or [])
     selected = []
     for profile in AGENT_ORCHESTRATION_PROFILES:
-        if profile['code'] == 'runbook_agent' and (action or {}).get('code') == 'runbook.generate':
-            selected.append(profile)
-            continue
         if allowed_tools.intersection(profile['preferred_tools']):
             selected.append(profile)
     if not selected:
@@ -2021,10 +1902,12 @@ def build_runbook_draft_from_payload(payload, user=None, source_task=None, sourc
 
 
 ACTION_ROUTE_PRIORITY = [
+    'host_task.generate',
     'self_heal.recommend',
-    'k8s.diagnose',
     'log.query_generate',
     'change.correlation',
+    'k8s.diagnose',
+    'slo.analysis',
     'alert.root_cause',
 ]
 
@@ -2072,24 +1955,75 @@ def _action_question_matches(action_code, question, analysis_scope=None):
             or has_abnormal_analysis_intent
         )
     if action_code == 'change.correlation':
+        deploy_change_context = (
+            _question_contains_any(lowered, ['deploy', 'deployment'])
+            and _question_contains_any(lowered, ['之后', '以后', '后', '变更', '发布', '上线', '关联', '关系', '相关', '导致'])
+        )
+        has_change_or_event_scope = _question_contains_any(lowered, [
+            '变更', '发布', '工单', '部署', '回滚', '上线', '事件',
+            'change', 'changes', 'event', 'events',
+        ]) or deploy_change_context
+        has_correlation_intent = _question_contains_any(lowered, [
+            '关联', '关系', '影响', '导致', '相关', '异常', '问题', '原因', '排查',
+            '接近', '时间', '时间线', '升高', '下降',
+        ])
+        has_event_lookup_intent = _question_contains_any(lowered, [
+            '有哪些', '哪些', '列表', '最近', '当前', '今天', '今日', '有什么', '查看', '查询', '看下',
+        ])
         return (
-            _question_contains_any(lowered, ['变更', '发布', '工单', '部署', '回滚', '上线', 'deploy', 'deployment'])
-            and _question_contains_any(lowered, ['关联', '关系', '影响', '导致', '相关', '异常', '问题', '原因', '排查', '接近', '时间', '时间线', '升高', '下降'])
+            has_change_or_event_scope
+            and (has_correlation_intent or has_event_lookup_intent)
         )
     if action_code == 'log.query_generate':
         return (
             _question_contains_any(lowered, ['日志', 'log', 'logs', 'loki', 'elk', 'sls'])
-            and _question_contains_any(lowered, ['生成', '查询', '查下', '查看', '看下', '语句', '条件', '过滤', '分析', '检索'])
+            and _question_contains_any(lowered, [
+                '生成', '查询', '查下', '查看', '看下', '语句', '条件', '过滤', '分析', '检索',
+                '模式', '共同模式', '共性', '规律', '聚合', '统计', '归类', '有什么', '请求',
+            ])
         )
     if action_code == 'k8s.diagnose':
         return (
             _question_contains_any(lowered, ['k8s', 'kubernetes', 'pod', 'pods', 'namespace', '命名空间', '集群', 'deployment', 'statefulset', 'daemonset', 'workload', 'workloads', '容器'])
-            and _question_contains_any(lowered, ['诊断', '排查', '分析', '根因', '原因', '为什么', '异常', '失败', 'pending', 'crashloopbackoff', '不可用', '资源不足', '影响', '哪些'])
+            and _question_contains_any(lowered, ['诊断', '排查', '分析', '根因', '原因', '为什么', '异常', '失败', 'pending', 'crashloopbackoff', 'crash', 'notready', '不可用', '资源不足', '影响', '哪些', '怎么看'])
         )
+    if action_code == 'slo.analysis':
+        has_health_scope = _question_contains_any(lowered, [
+            'slo', 'sla', '服务健康', '健康度', '健康', '态势', '可用性',
+            '错误率', '成功率', '延迟', '耗时', 'p95', 'p99', 'qps', '吞吐',
+        ])
+        has_analysis_intent = _question_contains_any(lowered, [
+            '分析', '看下', '查看', '查询', '情况', '怎么样', '如何', '风险',
+            '是否', '有没有', '下降', '升高', '影响', '最近', '当前',
+        ])
+        return has_health_scope and has_analysis_intent
     if action_code == 'self_heal.recommend':
         return (
-            _question_contains_any(lowered, ['自愈', '修复', '处置', '脚本', '方案', '建议', '推荐'])
-            and _question_contains_any(lowered, ['推荐', '方案', '脚本', '处置', '建议', '确认'])
+            _question_contains_any(lowered, ['自愈', '修复', '处置', '脚本', '方案', '建议', '推荐', '自动恢复', '恢复'])
+            and _question_contains_any(lowered, ['推荐', '方案', '脚本', '处置', '建议', '确认', '可以', '能不能', '是否', '恢复'])
+        )
+    if action_code == 'host_task.generate':
+        has_create_intent = _question_contains_any(lowered, [
+            '生成', '创建', '新建', '建个', '建一', '安排', '发起', '准备', '构建',
+            'generate', 'create', 'schedule',
+        ])
+        has_install_intent = _question_contains_any(lowered, [
+            '安装', '部署', '装一下', '装个', '装上', '配置', 'install', 'deploy', 'setup',
+        ])
+        has_task_scope = _question_contains_any(lowered, [
+            '巡检任务', '健康检查任务', '待执行任务', '任务草稿', '任务中心', '主机任务',
+            '服务器巡检', '主机巡检', '服务器健康检查', '运维任务', '任务',
+        ])
+        has_target_scope = _question_contains_any(lowered, ['主机', '服务器', '资源', 'host', 'server'])
+        has_tool_task = _question_contains_any(lowered, ['命令', '脚本', 'playbook'])
+        has_software_target = _question_contains_any(lowered, [
+            'redis', 'nginx', 'mysql', 'docker', 'kubelet', 'sshd', 'rocketmq', '软件', '服务', '中间件',
+        ])
+        return (
+            has_create_intent
+            and (has_task_scope or (has_target_scope and _question_contains_any(lowered, ['巡检', '检查', '健康'])) or has_tool_task)
+        ) or (
+            has_install_intent and has_software_target
         )
     return False
 
@@ -2137,6 +2071,13 @@ def _attach_selected_action_metadata(result, action, *, extra_metadata=None, ext
     }
     if extra_metadata:
         metadata.update(extra_metadata)
+    if metadata.get('skill_trace'):
+        metadata['skill_trace'] = _mark_skill_trace_action_hit(metadata.get('skill_trace'), action)
+    metadata['action_trace'] = _build_action_trace(
+        action,
+        route=metadata.get('action_route') or '',
+        existing=metadata.get('action_trace') or {},
+    )
     if extra_blocks:
         response_blocks = list(metadata.get('response_blocks') or [])
         for block in extra_blocks:
@@ -2334,6 +2275,162 @@ def _skills_for_action(active_skills, action):
     if formatter_skill:
         selected.append(formatter_skill)
     return selected or active_skills
+
+
+def _serialize_skill_trace_item(skill, *, status='available', hit_reason='runtime_enabled', action_code='', tool_calls=None):
+    tool_calls = [str(item or '').strip() for item in (tool_calls or []) if str(item or '').strip()]
+    declared_tools = list(dict.fromkeys([
+        *[str(item or '').strip() for item in (getattr(skill, 'builtin_tools', None) or []) if str(item or '').strip()],
+        *[str(item or '').strip() for item in (getattr(skill, 'recommended_tools', None) or []) if str(item or '').strip()],
+    ]))
+    used_tools = [name for name in tool_calls if name in declared_tools]
+    if used_tools and status == 'available':
+        status = 'matched'
+        hit_reason = 'tool_dependency'
+    return {
+        'id': getattr(skill, 'id', None),
+        'name': getattr(skill, 'name', ''),
+        'slug': getattr(skill, 'slug', ''),
+        'category': getattr(skill, 'category', '') or '',
+        'risk_level': getattr(skill, 'risk_level', '') or '',
+        'status': status,
+        'hit_reason': hit_reason,
+        'action_code': action_code,
+        'applicable_actions': list(getattr(skill, 'applicable_actions', None) or []),
+        'declared_tools': declared_tools,
+        'used_tools': used_tools,
+    }
+
+
+def _skill_trace_hit_count(items):
+    hit_statuses = {'matched', 'called', 'fallback'}
+    return sum(
+        1
+        for item in items or []
+        if item.get('status') in hit_statuses or item.get('used_tools')
+    )
+
+
+def _build_skill_trace(active_skills=None, *, selected_action=None, formatter_result=None, tool_calls=None):
+    active_skills = list(active_skills or [])
+    selected_action = selected_action or {}
+    action_code = selected_action.get('code') or ''
+    action_skill_slugs = set(selected_action.get('skills') or [])
+    formatter_used = bool((formatter_result or {}).get('used'))
+    formatter_fell_back = bool((formatter_result or {}).get('fell_back'))
+    items = []
+    for skill in active_skills:
+        skill_slug = getattr(skill, 'slug', '')
+        applicable_actions = set(getattr(skill, 'applicable_actions', None) or [])
+        status = 'available'
+        hit_reason = 'runtime_enabled'
+        if action_code and (skill_slug in action_skill_slugs or action_code in applicable_actions):
+            status = 'matched'
+            hit_reason = 'action_router'
+        if skill_slug == ANSWER_FORMATTER_SKILL_SLUG:
+            if formatter_used and formatter_fell_back:
+                status = 'fallback'
+                hit_reason = 'formatter_fallback'
+            elif formatter_used:
+                status = 'called'
+                hit_reason = 'answer_formatter'
+            elif status == 'available':
+                hit_reason = 'formatter_available'
+        items.append(_serialize_skill_trace_item(
+            skill,
+            status=status,
+            hit_reason=hit_reason,
+            action_code=action_code if status == 'matched' else '',
+            tool_calls=tool_calls,
+        ))
+    return {
+        'enabled_count': len(active_skills),
+        'matched_count': _skill_trace_hit_count(items),
+        'called_count': sum(1 for item in items if item.get('status') == 'called'),
+        'tool_matched_count': sum(1 for item in items if item.get('used_tools')),
+        'items': items[:16],
+    }
+
+
+def _mark_skill_trace_action_hit(trace, action):
+    if not isinstance(trace, dict) or not action:
+        return trace
+    action_code = action.get('code') or ''
+    action_skill_slugs = set(action.get('skills') or [])
+    items = []
+    for item in trace.get('items') or []:
+        next_item = dict(item or {})
+        applicable_actions = set(next_item.get('applicable_actions') or [])
+        if action_code and (
+            next_item.get('slug') in action_skill_slugs
+            or action_code in applicable_actions
+        ):
+            next_item['status'] = 'matched'
+            next_item['hit_reason'] = 'action_router'
+            next_item['action_code'] = action_code
+        items.append(next_item)
+    return {
+        **trace,
+        'matched_count': _skill_trace_hit_count(items),
+        'called_count': sum(1 for item in items if item.get('status') == 'called'),
+        'tool_matched_count': sum(1 for item in items if item.get('used_tools')),
+        'items': items[:16],
+    }
+
+
+def _build_action_trace(action=None, *, route='', existing=None):
+    trace = dict(existing or {})
+    if not action:
+        return trace
+    trace.update({
+        'hit': True,
+        'code': action.get('code') or '',
+        'display_name': action.get('display_name') or action.get('code') or '',
+        'risk_level': action.get('risk_level') or '',
+        'risk_level_display': action.get('risk_level_display') or '',
+        'agent_mode': action.get('agent_mode') or '',
+        'agent_mode_display': action.get('agent_mode_display') or '',
+        'route': route or trace.get('route') or '',
+        'preflight_required': bool(action.get('preflight_required')),
+        'allowed_tools': list(action.get('allowed_tools') or []),
+        'skills': list(action.get('skills') or []),
+        'status': trace.get('status') or 'matched',
+    })
+    return trace
+
+
+def _upsert_action_decision_trace(metadata, *, draft=None, pending_action=None, decision=None):
+    if not isinstance(metadata, dict):
+        return metadata
+    selected_action = metadata.get('selected_action') or {}
+    action_trace = _build_action_trace(
+        selected_action,
+        route=metadata.get('action_route') or '',
+        existing=metadata.get('action_trace') or {},
+    )
+    if draft:
+        action_trace['draft_generated'] = True
+        action_trace['draft'] = {
+            'title': draft.get('name') or draft.get('title') or '',
+            'action_type': AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK,
+            'risk_level': draft.get('risk_level') or '',
+            'host_count': draft.get('host_count') or len(draft.get('target_hosts') or []),
+            'task_type': draft.get('task_type') or '',
+        }
+    if pending_action:
+        action_trace['pending_action'] = {
+            'id': pending_action.id,
+            'title': pending_action.title,
+            'action_type': pending_action.action_type,
+            'risk_level': pending_action.risk_level,
+            'status': pending_action.status,
+        }
+    if decision:
+        action_trace['decision'] = decision
+        action_trace['status'] = decision.get('status') or action_trace.get('status') or 'matched'
+    if action_trace:
+        metadata['action_trace'] = action_trace
+    return metadata
 
 
 def _normalize_json_id_list(values):
@@ -3698,6 +3795,7 @@ def _build_analysis_scope(knowledge_environment):
         'event_environments': knowledge_environment.get('event_environments') or [],
         'alert_environments': knowledge_environment.get('alert_environments') or [],
         'posture_environments': knowledge_environment.get('posture_environments') or [],
+        'metric_datasource_ids': knowledge_environment.get('metric_datasource_ids') or [],
         'log_datasource_ids': knowledge_environment.get('log_datasource_ids') or [],
         'tracing_datasource_ids': knowledge_environment.get('tracing_datasource_ids') or [],
         'k8s_cluster_ids': knowledge_environment.get('k8s_cluster_ids') or [],
@@ -5022,9 +5120,10 @@ def _promql_items_from_results(results):
     return items
 
 
-def query_grafana_promql(session, user_message, user, query='', promql='', range_query=True, duration_minutes=30, step=60, limit=6):
+def query_grafana_promql(session, user_message, user, query='', promql='', range_query=True, duration_minutes=30, step=60, limit=6, metric_datasource_id=''):
     started_at = time.time()
     knowledge_environment = _resolve_knowledge_environment_for_query(query)
+    selected_metric_datasource_id = metric_datasource_id or ((knowledge_environment.get('metric_datasource_ids') or [''])[0] if knowledge_environment else '')
     expression = str(promql or query or '').strip()
     invocation = _create_tool_invocation(
         session,
@@ -5037,9 +5136,10 @@ def query_grafana_promql(session, user_message, user, query='', promql='', range
             'duration_minutes': duration_minutes,
             'step': step,
             'knowledge_environment': knowledge_environment.get('name') if knowledge_environment else '',
+            'metric_datasource_id': selected_metric_datasource_id or '',
         },
     )
-    if not user_has_permissions(user, ['ops.grafana.view']):
+    if not (user_has_permissions(user, ['ops.metric.query']) or user_has_permissions(user, ['ops.grafana.view'])):
         _finish_tool_invocation(invocation, {'detail': 'missing_permission'}, started_at, success=False)
         return {'sections': [], 'citations': []}
     if not expression:
@@ -5055,6 +5155,9 @@ def query_grafana_promql(session, user_message, user, query='', promql='', range
             start_time=start_time,
             end_time=end_time,
             step=step or 60,
+            metric_datasource_id=selected_metric_datasource_id or '',
+            environment=knowledge_environment.get('name') if knowledge_environment else '',
+            prefer_metric_datasource=True,
         )
         results = (payload.get('result') or [])[:limit]
         payload['result'] = results
@@ -5064,12 +5167,13 @@ def query_grafana_promql(session, user_message, user, query='', promql='', range
             'series_count': payload.get('series_count', 0),
             'source': payload.get('source'),
             'range': payload.get('range'),
+            'metric_datasource': payload.get('metric_datasource'),
         }
         _finish_tool_invocation(invocation, summary, started_at, success=True)
         return {
             'summary': summary,
             'sections': [{'title': 'Grafana / PromQL 指标结果', 'items': items}],
-            'citations': [{'title': '监控看板', 'path': '/observability/grafana'}],
+            'citations': [{'title': '指标查询', 'path': '/observability/metrics'}],
             'promql': payload,
         }
     except Exception as exc:
@@ -5077,7 +5181,7 @@ def query_grafana_promql(session, user_message, user, query='', promql='', range
         return {
             'summary': {'error': str(exc)},
             'sections': [{'title': 'Grafana / PromQL 查询失败', 'items': [str(exc)]}],
-            'citations': [{'title': '监控看板', 'path': '/observability/grafana'}],
+            'citations': [{'title': '指标查询', 'path': '/observability/metrics'}],
         }
 
 
@@ -5736,6 +5840,11 @@ def _build_direct_log_result(log_result, question, knowledge_environment, analys
             else 'fallback'
         ),
         'formatter_attempts': (formatter_result or {}).get('attempts', 0),
+        'skill_trace': _build_skill_trace(
+            active_skills or [],
+            formatter_result=formatter_result,
+            tool_calls=['query_logs'],
+        ),
     }
     if formatter_error:
         metadata['formatter_error'] = formatter_error
@@ -5874,6 +5983,11 @@ def _build_direct_tool_result(
             else 'deterministic'
         ),
         'formatter_attempts': (formatter_result or {}).get('attempts', 0),
+        'skill_trace': _build_skill_trace(
+            active_skills or [],
+            formatter_result=formatter_result,
+            tool_calls=[tool_name],
+        ),
     }
     if formatter_error:
         metadata['formatter_error'] = formatter_error
@@ -5976,6 +6090,7 @@ def _direct_tool_fastpath(
     step_detail='命中明确事实查询意图，直接调用平台工具。',
     step_text='正在查询平台工具',
     extra_metadata=None,
+    selected_action=None,
 ):
     emit = emit or (lambda **kwargs: None)
     emit(
@@ -5995,7 +6110,7 @@ def _direct_tool_fastpath(
         arguments,
         emit=emit,
     )
-    return _build_evidence_bundle_result(
+    result = _build_evidence_bundle_result(
         question=question,
         scoped_question=scoped_question,
         knowledge_environment=knowledge_environment,
@@ -6009,6 +6124,9 @@ def _direct_tool_fastpath(
         execution_mode=execution_mode,
         extra_metadata=extra_metadata,
     )
+    if selected_action:
+        return _attach_selected_action_metadata(result, selected_action, extra_metadata={'action_route': execution_mode})
+    return result
 
 
 def _build_evidence_bundle_result(
@@ -6087,6 +6205,11 @@ def _build_evidence_bundle_result(
         ),
         'formatter_attempts': (formatter_result or {}).get('attempts', 0),
         'evidence_tools': tool_names,
+        'skill_trace': _build_skill_trace(
+            active_skills or [],
+            formatter_result=formatter_result,
+            tool_calls=tool_names,
+        ),
     }
     if formatter_error:
         metadata['formatter_error'] = formatter_error
@@ -6175,6 +6298,63 @@ def _run_k8s_analysis_evidence(session, user_message, user, question, scoped_que
         execution_mode='deterministic_k8s_rca',
         extra_metadata={'k8s_resource_type': resource_type},
     )
+
+
+def _run_slo_analysis_evidence(session, user_message, user, question, scoped_question, knowledge_environment, analysis_scope, provider, active_skills, action, emit):
+    emit(
+        step={'title': 'SLO 证据收集', 'detail': '读取系统态势、告警、指标面板、链路和知识图谱范围。', 'status': PROCESSING_STATUS_COMPLETED},
+        text='正在分析 SLO 与服务健康',
+    )
+    sections, citations, tool_names, collected = [], [], [], []
+    duration_minutes = _detect_log_duration_minutes(question)
+    service_candidates = _service_candidates_from_text(scoped_question, analysis_scope=analysis_scope, knowledge_environment=knowledge_environment)
+    service = _match_service_from_options(' '.join(service_candidates), (analysis_scope or {}).get('services') or []) or (service_candidates[0] if service_candidates else '')
+    system_name = _extract_system_name(scoped_question) or ((analysis_scope or {}).get('systems') or [''])[0]
+    health_query = ' '.join(item for item in [
+        knowledge_environment.get('name'),
+        system_name,
+        service,
+        scoped_question,
+    ] if item).strip()
+    _run_scoped_tool(session, user_message, user, collected, sections, citations, tool_names, 'query_system_posture', {'query': scoped_question, 'limit': 8, 'analysis_scope': analysis_scope}, emit=emit)
+    _run_scoped_tool(session, user_message, user, collected, sections, citations, tool_names, 'query_alerts', {'query': health_query or scoped_question, 'status': '', 'date_filter': 'last_hour' if duration_minutes <= 60 else '', 'limit': 8}, emit=emit)
+    _run_scoped_tool(session, user_message, user, collected, sections, citations, tool_names, 'query_dashboard_panel_data', {'query': health_query or scoped_question, 'duration_minutes': duration_minutes, 'limit': 3}, emit=emit)
+    _run_scoped_tool(session, user_message, user, collected, sections, citations, tool_names, 'query_traces', {'query': service or health_query or scoped_question, 'errors_only': True, 'duration_minutes': duration_minutes, 'limit': 6}, emit=emit)
+    _run_scoped_tool(
+        session,
+        user_message,
+        user,
+        collected,
+        sections,
+        citations,
+        tool_names,
+        'query_knowledge_graph',
+        {
+            'query': health_query or scoped_question,
+            'environment': knowledge_environment.get('name'),
+            'system_name': system_name,
+            'service': service,
+            'limit': 8,
+        },
+        emit=emit,
+    )
+    if analysis_scope.get('k8s_cluster_ids'):
+        _run_scoped_tool(session, user_message, user, collected, sections, citations, tool_names, 'query_k8s_resources', {'query': scoped_question, 'resource_type': 'workloads', 'limit': 8}, emit=emit)
+    result = _build_evidence_bundle_result(
+        question=question,
+        scoped_question=scoped_question,
+        knowledge_environment=knowledge_environment,
+        analysis_scope=analysis_scope,
+        provider=provider,
+        active_skills=active_skills,
+        sections=sections,
+        citations=citations,
+        tool_names=tool_names,
+        collected_tool_outputs=collected,
+        execution_mode='deterministic_slo_analysis',
+        extra_metadata={'system_name': system_name, 'service': service, 'duration_minutes': duration_minutes},
+    )
+    return _attach_selected_action_metadata(result, action, extra_metadata={'action_route': 'deterministic_slo_analysis'})
 
 
 def _run_service_anomaly_evidence(session, user_message, user, question, scoped_question, knowledge_environment, analysis_scope, provider, active_skills, emit):
@@ -7964,10 +8144,12 @@ def _build_tool_trace_response_block(tool_names, collected_tool_outputs):
 def _build_pending_action_response_block(draft, pending_action=None, disabled=False, disabled_reason='policy'):
     if not draft:
         return None
+    if not draft.get('error'):
+        draft = _ensure_task_draft_title(draft)
     disabled_by_analysis_only = disabled and disabled_reason == 'analysis_only'
     status = pending_action.status if pending_action else ('disabled' if disabled else 'draft')
     status_display = pending_action.get_status_display() if pending_action else ('只分析' if disabled_by_analysis_only else ('已关闭' if disabled else '待确认'))
-    disabled_summary = '本轮已开启只分析，未生成待执行任务。' if disabled_by_analysis_only else '管理员已关闭动作执行，当前只保留分析和任务草稿能力。'
+    disabled_summary = '当前仅分析，不会生成待执行动作。' if disabled_by_analysis_only else '管理员已关闭动作执行，当前只保留分析和任务草稿能力。'
     metrics = [
         {'label': '目标主机', 'value': f"{draft.get('host_count') or 0} 台"},
         {'label': '执行方式', 'value': draft.get('execution_mode') or '--'},
@@ -8900,6 +9082,206 @@ def _build_task_sections(draft):
     return sections
 
 
+GENERIC_TASK_TITLES = {'', 'Ansible Playbook 执行', 'Playbook 执行', 'playbook执行', 'AIOps 智能任务', '智能巡检任务', 'AIOps Playbook 任务'}
+GENERIC_TASK_TITLE_KEYS = {
+    '',
+    'ansibleplaybook执行',
+    'playbook执行',
+    'ansibleplaybook执行任务',
+    'playbook执行任务',
+    '执行playbook',
+    '执行ansibleplaybook',
+    'playbook任务',
+    'aiopsplaybook任务',
+    'aiops智能任务',
+    '智能巡检任务',
+}
+
+
+def _compact_task_title(value, max_length=48):
+    text = re.sub(r'\s+', ' ', str(value or '')).strip(' ，,。；;：:')
+    if not text:
+        return ''
+    return text[:max_length].rstrip(' ，,。；;：:')
+
+
+def _strip_task_title_environment_context(value):
+    text = _compact_task_title(value, max_length=120)
+    if not text:
+        return ''
+    text = re.sub(r'^(?:在|为|给|对)?[^，,。；;：:\s]{1,24}环境(?:下|里|中|上|的)?\s*', '', text)
+    text = re.sub(r'(?:^|[\s，,。；;：:])(?:在|为|给|对)?[^，,。；;：:\s]{1,24}环境(?:下|里|中|上|的)?\s*', ' ', text)
+    text = re.sub(r'^(?:在|为|给|对)\s*', '', text)
+    return _compact_task_title(text)
+
+
+def _is_generic_task_title(value):
+    text = _compact_task_title(value)
+    key = re.sub(r'[\s\-_/：:，,。；;（）()]', '', text).lower()
+    if text in GENERIC_TASK_TITLES or key in GENERIC_TASK_TITLE_KEYS:
+        return True
+    return bool(re.match(r'^(aiops)?(ansible)?playbook(执行|任务|执行任务)?$', key))
+
+
+def _request_summary_task_title(request_summary, *, fallback=''):
+    summary = _compact_task_title(request_summary)
+    if not summary:
+        return fallback
+    summary = re.sub(r'^(请|帮我|麻烦|安排|创建|新建|建个|建一|建立|生成|发起|准备|构建|配置|执行)\s*', '', summary)
+    summary = _strip_task_title_environment_context(summary)
+    summary = re.sub(r'^(请|帮我|麻烦|安排|创建|新建|建个|建一|建立|生成|发起|准备|构建|配置|执行)\s*', '', summary)
+    summary = _strip_task_title_environment_context(summary)
+    summary = re.sub(r'(任务草稿|草稿|待执行动作|待执行任务)$', '', summary).strip(' ，,。；;：:')
+    if not summary or _is_generic_task_title(summary):
+        return fallback
+    if not any(token in summary for token in ['任务', '巡检', '检查', '重启', '发布', '部署', '清理', '修复', '执行', 'Playbook', 'playbook']):
+        summary = f'{summary}任务'
+    return _compact_task_title(summary)
+
+
+def _target_name_for_task_title(targets):
+    names = []
+    for target in targets or []:
+        if isinstance(target, dict):
+            name = target.get('hostname') or target.get('target_name') or target.get('name') or target.get('ip_address')
+        else:
+            name = (
+                getattr(target, 'hostname', '')
+                or getattr(target, 'name', '')
+                or getattr(target, 'ip_address', '')
+            )
+        if name and name not in names:
+            names.append(str(name))
+    if not names:
+        return ''
+    if len(names) == 1:
+        return names[0]
+    return f'{names[0]} 等 {len(names)} 台'
+
+
+def _localize_task_phrase(value):
+    text = _compact_task_title(value)
+    if not text:
+        return ''
+    lowered = text.lower()
+    restart_match = re.match(r'^(restart|restarted|reload|reloaded)\s+(.+)$', lowered)
+    if restart_match:
+        verb = '重载' if restart_match.group(1).startswith('reload') else '重启'
+        return _compact_task_title(f'{verb} {text.split(None, 1)[1]}')
+    start_match = re.match(r'^start(ed)?\s+(.+)$', lowered)
+    if start_match:
+        return _compact_task_title(f'启动 {text.split(None, 1)[1]}')
+    stop_match = re.match(r'^stop(ped)?\s+(.+)$', lowered)
+    if stop_match:
+        return _compact_task_title(f'停止 {text.split(None, 1)[1]}')
+    return text
+
+
+def _playbook_content_task_title(playbook_content):
+    content = str(playbook_content or '')
+    if not content.strip():
+        return ''
+    for name in re.findall(r'(?im)^\s*-\s*name:\s*["\']?(.+?)["\']?\s*$', content):
+        title = _localize_task_phrase(name)
+        if title and not _is_generic_task_title(title) and title.lower() not in {'ping', 'debug', 'setup'}:
+            return title
+
+    command_match = re.search(r'(?im)^\s*(?:shell|command):\s*["\']?(systemctl\s+(?:restart|reload|start|stop)\s+[\w@_.-]+)', content)
+    if command_match:
+        command = command_match.group(1)
+        service_match = re.search(r'systemctl\s+(restart|reload|start|stop)\s+([\w@_.-]+)', command, re.IGNORECASE)
+        if service_match:
+            verb_map = {'restart': '重启', 'reload': '重载', 'start': '启动', 'stop': '停止'}
+            return _compact_task_title(f"{verb_map.get(service_match.group(1).lower(), '执行')} {service_match.group(2)}")
+        return _compact_task_title(command)
+
+    service_name = ''
+    service_state = ''
+    for line in content.splitlines():
+        match = re.match(r'^\s*name:\s*["\']?([\w@_.-]+)["\']?\s*$', line)
+        if match and not service_name:
+            service_name = match.group(1)
+        state_match = re.match(r'^\s*state:\s*["\']?([\w@_.-]+)["\']?\s*$', line)
+        if state_match and not service_state:
+            service_state = state_match.group(1).lower()
+    if service_name and service_state:
+        verb_map = {'restarted': '重启', 'reloaded': '重载', 'started': '启动', 'stopped': '停止'}
+        return _compact_task_title(f"{verb_map.get(service_state, '处理')} {service_name}")
+    return ''
+
+
+def _playbook_task_title(draft_request, request_summary, question, payload, targets):
+    explicit_title = _compact_task_title(
+        draft_request.get('name') or draft_request.get('title') or draft_request.get('task_name')
+    )
+    if explicit_title and not _is_generic_task_title(explicit_title):
+        return explicit_title
+
+    summary_title = _request_summary_task_title(request_summary or question)
+    if summary_title and not _is_generic_task_title(summary_title):
+        return summary_title
+
+    content_title = _playbook_content_task_title(payload.get('playbook_content') or draft_request.get('playbook_content'))
+    target_name = _target_name_for_task_title(targets)
+    if content_title and target_name:
+        return _compact_task_title(f'{target_name} {content_title}')
+    if content_title:
+        return content_title
+
+    playbook_name = _compact_task_title(payload.get('playbook_name') or draft_request.get('playbook_name'))
+    if playbook_name and playbook_name not in {'aiops_generated', 'generated', 'playbook'}:
+        return _compact_task_title(f'{playbook_name} Playbook 执行')
+
+    if target_name:
+        return _compact_task_title(f'{target_name} Playbook 执行')
+    return 'AIOps Playbook 任务'
+
+
+def _task_title_from_draft_payload(draft):
+    payload = draft.get('payload') or {}
+    task_type = draft.get('task_type') or ''
+    title_targets = draft.get('target_hosts') or []
+    if not title_targets:
+        target_refs = _dedupe_target_refs(draft.get('target_refs') or [])
+        if not target_refs:
+            target_refs = [{'source': 'host', 'id': item} for item in (draft.get('host_ids') or [])]
+            target_refs.extend({'source': 'task_resource', 'id': item} for item in (draft.get('resource_ids') or []))
+            target_refs = _dedupe_target_refs(target_refs)
+        title_targets = resolve_host_source_refs(target_refs) if target_refs else []
+    target_name = _target_name_for_task_title(title_targets)
+    if task_type == HostTask.TASK_RUN_PLAYBOOK:
+        return _playbook_task_title(
+            draft,
+            draft.get('request_summary') or '',
+            draft.get('request_summary') or '',
+            payload,
+            title_targets,
+        )
+    if task_type == HostTask.TASK_SERVICE_STATUS and payload.get('service_name'):
+        return _compact_task_title(f"{payload['service_name']} 服务状态巡检")
+    if task_type == HostTask.TASK_RUN_COMMAND and payload.get('command'):
+        command = _compact_task_title(payload.get('command'), max_length=32)
+        return _compact_task_title(f'批量命令执行：{command}')
+    summary_title = _request_summary_task_title(draft.get('request_summary') or '')
+    if summary_title:
+        return summary_title
+    if target_name:
+        return _compact_task_title(f'{target_name} 智能巡检任务')
+    return 'AIOps 智能任务'
+
+
+def _ensure_task_draft_title(draft):
+    payload = dict(draft or {})
+    title = _compact_task_title(payload.get('name') or payload.get('title') or payload.get('task_name'))
+    stripped_title = _strip_task_title_environment_context(title)
+    if stripped_title:
+        title = stripped_title
+    if not title or _is_generic_task_title(title):
+        title = _task_title_from_draft_payload(payload)
+    payload['name'] = _compact_task_title(title) or 'AIOps 智能任务'
+    return payload
+
+
 def build_task_draft(user, question='', draft_request=None):
     if not user_has_permissions(user, ['aiops.task.generate']):
         return {'error': '当前账号无权生成任务草稿。'}
@@ -8972,11 +9354,11 @@ def build_task_draft(user, question='', draft_request=None):
     elif task_kind == 'run_playbook':
         task_type = HostTask.TASK_RUN_PLAYBOOK
         payload = {
-            'playbook_name': 'aiops_generated',
+            'playbook_name': draft_request.get('playbook_name') or 'aiops_generated',
             'playbook_content': playbook_content or '- hosts: all\n  gather_facts: false\n  tasks:\n    - name: ping\n      ping:\n',
         }
         execution_mode = HostTask.EXECUTION_MODE_ANSIBLE
-        title = 'Ansible Playbook 执行'
+        title = _playbook_task_title(draft_request, request_summary, question, payload, hosts)
         description = '由 AIOps 智能助手生成的 Playbook 任务'
 
     risk_level = AIOpsPendingAction.RISK_LOW
@@ -8990,7 +9372,7 @@ def build_task_draft(user, question='', draft_request=None):
     elif task_type == HostTask.TASK_SERVICE_STATUS:
         risk_level = AIOpsPendingAction.RISK_MEDIUM
 
-    return {
+    return _ensure_task_draft_title({
         'name': title,
         'description': description,
         'task_type': task_type,
@@ -9005,7 +9387,7 @@ def build_task_draft(user, question='', draft_request=None):
         'host_count': len(target_refs),
         'risk_level': risk_level,
         'request_summary': request_summary,
-    }
+    })
 
 
 def _coerce_int_list(value):
@@ -9141,12 +9523,13 @@ def _resolve_host_targets_for_task(question='', environment='', target_status='a
 
 
 def create_pending_task_action_from_draft(session, assistant_message, draft):
+    draft = _ensure_task_draft_title(draft)
     return AIOpsPendingAction.objects.create(
         session=session,
         message=assistant_message,
         action_type=AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK,
-        title=draft['name'],
-        risk_level=draft['risk_level'],
+        title=draft.get('name') or 'AIOps 智能任务',
+        risk_level=draft.get('risk_level') or AIOpsPendingAction.RISK_LOW,
         action_payload=draft,
     )
 
@@ -9248,7 +9631,7 @@ def _resolve_task_targets_from_draft(question='', environment='', target_status=
 
 
 def _build_task_center_draft_from_aiops_draft(draft, action=None):
-    payload = dict(draft or {})
+    payload = _ensure_task_draft_title(draft)
     task_type = payload.get('task_type') or HostTask.TASK_REFRESH_METRICS
     target_type = HostTask.TARGET_K8S if str(task_type).startswith('k8s_') else HostTask.TARGET_HOST
     target_refs = _dedupe_target_refs(payload.get('target_refs') or [])
@@ -9256,6 +9639,9 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
         target_refs = [{'source': 'host', 'id': item} for item in (payload.get('host_ids') or [])]
         target_refs.extend({'source': 'task_resource', 'id': item} for item in (payload.get('resource_ids') or []))
         target_refs = _dedupe_target_refs(target_refs)
+    target_hosts = payload.get('target_hosts') or []
+    if not target_hosts and target_refs:
+        target_hosts = build_ops_host_target_snapshot(resolve_host_source_refs(target_refs))
     request_summary = payload.get('request_summary', '')
     session_id = action.session_id if action else None
     pending_action_id = action.id if action else None
@@ -9271,7 +9657,7 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
         'host_ids': payload.get('host_ids') or [],
         'resource_ids': payload.get('resource_ids') or [],
         'target_refs': target_refs,
-        'target_hosts': payload.get('target_hosts') or [],
+        'target_hosts': target_hosts,
         'host_count': payload.get('host_count') or len(target_refs),
         'risk_level': payload.get('risk_level') or HostTask.RISK_LOW,
         'request_summary': request_summary,
@@ -9287,7 +9673,7 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
 
 
 def _create_host_task_record_from_draft(draft, user, session=None, request=None):
-    payload = dict(draft or {})
+    payload = _ensure_task_draft_title(draft)
     target_refs = payload.get('target_refs') or []
     if not target_refs:
         target_refs = [{'source': 'host', 'id': item} for item in (payload.get('host_ids') or [])]
@@ -9366,10 +9752,14 @@ def confirm_action(action, user, request=None):
     if not user_has_permissions(user, ['aiops.task.execute', 'ops.host.execute']):
         raise ValueError('当前账号无权执行机器人任务。')
 
+    normalized_payload = _ensure_task_draft_title(action.action_payload or {})
+    action.action_payload = normalized_payload
+    if normalized_payload.get('name') and (not action.title or _is_generic_task_title(action.title)):
+        action.title = normalized_payload['name']
     action.status = AIOpsPendingAction.STATUS_CONFIRMED
     action.confirmed_by = user.username
     action.confirmed_at = timezone.now()
-    action.save(update_fields=['status', 'confirmed_by', 'confirmed_at', 'updated_at'])
+    action.save(update_fields=['title', 'action_payload', 'status', 'confirmed_by', 'confirmed_at', 'updated_at'])
 
     task_draft = _build_task_center_draft_from_aiops_draft(action.action_payload or {}, action=action)
     record_event(
@@ -10956,7 +11346,7 @@ def _tool_allowed(user, tool_name):
     if tool_name == 'query_dashboard_metadata':
         return user_has_permissions(user, ['ops.grafana.view'])
     if tool_name == 'query_grafana_promql':
-        return user_has_permissions(user, ['ops.grafana.view'])
+        return user_has_permissions(user, ['ops.metric.query']) or user_has_permissions(user, ['ops.grafana.view'])
     if tool_name == 'query_dashboard_panel_data':
         return user_has_permissions(user, ['ops.grafana.view'])
     if tool_name == 'query_observability_links':
@@ -11126,6 +11516,7 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
                 'range_query': {'type': 'boolean', 'description': '是否执行 query_range；看趋势、过去一段时间时填 true。'},
                 'duration_minutes': {'type': 'integer', 'minimum': 5, 'maximum': 1440},
                 'step': {'type': 'integer', 'minimum': 1, 'maximum': 3600},
+                'metric_datasource_id': {'type': 'integer', 'minimum': 1, 'description': '可选，指标数据源 ID；未提供时优先使用知识图谱环境关联的数据源。'},
                 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10},
             },
         },
@@ -11591,6 +11982,7 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
             duration_minutes=arguments.get('duration_minutes') or 30,
             step=arguments.get('step') or 60,
             limit=arguments.get('limit') or 6,
+            metric_datasource_id=arguments.get('metric_datasource_id') or '',
         )
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_ANALYSIS}
     if tool_name == 'query_dashboard_panel_data':
@@ -11740,6 +12132,20 @@ def _run_selected_action(session, user_message, user, question, scoped_question,
             action,
             emit,
         )
+    if action_code == 'slo.analysis':
+        return _run_slo_analysis_evidence(
+            session,
+            user_message,
+            user,
+            question,
+            scoped_question,
+            knowledge_environment,
+            analysis_scope,
+            provider,
+            action_skills,
+            action,
+            emit,
+        )
     if action_code == 'self_heal.recommend':
         return _run_self_heal_recommendation_evidence(
             session,
@@ -11796,7 +12202,9 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
     scoped_question = f"{knowledge_environment.get('name')} {question}".strip()
     provider_ready = _provider_is_ready(provider)
     formatter_provider = provider if provider_ready else None
+    selected_action = _select_action_for_question(question, user=user, analysis_scope=analysis_scope)
     if _is_direct_alert_analysis_question(question):
+        direct_action = selected_action if selected_action and selected_action.get('code') == 'alert.root_cause' else _action_registry_item_by_code('alert.root_cause', user=user)
         emit(
             step={
                 'title': '告警根因直接分析',
@@ -11820,7 +12228,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             registry_entry=_platform_tool_registry_entry('query_alert_root_cause'),
         )
         root_cause_result = root_cause_tool_result.get('tool_output') or {}
-        return _build_direct_tool_result(
+        result = _build_direct_tool_result(
             'query_alert_root_cause',
             {
                 **root_cause_result,
@@ -11839,8 +12247,9 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             active_skills=active_skills,
             prefer_llm=provider_ready,
         )
+        return _attach_selected_action_metadata(result, direct_action, extra_metadata={'action_route': 'direct_alert_root_cause_fastpath'}) if direct_action else result
     if _is_direct_alert_list_question(question):
-        return _direct_alert_list_fastpath(
+        result = _direct_alert_list_fastpath(
             session,
             user_message,
             user,
@@ -11852,8 +12261,10 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             active_skills,
             emit,
         )
+        alert_action = selected_action if selected_action and selected_action.get('code') == 'alert.root_cause' else _action_registry_item_by_code('alert.root_cause', user=user)
+        return _attach_selected_action_metadata(result, alert_action, extra_metadata={'action_route': 'direct_alerts_fastpath'}) if alert_action else result
     if _is_latest_alert_root_cause_question(question):
-        return _run_latest_alert_rca_evidence(
+        result = _run_latest_alert_rca_evidence(
             session,
             user_message,
             user,
@@ -11865,60 +12276,15 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             active_skills,
             emit,
         )
-    if not analysis_only and _is_task_generation_question(question):
-        return _run_task_generation_evidence(
-            session,
-            user_message,
-            user,
-            question,
-            scoped_question,
-            knowledge_environment,
-            analysis_scope,
-            formatter_provider,
-            active_skills,
-            emit,
-        )
-    if _is_k8s_analysis_question(question):
-        return _run_k8s_analysis_evidence(
-            session,
-            user_message,
-            user,
-            question,
-            scoped_question,
-            knowledge_environment,
-            analysis_scope,
-            formatter_provider,
-            active_skills,
-            emit,
-        )
-    if _is_direct_container_question(question):
-        resource_type = _detect_k8s_resource_type(question)
-        if resource_type and resource_type != 'pods':
-            tool_name = 'query_k8s_resources'
-            container_arguments = {'query': scoped_question, 'resource_type': resource_type, 'limit': 8}
-        else:
-            tool_name = 'query_k8s_cluster_summary' if any(keyword in str(question or '').lower() for keyword in ['pod', 'pods', 'k8s', 'kubernetes']) else 'query_container_assets'
-            container_arguments = {'query': scoped_question, 'limit': 1 if tool_name == 'query_k8s_cluster_summary' else 8}
-        return _direct_tool_fastpath(
-            session,
-            user_message,
-            user,
-            tool_name=tool_name,
-            arguments=container_arguments,
-            question=question,
-            scoped_question=scoped_question,
-            knowledge_environment=knowledge_environment,
-            analysis_scope=analysis_scope,
-            execution_mode='direct_container_fastpath',
-            provider=formatter_provider,
-            active_skills=active_skills,
-            emit=emit,
-            step_title='容器环境直接查询',
-            step_detail='命中 K8s/Pod/容器状态类事实问题，直接查询容器环境，LLM 只用于结果总结。',
-            step_text='正在通过平台接口查询容器环境',
-        )
-    selected_action = _select_action_for_question(question, user=user, analysis_scope=analysis_scope)
-    if selected_action:
+        alert_action = selected_action if selected_action and selected_action.get('code') == 'alert.root_cause' else _action_registry_item_by_code('alert.root_cause', user=user)
+        return _attach_selected_action_metadata(result, alert_action, extra_metadata={'action_route': 'latest_alert_root_cause'}) if alert_action else result
+    if (
+        selected_action
+        and not _is_direct_container_question(question)
+        and not _is_direct_posture_question(question)
+        and not _is_direct_promql_question(question)
+        and not _is_direct_event_list_question(question)
+    ):
         emit(
             step={
                 'title': 'Action Router',
@@ -11953,6 +12319,63 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         )
         if routed_result:
             return routed_result
+    if not analysis_only and _is_task_generation_question(question):
+        result = _run_task_generation_evidence(
+            session,
+            user_message,
+            user,
+            question,
+            scoped_question,
+            knowledge_environment,
+            analysis_scope,
+            formatter_provider,
+            active_skills,
+            emit,
+        )
+        task_action = _action_registry_item_by_code('host_task.generate', user=user)
+        return _attach_selected_action_metadata(result, task_action, extra_metadata={'action_route': 'deterministic_task_generation'}) if task_action else result
+    if _is_k8s_analysis_question(question):
+        result = _run_k8s_analysis_evidence(
+            session,
+            user_message,
+            user,
+            question,
+            scoped_question,
+            knowledge_environment,
+            analysis_scope,
+            formatter_provider,
+            active_skills,
+            emit,
+        )
+        k8s_action = _action_registry_item_by_code('k8s.diagnose', user=user)
+        return _attach_selected_action_metadata(result, k8s_action, extra_metadata={'action_route': 'deterministic_k8s_rca'}) if k8s_action else result
+    if _is_direct_container_question(question):
+        resource_type = _detect_k8s_resource_type(question)
+        if resource_type and resource_type != 'pods':
+            tool_name = 'query_k8s_resources'
+            container_arguments = {'query': scoped_question, 'resource_type': resource_type, 'limit': 8}
+        else:
+            tool_name = 'query_k8s_cluster_summary' if any(keyword in str(question or '').lower() for keyword in ['pod', 'pods', 'k8s', 'kubernetes']) else 'query_container_assets'
+            container_arguments = {'query': scoped_question, 'limit': 1 if tool_name == 'query_k8s_cluster_summary' else 8}
+        return _direct_tool_fastpath(
+            session,
+            user_message,
+            user,
+            tool_name=tool_name,
+            arguments=container_arguments,
+            question=question,
+            scoped_question=scoped_question,
+            knowledge_environment=knowledge_environment,
+            analysis_scope=analysis_scope,
+            execution_mode='direct_container_fastpath',
+            provider=formatter_provider,
+            active_skills=active_skills,
+            emit=emit,
+            step_title='容器环境直接查询',
+            step_detail='命中 K8s/Pod/容器状态类事实问题，直接查询容器环境，LLM 只用于结果总结。',
+            step_text='正在通过平台接口查询容器环境',
+            selected_action=_action_registry_item_by_code('k8s.diagnose', user=user),
+        )
     if _is_service_anomaly_question(question):
         return _run_service_anomaly_evidence(
             session,
@@ -12001,6 +12424,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             active_skills=active_skills,
         )
     if _is_direct_posture_question(question):
+        posture_action = _action_registry_item_by_code('slo.analysis', user=user)
         return _direct_tool_fastpath(
             session,
             user_message,
@@ -12018,6 +12442,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             step_title='系统态势直接查询',
             step_detail='命中 SLA/系统态势类事实问题，直接查询系统态势，LLM 只用于结果总结。',
             step_text='正在直接查询系统态势',
+            selected_action=posture_action,
         )
     if _is_direct_promql_question(question):
         promql = _extract_promql_from_question(question)
@@ -12067,6 +12492,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             step_title='事件中心直接查询',
             step_detail='命中事件/变更列表类事实问题，直接查询事件中心，LLM 只用于结果总结。',
             step_text='正在直接查询事件中心',
+            selected_action=_action_registry_item_by_code('change.correlation', user=user),
         )
     if _is_trace_focused_question(question):
         trace_arguments = {
@@ -12334,6 +12760,11 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
                     'formatter_attempts': 0,
                     'fallback_reason': str(exc)[:300],
                     'mcp_diagnostics': mcp_diagnostics,
+                    'skill_trace': _build_skill_trace(
+                        active_skills,
+                        formatter_result={'fell_back': True},
+                        tool_calls=executed_tool_names,
+                    ),
                 },
             }
         return _build_dispatch_error_result(
@@ -12447,7 +12878,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             )
     final_content = _ensure_followup_line(_normalize_formatter_output(final_content), citations)
 
-    return {
+    result = {
         'content': final_content,
         'citations': citations,
         'tool_calls': executed_tool_names,
@@ -12466,8 +12897,16 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             ),
             'formatter_attempts': (formatter_result or {}).get('attempts', 0),
             'mcp_diagnostics': mcp_diagnostics,
+            'skill_trace': _build_skill_trace(
+                active_skills,
+                formatter_result=formatter_result,
+                tool_calls=executed_tool_names,
+            ),
         },
     }
+    if selected_action:
+        return _attach_selected_action_metadata(result, selected_action, extra_metadata={'action_route': 'mcp_tool_runtime'})
+    return result
 
 
 def _build_chat_result(session, user_message, user, question, progress_callback=None, analysis_only=False):
@@ -12558,14 +12997,17 @@ def _apply_dispatch_result_to_message(session, assistant_message, result, user, 
     response_blocks = list(merged_metadata.get('response_blocks') or [])
     pending_action = None
     draft = result.get('pending_action_draft')
+    action_decision = None
 
     if draft and not draft.get('error'):
+        draft = _ensure_task_draft_title(draft)
         action_block_reason = 'policy' if not config.allow_action_execution else ('analysis_only' if analysis_only else '')
         if action_block_reason:
             if action_block_reason == 'policy':
                 merged_metadata['action_execution_disabled'] = True
             if analysis_only:
                 merged_metadata['analysis_only_enforced'] = True
+            action_decision = {'status': 'blocked', 'reason': action_block_reason}
         elif _should_materialize_host_task(question, result, draft):
             try:
                 task = _create_host_task_record_from_draft(draft, user, session=session)
@@ -12582,13 +13024,26 @@ def _apply_dispatch_result_to_message(session, assistant_message, result, user, 
                 merged_metadata['pending_action_id'] = pending_action.id
                 merged_metadata['created_task_id'] = task.id
                 merged_metadata['task_materialized_in_center'] = True
+                action_decision = {
+                    'status': 'materialized',
+                    'reason': 'task_center',
+                    'task_id': task.id,
+                    'task_name': task.name,
+                    'pending_action_id': pending_action.id,
+                }
                 final_content = f"{final_content}\n\n已在任务中心创建待执行任务：{task.name}（#{task.id}）。"
             except ValueError as exc:
                 merged_metadata['task_materialization_error'] = str(exc)[:200]
+                action_decision = {'status': 'failed', 'reason': 'task_materialization_error', 'error': str(exc)[:200]}
                 final_content = f"{final_content}\n\n任务中心创建失败：{exc}"
         else:
             pending_action = create_pending_task_action_from_draft(session, assistant_message, draft)
             merged_metadata['pending_action_id'] = pending_action.id
+            action_decision = {
+                'status': 'pending_confirmation',
+                'reason': 'requires_confirmation',
+                'pending_action_id': pending_action.id,
+            }
         pending_block = _build_pending_action_response_block(
             draft,
             pending_action=pending_action,
@@ -12597,6 +13052,16 @@ def _apply_dispatch_result_to_message(session, assistant_message, result, user, 
         )
         if pending_block:
             response_blocks = _replace_response_block(response_blocks, pending_block)
+    elif merged_metadata.get('action_preflight'):
+        action_decision = {'status': 'needs_info', 'reason': 'missing_context'}
+
+    if draft or merged_metadata.get('selected_action') or merged_metadata.get('action_trace') or action_decision:
+        merged_metadata = _upsert_action_decision_trace(
+            merged_metadata,
+            draft=draft if draft and not draft.get('error') else None,
+            pending_action=pending_action,
+            decision=action_decision,
+        )
 
     payload = {
         'content': final_content,

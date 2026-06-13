@@ -15,7 +15,7 @@
                   {{ runtimeLabel }}
                 </span>
                 <span class="aiops-subtitle">
-                  {{ effectiveAnalysisOnly ? '当前仅分析，不会触发执行动作' : (bootstrap.welcome_message || '你好，我可以帮你结合平台上下文查询资源、根因分析、生成待执行任务等。') }}
+                  {{ effectiveAnalysisOnly ? '当前仅分析，不会生成待执行动作。' : (bootstrap.welcome_message || '你好，我可以帮你结合平台上下文查询资源、根因分析、生成待执行任务等。') }}
                 </span>
               </div>
             </div>
@@ -1241,10 +1241,7 @@ function syncProcessCardState(list = renderMessages.value) {
 }
 
 function buildQuestionPayload(raw) {
-  const content = raw.trim()
-  if (!effectiveAnalysisOnly.value) return content
-  if (/不要执行|仅分析|只分析/.test(content)) return content
-  return `只做分析，不要执行：${content}`
+  return raw.trim()
 }
 
 function getDraftStorageKey(sessionId = currentSessionId.value) {

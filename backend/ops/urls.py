@@ -35,6 +35,7 @@ router.register(r'observability/datasource-links', observability_views.Observabi
 router.register(r'observability/system-posture/environments', observability_views.SystemPostureEnvironmentViewSet, basename='system-posture-environment')
 router.register(r'observability/system-posture/systems', observability_views.SystemPostureSystemViewSet, basename='system-posture-system')
 router.register(r'observability/tracing/datasources', observability_views.TracingDataSourceViewSet, basename='tracing-datasource')
+router.register(r'observability/metric/datasources', observability_views.MetricDataSourceViewSet, basename='metric-datasource')
 router.register(r'k8s/clusters', k8s_views.K8sClusterViewSet)
 router.register(r'docker/hosts', docker_views.DockerHostViewSet)
 urlpatterns = [
@@ -63,6 +64,7 @@ urlpatterns = [
     path('observability/system-posture/', observability_views.observability_system_posture, name='observability-system-posture'),
     path('observability/overview/', observability_views.observability_overview, name='observability-overview'),
     path('observability/grafana/config/', observability_views.grafana_setting_view, name='observability-grafana-config'),
+    path('observability/metrics/query/', observability_views.metrics_promql_query, name='observability-metrics-query'),
     path('observability/grafana/promql/query/', observability_views.grafana_promql_query, name='observability-grafana-promql-query'),
     path('observability/grafana/panel/query/', observability_views.grafana_panel_query, name='observability-grafana-panel-query'),
     path('observability/tracing/providers/', observability_views.tracing_providers, name='observability-tracing-providers'),

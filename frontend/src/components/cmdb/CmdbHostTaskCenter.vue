@@ -334,8 +334,8 @@
           </div>
         </div>
         <el-table size="small" :data="tasks" v-loading="taskLoading" row-key="id" :empty-text="ui.emptyTasks" @selection-change="handleTaskHistorySelectionChange">
-          <el-table-column type="selection" width="44" reserve-selection />
-          <el-table-column :label="ui.taskName" min-width="240">
+          <el-table-column type="selection" width="36" reserve-selection />
+          <el-table-column :label="ui.taskName" min-width="220">
             <template #default="{ row }">
               <div class="history-name-cell">
                 <button type="button" class="history-name-button" @click="openDetail(row)">
@@ -349,18 +349,19 @@
               </div>
             </template>
           </el-table-column>
-          <el-table-column :label="ui.executionType" width="130">
+          <el-table-column prop="environment_display" :label="ui.environment" width="112" show-overflow-tooltip />
+          <el-table-column :label="ui.executionType" width="108">
             <template #default="{ row }">{{ templateExecutionKindLabel(row) }}</template>
           </el-table-column>
-          <el-table-column prop="created_by" :label="ui.executor" width="100" />
-          <el-table-column prop="target_count" :label="ui.targetCount" width="84" />
-          <el-table-column :label="ui.result" width="120">
+          <el-table-column prop="created_by" :label="ui.executor" width="86" show-overflow-tooltip />
+          <el-table-column prop="target_count" :label="ui.targetCount" width="72" />
+          <el-table-column :label="ui.result" width="112">
             <template #default="{ row }"><el-tag size="small" :type="taskStatusType(row.status)">{{ row.lifecycle_status_display || row.status_display }}</el-tag></template>
           </el-table-column>
-          <el-table-column :label="ui.finishedAt" width="170">
+          <el-table-column :label="ui.finishedAt" width="150">
             <template #default="{ row }">{{ formatDateTime(row.finished_at || row.created_at) }}</template>
           </el-table-column>
-          <el-table-column :label="ui.actions" width="196" fixed="right">
+          <el-table-column :label="ui.actions" width="172" fixed="right">
             <template #default="{ row }">
               <div class="history-row-actions">
                 <el-button link type="primary" size="small" @click="openDetail(row)">{{ ui.detail }}</el-button>
@@ -693,6 +694,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, Collection, Promotion, Search, VideoPlay } from '@element-plus/icons-vue'
 import { useRouteTabState } from '@/composables/useRouteTabState'
+import { normalizeTaskDraftTitle } from '@/utils/taskDraftTitle'
 import {
   batchCancelHostTasks,
   cancelHostTask,
@@ -1141,6 +1143,39 @@ function executionTargetMeta(row) {
   const parts = [row?.host_ip, row?.target_namespace, normalizedKind].filter(Boolean)
   return parts.join(' / ')
 }
+function appendEnvironmentValue(list, value) {
+  const text = String(value || '').trim()
+  if (text && !list.includes(text)) list.push(text)
+}
+function appendEnvironmentItems(list, items) {
+  if (!Array.isArray(items)) return
+  items.forEach(item => {
+    appendEnvironmentValue(list, item?.environment_name)
+    appendEnvironmentValue(list, item?.environment)
+    appendEnvironmentValue(list, item?.env)
+    appendEnvironmentValue(list, item?.namespace)
+  })
+}
+function formatEnvironmentValues(values) {
+  const items = values.filter(Boolean)
+  if (!items.length) return '-'
+  if (items.length === 1) return items[0]
+  return `${items[0]} 等 ${items.length} 个`
+}
+function taskEnvironmentDisplay(task = {}) {
+  const values = []
+  const selectionFilters = task.selection_filters || {}
+  const sourceContext = task.source_context || {}
+  appendEnvironmentValue(values, task.environment_name)
+  appendEnvironmentValue(values, task.environment)
+  appendEnvironmentValue(values, selectionFilters.environment_name)
+  appendEnvironmentValue(values, selectionFilters.environment)
+  appendEnvironmentValue(values, sourceContext.environment_name)
+  appendEnvironmentValue(values, sourceContext.environment)
+  appendEnvironmentValue(values, sourceContext.resource_environment)
+  appendEnvironmentItems(values, task.target_snapshot)
+  return formatEnvironmentValues(values)
+}
 function buildTemplateDraft(source = {}) {
   const taskType = source.task_type || 'run_command'
   const targetType = source.target_type || (taskType.startsWith('k8s_') ? 'k8s' : 'host')
@@ -1348,7 +1383,11 @@ async function fetchTasks() {
       trigger_source: taskFilters.value.trigger_source || undefined,
       risk_level: taskFilters.value.risk_level || undefined,
     })
-    tasks.value = res.results || res
+    const rows = res.results || res || []
+    tasks.value = rows.map(row => ({
+      ...row,
+      environment_display: taskEnvironmentDisplay(row),
+    }))
     taskTotal.value = res.count || tasks.value.length
   } catch (error) {
     ElMessage.error(ui.loadTasksFailed)
@@ -1416,13 +1455,14 @@ function buildPrefillDraftFromTask(task = {}) {
 }
 async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
   if (!taskDraft?.task_type) return
+  const normalizedTaskName = normalizeTaskDraftTitle(taskDraft)
   hostTableRef.value?.clearSelection()
   k8sTargetTableRef.value?.clearSelection()
   selectedRows.value = []
   selectedK8sRows.value = []
   executionKind.value = detectExecutionKind(taskDraft)
   taskForm.value = {
-    name: taskDraft.name || '',
+    name: normalizedTaskName || taskDraft.name || '',
     target_type: taskDraft.target_type || (taskDraft.task_type?.startsWith('k8s_') ? 'k8s' : 'host'),
     task_type: taskDraft.task_type,
     description: taskDraft.description || '',

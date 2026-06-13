@@ -31,6 +31,10 @@ urlpatterns = [
     path('admin/providers/presets/', views.model_provider_presets, name='aiops-provider-presets-explicit'),
     path('admin/audit/overview/', views.audit_overview, name='aiops-audit-overview'),
     path('admin/audit/costs/', views.audit_cost_overview, name='aiops-audit-cost-overview'),
+    path('admin/audit/skill-traces/', views.audit_skill_traces, name='aiops-audit-skill-traces'),
+    path('admin/audit/skill-traces/bulk-delete/', views.audit_skill_traces_bulk_delete, name='aiops-audit-skill-traces-bulk-delete'),
+    path('admin/audit/action-traces/', views.audit_action_traces, name='aiops-audit-action-traces'),
+    path('admin/audit/action-traces/bulk-delete/', views.audit_action_traces_bulk_delete, name='aiops-audit-action-traces-bulk-delete'),
     re_path(r'^admin/audit/costs/?$', views.audit_cost_overview, name='aiops-audit-cost-overview-compat'),
     re_path(
         r'^sessions/(?P<pk>\d+)/delete_session/?$',

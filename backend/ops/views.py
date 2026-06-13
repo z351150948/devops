@@ -8,6 +8,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
+from aiops.models import AIOpsPendingAction
 from eventwall.mixins import EventWallModelViewSetMixin
 from eventwall.models import EventRecord
 from eventwall.services import build_json_preview, build_resource, record_event
@@ -609,8 +610,34 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             title='创建任务中心任务',
             summary=f'任务 {task.name} 已创建，目标 {target_label}',
         )
+        self._sync_aiops_pending_action_task(task, request.user)
         data = HostTaskDetailSerializer(self.get_queryset().get(pk=task.pk)).data
         return Response(data, status=status.HTTP_201_CREATED)
+
+    def _sync_aiops_pending_action_task(self, task, user):
+        source_context = task.source_context or {}
+        pending_action_id = source_context.get('pending_action_id')
+        if not pending_action_id or source_context.get('source') != 'aiops':
+            return
+        action = AIOpsPendingAction.objects.filter(
+            pk=pending_action_id,
+            session__user_id=user.id,
+            action_type=AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK,
+            mirror_source__isnull=True,
+        ).first()
+        if not action:
+            return
+        action.result_payload = {
+            **(action.result_payload or {}),
+            'draft_ready': True,
+            'task_id': task.id,
+            'created_task_id': task.id,
+            'task_name': task.name,
+            'materialized_in_task_center': True,
+        }
+        if action.status != AIOpsPendingAction.STATUS_EXECUTED:
+            action.status = AIOpsPendingAction.STATUS_EXECUTED
+        action.save(update_fields=['status', 'result_payload', 'updated_at'])
 
     def _infer_risk_level(self, validated, hosts=None, k8s_targets=None):
         hosts = hosts or []

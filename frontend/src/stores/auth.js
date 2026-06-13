@@ -63,11 +63,6 @@ export const useAuthStore = defineStore('auth', () => {
       return null
     }
 
-    if (currentUser.value) {
-      void reloadProfile({ silent: true, clearOnUnauthorized: false })
-      return currentUser.value
-    }
-
     return reloadProfile({ silent: true, clearOnUnauthorized: true })
   }
 

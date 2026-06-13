@@ -142,6 +142,11 @@
               <el-option v-for="item in catalog.grafana_folders" :key="item.key" :label="folderLabel(item)" :value="item.key" />
             </el-select>
           </el-form-item>
+          <el-form-item label="指标数据源">
+            <el-select v-model="form.metric_datasource_ids" multiple filterable clearable placeholder="选择一个或多个 Prometheus 兼容指标数据源">
+              <el-option v-for="item in catalog.metric_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="日志数据源">
             <el-select v-model="form.log_datasource_ids" multiple filterable clearable placeholder="选择一个或多个日志中心数据源">
               <el-option v-for="item in catalog.log_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
@@ -249,6 +254,7 @@ const environments = ref([])
 const catalog = reactive({
   event_environments: [],
   grafana_folders: [],
+  metric_datasources: [],
   log_datasources: [],
   tracing_datasources: [],
   observability_links: [],
@@ -265,6 +271,7 @@ const form = reactive({
   description: '',
   event_environments: [],
   grafana_folder_keys: [],
+  metric_datasource_ids: [],
   log_datasource_ids: [],
   tracing_datasource_ids: [],
   observability_link_ids: [],
@@ -285,6 +292,7 @@ const enabledCount = computed(() => environments.value.filter(item => item.is_en
 const totalBindingCount = computed(() => environments.value.reduce((total, item) => total
   + (item.event_environments?.length || 0)
   + (item.grafana_folder_keys?.length || 0)
+  + (item.metric_datasource_ids?.length || 0)
   + (item.log_datasource_ids?.length || 0)
   + (item.tracing_datasource_ids?.length || 0)
   + (item.observability_link_ids?.length || 0)
@@ -306,6 +314,7 @@ function resetForm(row = null) {
   form.description = row?.description || ''
   form.event_environments = [...(row?.event_environments || [])]
   form.grafana_folder_keys = [...(row?.grafana_folder_keys || [])]
+  form.metric_datasource_ids = [...(row?.metric_datasource_ids || [])]
   form.log_datasource_ids = [...(row?.log_datasource_ids || [])]
   form.tracing_datasource_ids = [...(row?.tracing_datasource_ids || [])]
   form.observability_link_ids = [...(row?.observability_link_ids || [])]
@@ -322,6 +331,7 @@ function hasAnyBinding() {
   return [
     form.event_environments,
     form.grafana_folder_keys,
+    form.metric_datasource_ids,
     form.log_datasource_ids,
     form.tracing_datasource_ids,
     form.observability_link_ids,
@@ -359,7 +369,11 @@ function observabilityLinkLabel(item) {
 }
 
 function datasourceNames(ids = [], type = 'log') {
-  const source = type === 'trace' ? catalog.tracing_datasources : catalog.log_datasources
+  const source = type === 'trace'
+    ? catalog.tracing_datasources
+    : type === 'metric'
+      ? catalog.metric_datasources
+      : catalog.log_datasources
   const nameMap = new Map(source.map(item => [Number(item.id), item.name]))
   return ids.map(id => nameMap.get(Number(id)) || `ID ${id}`)
 }
@@ -397,6 +411,7 @@ function observabilityNames(row) {
     ...(row.posture_environments || []).map(name => `系统态势: ${postureEnvironmentNames([name])[0]}`),
     ...(row.observability_link_ids || []).map(name => `关联: ${observabilityLinkNames([name])[0]}`),
     ...(row.grafana_folder_keys || []).map(name => `看板: ${name}`),
+    ...(row.metric_datasource_ids || []).map(name => `指标: ${datasourceNames([name], 'metric')[0]}`),
     ...(row.log_datasource_ids || []).map(name => `日志: ${datasourceNames([name], 'log')[0]}`),
     ...(row.tracing_datasource_ids || []).map(name => `链路: ${datasourceNames([name], 'trace')[0]}`),
   ]
@@ -428,6 +443,7 @@ async function loadData() {
     Object.assign(catalog, {
       event_environments: options.event_environments || [],
       grafana_folders: options.grafana_folders || [],
+      metric_datasources: options.metric_datasources || [],
       log_datasources: options.log_datasources || [],
       tracing_datasources: options.tracing_datasources || [],
       observability_links: options.observability_links || [],
@@ -461,6 +477,7 @@ async function submitForm() {
       description: form.description,
       event_environments: form.event_environments,
       grafana_folder_keys: form.grafana_folder_keys,
+      metric_datasource_ids: form.metric_datasource_ids,
       log_datasource_ids: form.log_datasource_ids,
       tracing_datasource_ids: form.tracing_datasource_ids,
       observability_link_ids: form.observability_link_ids,

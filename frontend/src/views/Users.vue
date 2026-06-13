@@ -219,7 +219,7 @@
       </template>
     </div>
 
-    <el-dialog v-model="userDialogVisible" :title="editingUserId ? '编辑用户' : '新增用户'" width="720px" destroy-on-close>
+    <el-dialog v-model="userDialogVisible" :title="editingUserId ? '编辑用户' : '新增用户'" width="720px" destroy-on-close append-to-body>
       <el-form :model="userForm" label-width="90px">
         <div class="dialog-grid">
           <el-form-item label="用户名">
@@ -264,7 +264,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="roleDialogVisible" :title="editingRoleId ? '编辑角色' : '新增角色'" width="760px" destroy-on-close>
+    <el-dialog v-model="roleDialogVisible" :title="editingRoleId ? '编辑角色' : '新增角色'" width="760px" destroy-on-close append-to-body>
       <el-form :model="roleForm" label-width="90px">
         <el-form-item label="角色编码">
           <el-input v-model="roleForm.code" :disabled="currentRoleBuiltin" />
@@ -287,7 +287,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="groupDialogVisible" :title="editingGroupId ? '编辑用户组' : '新增用户组'" width="760px" destroy-on-close>
+    <el-dialog v-model="groupDialogVisible" :title="editingGroupId ? '编辑用户组' : '新增用户组'" width="760px" destroy-on-close append-to-body>
       <el-form :model="groupForm" label-width="90px">
         <el-form-item label="用户组编码">
           <el-input v-model="groupForm.code" :disabled="currentGroupBuiltin" />

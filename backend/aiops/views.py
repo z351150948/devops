@@ -1,4 +1,4 @@
-from datetime import datetime, time as datetime_time
+from datetime import datetime, timedelta, time as datetime_time
 
 from django.core.cache import cache
 from django.db.models import Count, Q
@@ -11,7 +11,7 @@ from rest_framework.response import Response
 
 from eventwall.models import EventRecord
 from eventwall.services import record_event
-from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, TaskResource, TaskResourceGroup, TracingDataSource
+from ops.models import Alert, DockerHost, GrafanaSetting, K8sCluster, LogDataSource, MetricDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, TaskResource, TaskResourceGroup, TracingDataSource
 from rbac.permissions import RBACPermissionMixin, build_rbac_permission
 from rbac.services import is_demo_account, user_has_permissions
 
@@ -33,6 +33,7 @@ from .models import (
 from .serializers import (
     AIOpsAgentConfigSerializer,
     AIOpsAuditSessionSerializer,
+    AIOpsAuditTraceReader,
     AIOpsChatInputSerializer,
     AIOpsChatMessageSerializer,
     AIOpsChatSessionSerializer,
@@ -293,6 +294,257 @@ def _filter_audit_time_range(queryset, request, field_name):
     return queryset
 
 
+def _audit_overview_window(request):
+    range_type = _audit_query_param(request, 'range').lower()
+    if range_type == 'all':
+        return None, None
+    start_at = _audit_range_datetime(_audit_query_param(request, 'start', 'start_at'))
+    end_at = _audit_range_datetime(_audit_query_param(request, 'end', 'end_at'), end_of_day=True)
+    if start_at or end_at:
+        return start_at, end_at
+    try:
+        days = int(_audit_query_param(request, 'days') or 7)
+    except (TypeError, ValueError):
+        days = 7
+    days = max(1, min(days, 90))
+    end_at = timezone.now()
+    return end_at - timedelta(days=days), end_at
+
+
+def _filter_audit_window(queryset, field_name, start_at=None, end_at=None):
+    if start_at:
+        queryset = queryset.filter(**{f'{field_name}__gte': start_at})
+    if end_at:
+        queryset = queryset.filter(**{f'{field_name}__lte': end_at})
+    return queryset
+
+
+def _audit_trace_message_queryset(request):
+    queryset = AIOpsChatMessage.objects.select_related('session', 'session__user').filter(
+        role=AIOpsChatMessage.ROLE_ASSISTANT,
+        session__mirror_source__isnull=True,
+    )
+    username = _audit_query_param(request, 'username', 'user')
+    if username:
+        queryset = queryset.filter(session__user__username__icontains=username)
+    queryset = _filter_audit_time_range(queryset, request, 'created_at')
+    return queryset.order_by('-created_at', '-id')
+
+
+def _audit_text_matches(query, *values):
+    if not query:
+        return True
+    needle = str(query).strip().lower()
+    if not needle:
+        return True
+    text = ' '.join(str(value or '') for value in values).lower()
+    return needle in text
+
+
+def _paginate_audit_rows(request, rows):
+    paginator = _AuditRecentPagination()
+    page = paginator.paginate_queryset(rows, request)
+    if page is not None:
+        return paginator.get_paginated_response(page)
+    return Response(rows)
+
+
+def _audit_message_base_payload(message):
+    session = message.session
+    user = getattr(session, 'user', None)
+    return {
+        'message_id': message.id,
+        'session': session.id,
+        'session_title': session.title,
+        'username': getattr(user, 'username', ''),
+        'created_at': message.created_at,
+    }
+
+
+def _normalize_audit_trace_list(values):
+    normalized = []
+    for item in values or []:
+        value = str(item or '').strip()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _audit_display_list(values, display_map):
+    display_values = []
+    for value in _normalize_audit_trace_list(values):
+        display_value = str(display_map.get(value) or value).strip()
+        if display_value and display_value not in display_values:
+            display_values.append(display_value)
+    return display_values
+
+
+def _audit_skill_display_map():
+    return {
+        skill.slug: skill.name or skill.slug
+        for skill in AIOpsSkill.objects.all().only('slug', 'name')
+        if skill.slug
+    }
+
+
+def _audit_action_display_map(user=None):
+    return {
+        item.get('code'): item.get('display_name') or item.get('code')
+        for item in list_action_registry(user=user, include_unavailable=True)
+        if item.get('code')
+    }
+
+
+def _audit_hidden_trace_ids(message, trace_type):
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    hidden_ids = metadata.get(f'audit_hidden_{trace_type}_trace_ids') or []
+    return set(_normalize_audit_trace_list(hidden_ids))
+
+
+def _audit_trace_item_id(message, index, item, trace_type):
+    if trace_type == 'skill':
+        suffix = item.get('slug') or item.get('id') or item.get('name') or 'trace'
+        return f'skill-{message.id}-{index}-{suffix}'
+    if trace_type == 'action':
+        return f'action-{message.id}-{item.get("code") or "trace"}'
+    return ''
+
+
+def _audit_invocation_distribution(request):
+    start_at, end_at = _audit_overview_window(request)
+    tool_queryset = AIOpsToolInvocation.objects.filter(session__mirror_source__isnull=True)
+    tool_queryset = _filter_audit_window(tool_queryset, 'created_at', start_at, end_at)
+    message_queryset = AIOpsChatMessage.objects.select_related('session', 'session__user').filter(
+        role=AIOpsChatMessage.ROLE_ASSISTANT,
+        session__mirror_source__isnull=True,
+    )
+    message_queryset = _filter_audit_window(message_queryset, 'created_at', start_at, end_at)
+
+    reader = AIOpsAuditTraceReader()
+    skill_counts = {}
+    action_counts = {}
+    action_display_map = _audit_action_display_map(user=getattr(request, 'user', None))
+    for message in message_queryset.iterator():
+        hidden_skill_ids = _audit_hidden_trace_ids(message, 'skill')
+        skill_trace = reader._skill_trace_for_message(message)
+        skill_items = skill_trace.get('items') if isinstance(skill_trace, dict) else []
+        for index, item in enumerate(skill_items or []):
+            if not isinstance(item, dict):
+                continue
+            item_status = item.get('status') or 'available'
+            used_tools = _normalize_audit_trace_list(item.get('used_tools') or [])
+            is_hit = item_status != 'available' or bool(used_tools) or bool(item.get('action_code'))
+            if is_hit and _audit_trace_item_id(message, index, item, 'skill') not in hidden_skill_ids:
+                key = str(item.get('slug') or item.get('name') or item.get('id') or 'unknown').strip()
+                label = str(item.get('name') or item.get('slug') or '未命名 Skill').strip()
+                if key not in skill_counts:
+                    skill_counts[key] = {'key': key, 'label': label, 'count': 0}
+                skill_counts[key]['count'] += 1
+
+        action_trace = reader._action_trace_for_message(message)
+        if isinstance(action_trace, dict) and action_trace:
+            hidden_action_ids = _audit_hidden_trace_ids(message, 'action')
+            if _audit_trace_item_id(message, 0, action_trace, 'action') not in hidden_action_ids:
+                code = str(action_trace.get('code') or 'unknown').strip()
+                label = str(action_display_map.get(code) or action_trace.get('display_name') or action_trace.get('code') or '未命名 Action').strip()
+                if code not in action_counts:
+                    action_counts[code] = {'key': code, 'label': label, 'count': 0}
+                action_counts[code]['count'] += 1
+
+    mcp_tools = [
+        {
+            'key': item.get('tool_name') or 'unknown',
+            'label': item.get('tool_name') or '未命名工具',
+            'count': item.get('count') or 0,
+        }
+        for item in tool_queryset.values('tool_name').annotate(count=Count('id')).order_by('-count', 'tool_name')
+    ]
+    skills = sorted(skill_counts.values(), key=lambda item: (-item['count'], item['label']))
+    actions = sorted(action_counts.values(), key=lambda item: (-item['count'], item['label']))
+    mcp_tool_calls = sum(item['count'] for item in mcp_tools)
+    skill_hits = sum(item['count'] for item in skills)
+    action_hits = sum(item['count'] for item in actions)
+    total = mcp_tool_calls + skill_hits + action_hits
+    return {
+        'mcp_tool_calls': mcp_tool_calls,
+        'skill_hits': skill_hits,
+        'action_hits': action_hits,
+        'total': total,
+        'mcp_tools': mcp_tools,
+        'skills': skills,
+        'actions': actions,
+    }
+
+
+def _audit_trace_message_id(trace_id, trace_type):
+    prefix = f'{trace_type}-'
+    text = str(trace_id or '').strip()
+    if not text.startswith(prefix):
+        return None
+    message_id = text[len(prefix):].split('-', 1)[0]
+    return int(message_id) if message_id.isdigit() else None
+
+
+def _hide_audit_trace_rows(request, trace_type, label):
+    trace_ids = request.data.get('trace_ids')
+    if trace_ids is None:
+        trace_ids = request.data.get(f'{trace_type}_trace_ids')
+    if trace_ids is None:
+        trace_ids = request.data.get('ids')
+    if not isinstance(trace_ids, list):
+        return Response({'detail': 'trace_ids 必须为数组'}, status=status.HTTP_400_BAD_REQUEST)
+    normalized_ids = _normalize_audit_trace_list(trace_ids)
+    if not normalized_ids:
+        return Response({'detail': f'请至少选择一个{label}记录'}, status=status.HTTP_400_BAD_REQUEST)
+
+    ids_by_message = {}
+    for trace_id in normalized_ids:
+        message_id = _audit_trace_message_id(trace_id, trace_type)
+        if message_id:
+            ids_by_message.setdefault(message_id, []).append(trace_id)
+    if not ids_by_message:
+        return Response({'detail': '未找到可删除的审计记录'}, status=status.HTTP_404_NOT_FOUND)
+
+    messages = list(AIOpsChatMessage.objects.filter(
+        id__in=ids_by_message.keys(),
+        role=AIOpsChatMessage.ROLE_ASSISTANT,
+        session__mirror_source__isnull=True,
+    ))
+    deleted_count = 0
+    metadata_key = f'audit_hidden_{trace_type}_trace_ids'
+    for message in messages:
+        metadata = dict(message.metadata or {})
+        hidden_ids = _normalize_audit_trace_list(metadata.get(metadata_key) or [])
+        before_count = len(hidden_ids)
+        for trace_id in ids_by_message.get(message.id, []):
+            if trace_id not in hidden_ids:
+                hidden_ids.append(trace_id)
+        if len(hidden_ids) == before_count:
+            continue
+        metadata[metadata_key] = hidden_ids
+        message.metadata = metadata
+        message.save(update_fields=['metadata'])
+        deleted_count += len(hidden_ids) - before_count
+
+    if not deleted_count:
+        return Response({'detail': '未找到可删除的审计记录'}, status=status.HTTP_404_NOT_FOUND)
+
+    record_event(
+        request=request,
+        module='aiops',
+        category='audit',
+        action=f'bulk_delete_{trace_type}_traces',
+        title=f'批量删除 AIOps {label}审计',
+        summary=f'已批量删除 {deleted_count} 个{label}记录',
+        resource_type=f'aiops_{trace_type}_trace',
+        resource_id=deleted_count,
+        resource_name=label,
+        correlation_id=f'aiops-{trace_type}-trace-bulk:{deleted_count}',
+        metadata={'trace_ids': normalized_ids[:50]},
+    )
+    return Response({'deleted': deleted_count}, status=status.HTTP_200_OK)
+
+
 def _clean_catalog_value(value):
     return str(value or '').strip()
 
@@ -421,6 +673,21 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             for item in TracingDataSource.objects.filter(is_enabled=True).order_by('provider', 'name')
             if not _is_demoish_catalog_item(item.name, item.description, item.provider)
         ]
+        metric_datasources = [
+            {
+                'id': item.id,
+                'name': item.name,
+                'provider': item.provider,
+                'provider_display': item.get_provider_display(),
+                'description': item.description,
+                'environment': item.environment,
+                'cluster_name': item.cluster_name,
+                'tsdb_type': item.tsdb_type,
+                'is_default': item.is_default,
+            }
+            for item in MetricDataSource.objects.filter(is_enabled=True).order_by('environment', '-is_default', 'name')
+            if not _is_demoish_catalog_item(item.name, item.description, item.provider)
+        ]
         observability_links = [
             {
                 'id': item.id,
@@ -505,6 +772,7 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
                 if not _is_invalid_environment_value(item)
             ],
             'grafana_folders': sorted(folder_map.values(), key=lambda item: item['label']),
+            'metric_datasources': metric_datasources,
             'log_datasources': log_datasources,
             'tracing_datasources': tracing_datasources,
             'observability_links': observability_links,
@@ -712,7 +980,15 @@ class AIOpsAuditSessionViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
     }
 
     def get_queryset(self):
-        queryset = AIOpsChatSession.objects.filter(mirror_source__isnull=True).select_related('user').annotate(message_count=Count('messages'))
+        queryset = AIOpsChatSession.objects.filter(mirror_source__isnull=True).select_related('user').annotate(
+            message_count=Count('messages', distinct=True),
+            tool_invocation_count=Count('tool_invocations', distinct=True),
+            pending_action_count=Count(
+                'pending_actions',
+                filter=Q(pending_actions__mirror_source__isnull=True),
+                distinct=True,
+            ),
+        )
         query = _audit_query_param(self.request, 'q', 'search')
         if query:
             queryset = queryset.filter(Q(title__icontains=query) | Q(user__username__icontains=query))
@@ -1440,10 +1716,152 @@ def agent_config_view(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, build_rbac_permission('aiops.audit.view')])
+def audit_skill_traces(request):
+    query = _audit_query_param(request, 'q', 'search')
+    status_value = _audit_query_param(request, 'status')
+    reader = AIOpsAuditTraceReader()
+    action_display_map = _audit_action_display_map(user=request.user)
+    rows = []
+
+    for message in _audit_trace_message_queryset(request).iterator():
+        hidden_ids = _audit_hidden_trace_ids(message, 'skill')
+        trace = reader._skill_trace_for_message(message)
+        items = trace.get('items') if isinstance(trace, dict) else []
+        for index, item in enumerate(items or []):
+            if not isinstance(item, dict):
+                continue
+            item_status = item.get('status') or 'available'
+            used_tools = _normalize_audit_trace_list(item.get('used_tools') or [])
+            is_hit = item_status != 'available' or bool(used_tools) or bool(item.get('action_code'))
+            if not is_hit:
+                continue
+            if status_value and item_status != status_value:
+                continue
+            declared_tools = _normalize_audit_trace_list(item.get('declared_tools') or [])
+            applicable_actions = _normalize_audit_trace_list(item.get('applicable_actions') or [])
+            applicable_action_names = _audit_display_list(applicable_actions, action_display_map)
+            action_code = item.get('action_code') or ''
+            payload = {
+                **_audit_message_base_payload(message),
+                'id': f'skill-{message.id}-{index}-{item.get("slug") or item.get("id") or item.get("name") or "trace"}',
+                'skill_id': item.get('id'),
+                'name': item.get('name') or item.get('slug') or '',
+                'slug': item.get('slug') or '',
+                'category': item.get('category') or '',
+                'risk_level': item.get('risk_level') or '',
+                'status': item_status,
+                'hit_reason': item.get('hit_reason') or '',
+                'action_code': action_code,
+                'action_display_name': action_display_map.get(action_code, action_code) if action_code else '',
+                'applicable_actions': applicable_actions,
+                'applicable_action_names': applicable_action_names,
+                'declared_tools': declared_tools,
+                'used_tools': used_tools,
+                'inferred': bool(trace.get('inferred')) if isinstance(trace, dict) else False,
+            }
+            if payload['id'] in hidden_ids:
+                continue
+            if not _audit_text_matches(
+                query,
+                payload['name'],
+                payload['slug'],
+                payload['category'],
+                payload['hit_reason'],
+                payload['action_code'],
+                payload['action_display_name'],
+                payload['session_title'],
+                payload['username'],
+                ' '.join(applicable_actions),
+                ' '.join(applicable_action_names),
+                ' '.join(declared_tools),
+                ' '.join(used_tools),
+            ):
+                continue
+            rows.append(payload)
+
+    return _paginate_audit_rows(request, rows)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('aiops.audit.view')])
+def audit_action_traces(request):
+    query = _audit_query_param(request, 'q', 'search')
+    status_value = _audit_query_param(request, 'status')
+    risk_level = _audit_query_param(request, 'risk_level', 'risk')
+    reader = AIOpsAuditTraceReader()
+    skill_display_map = _audit_skill_display_map()
+    rows = []
+
+    for message in _audit_trace_message_queryset(request).iterator():
+        hidden_ids = _audit_hidden_trace_ids(message, 'action')
+        trace = reader._action_trace_for_message(message)
+        if not isinstance(trace, dict) or not trace:
+            continue
+        trace_status = trace.get('status') or ('matched' if trace.get('hit') else '')
+        if status_value and trace_status != status_value:
+            continue
+        if risk_level and (trace.get('risk_level') or '') != risk_level:
+            continue
+        skills = _normalize_audit_trace_list(trace.get('skills') or [])
+        skill_names = _audit_display_list(skills, skill_display_map)
+        allowed_tools = _normalize_audit_trace_list(trace.get('allowed_tools') or [])
+        decision = trace.get('decision') if isinstance(trace.get('decision'), dict) else {}
+        payload = {
+            **_audit_message_base_payload(message),
+            'id': f'action-{message.id}-{trace.get("code") or "trace"}',
+            'code': trace.get('code') or '',
+            'display_name': trace.get('display_name') or trace.get('code') or '',
+            'risk_level': trace.get('risk_level') or '',
+            'risk_level_display': trace.get('risk_level_display') or '',
+            'status': trace_status,
+            'route': trace.get('route') or '',
+            'skills': skills,
+            'skill_names': skill_names,
+            'allowed_tools': allowed_tools,
+            'draft_generated': bool(trace.get('draft_generated')),
+            'pending_action': trace.get('pending_action') if isinstance(trace.get('pending_action'), dict) else {},
+            'decision': decision,
+        }
+        if payload['id'] in hidden_ids:
+            continue
+        if not _audit_text_matches(
+            query,
+            payload['display_name'],
+            payload['code'],
+            payload['route'],
+            payload['session_title'],
+            payload['username'],
+            decision.get('task_name'),
+            decision.get('reason'),
+            ' '.join(skills),
+            ' '.join(skill_names),
+            ' '.join(allowed_tools),
+        ):
+            continue
+        rows.append(payload)
+
+    return _paginate_audit_rows(request, rows)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('aiops.audit.manage')])
+def audit_skill_traces_bulk_delete(request):
+    return _hide_audit_trace_rows(request, 'skill', 'Skill 命中')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, build_rbac_permission('aiops.audit.manage')])
+def audit_action_traces_bulk_delete(request):
+    return _hide_audit_trace_rows(request, 'action', 'Action 命中')
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, build_rbac_permission('aiops.audit.view')])
 def audit_overview(request):
     data = build_audit_overview()
     data['session_status'] = list(AIOpsChatSession.objects.filter(mirror_source__isnull=True).values('status').annotate(count=Count('id')).order_by('status'))
     data['action_status'] = list(AIOpsPendingAction.objects.filter(mirror_source__isnull=True, session__mirror_source__isnull=True).values('status').annotate(count=Count('id')).order_by('status'))
+    data['invocation_distribution'] = _audit_invocation_distribution(request)
     return Response(data)
 
 

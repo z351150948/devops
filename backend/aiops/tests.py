@@ -13,7 +13,7 @@ from rest_framework.test import APIClient
 from cmdb.models import CIType, ConfigItem
 from eventwall.models import EventRecord, EventSource
 from marketplace.models import ServiceDeployment, ServiceTemplate
-from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSystem, TaskResource, TaskResourceGroup, TracingDataSource, TransactionTicket
+from ops.models import Alert, Deployment, DockerHost, GrafanaSetting, Host, HostTask, K8sCluster, LogDataSource, LogEntry, MetricDataSource, ObservabilityDataSourceLink, SystemPostureEnvironment, SystemPostureSystem, TaskResource, TaskResourceGroup, TracingDataSource, TransactionTicket
 from rbac.models import Role
 from rbac.services import ensure_builtin_rbac
 
@@ -233,13 +233,10 @@ class AIOpsApiTests(TestCase):
             'log.query_generate',
             'k8s.diagnose',
             'self_heal.recommend',
-            'metric.query_generate',
-            'deploy.failure_diagnose',
+            'host_task.generate',
             'slo.analysis',
-            'notification.policy_suggest',
-            'runbook.generate',
         }.issubset(action_codes))
-        self.assertEqual(response.data['action_registry_summary']['total'], 10)
+        self.assertEqual(response.data['action_registry_summary']['total'], 7)
         self.assertIn('read_only', response.data['action_registry_summary'])
         self.assertTrue({
             '知识图谱 MCP',
@@ -312,21 +309,18 @@ class AIOpsApiTests(TestCase):
             'log.query_generate',
             'k8s.diagnose',
             'self_heal.recommend',
-            'metric.query_generate',
-            'deploy.failure_diagnose',
+            'host_task.generate',
             'slo.analysis',
-            'notification.policy_suggest',
-            'runbook.generate',
         }.issubset(action_codes))
-        self.assertEqual(response.data['summary']['total'], 10)
+        self.assertEqual(response.data['summary']['total'], 7)
         alert_action = next(item for item in response.data['actions'] if item['code'] == 'alert.root_cause')
         self.assertTrue(alert_action['available'])
         self.assertIn('query_alerts', alert_action['allowed_tools'])
         self.assertIn('incident_card', alert_action['output_blocks'])
         self.assertEqual(alert_action['risk_level_display'], '只读')
-        metric_action = next(item for item in response.data['actions'] if item['code'] == 'metric.query_generate')
-        self.assertEqual(metric_action['category'], '查询生成')
-        self.assertIn('query_grafana_promql', metric_action['allowed_tools'])
+        slo_action = next(item for item in response.data['actions'] if item['code'] == 'slo.analysis')
+        self.assertEqual(slo_action['category'], '服务健康')
+        self.assertIn('query_system_posture', slo_action['allowed_tools'])
 
     def test_action_preflight_endpoint_returns_approval_contract(self):
         get_agent_config()
@@ -353,6 +347,8 @@ class AIOpsApiTests(TestCase):
             'log.query_generate',
             'k8s.diagnose',
             'self_heal.recommend',
+            'host_task.generate',
+            'slo.analysis',
         }
         for action in list_action_registry(user=self.user, include_unavailable=True):
             for question in action.get('suggested_questions') or []:
@@ -372,6 +368,28 @@ class AIOpsApiTests(TestCase):
                         self.assertIsNotNone(routed)
                         self.assertEqual(routed['code'], action['code'])
 
+    def test_default_suggested_questions_route_to_actions(self):
+        get_agent_config()
+        self.ensure_ecommerce_knowledge_environment()
+
+        expected_routes = {
+            '电商测试环境当前未确认的严重告警有哪些？': 'alert.root_cause',
+            '电商测试环境最近有哪些事件': 'change.correlation',
+            '分析下电商测试环境 k8s 集群的异常工作负载': 'k8s.diagnose',
+            '分析下电商测试环境订单服务最近一小时有什么异常': 'alert.root_cause',
+            '帮我生成个电商测试环境服务器巡检任务': 'host_task.generate',
+            '分析下电商测试环境订单服务最近一次发布后有没有异常': 'change.correlation',
+            '电商测试环境订单服务最近一小时 ERROR/WARN 日志有什么共同模式': 'log.query_generate',
+            '分析电商测试环境最新一条告警可能原因': 'alert.root_cause',
+        }
+
+        self.assertEqual(set(DEFAULT_SUGGESTED_QUESTIONS), set(expected_routes))
+        for question, action_code in expected_routes.items():
+            with self.subTest(question=question):
+                routed = _select_action_for_question(question, user=self.user)
+                self.assertIsNotNone(routed)
+                self.assertEqual(routed['code'], action_code)
+
     def test_action_user_question_variants_pass_preflight_and_supported_routes(self):
         get_agent_config()
         self.ensure_ecommerce_knowledge_environment()
@@ -381,46 +399,62 @@ class AIOpsApiTests(TestCase):
                 '帮我看下电商测试环境订单服务 5xx 告警是什么原因',
                 '电商测试环境支付服务一直报错，帮我定位是不是告警导致的',
                 '排查一下电商环境最新告警的根因',
+                '这个 alert 为什么一直触发',
+                '看一下最近的 P1 告警影响了哪些服务',
+                '排查支付服务超时告警',
             ],
             'change.correlation': [
+                '电商测试环境最近有哪些事件',
                 '今天订单服务发布后错误率升高，帮我看看和变更有没有关系',
                 '最近的上线是不是导致了电商测试环境订单服务异常',
                 '查一下发布、工单和告警是否在同一个时间窗口',
+                '上线以后接口失败率升高是不是发布导致的',
+                '这次回滚有没有影响订单链路',
+                'deployment 之后 pod 异常和变更有关吗',
             ],
             'log.query_generate': [
+                '电商测试环境订单服务最近一小时 ERROR/WARN 日志有什么共同模式',
                 '给订单服务生成最近 15 分钟 ERROR 日志查询条件',
                 '帮我查下电商测试环境 checkout 的超时日志',
                 '我要一条 Loki 查询语句看 order-service warning 日志',
+                '按 trace_id 检索 checkout 错误日志',
+                '查一下 nginx access log 里 5xx 请求',
+                '生成 SLS 查询条件看订单失败',
             ],
             'k8s.diagnose': [
+                '分析下电商测试环境k8s集群的异常工作负载',
                 '看看电商测试环境 production 命名空间 Pod CrashLoopBackOff 怎么回事',
                 '帮我排查 order deployment 副本不可用',
                 '电商测试环境 k8s 节点资源不足会影响哪些 pod',
+                'statefulset 一直 pending 是什么原因',
+                'production namespace pod crash 怎么看',
+                'kubernetes 节点 notready 会影响哪些 workload',
+                '容器重启次数很高帮我诊断',
             ],
             'self_heal.recommend': [
                 '订单服务 5xx 告警怎么处置，推荐个安全方案',
                 '这个故障能不能先 dry-run 一个自愈脚本',
                 '帮我生成针对支付服务超时的修复建议，不要直接执行',
+                '支付服务超时怎么修复，给个建议',
+                '这个故障可以自动恢复吗',
+                '帮我给订单服务设计处置方案，不要执行',
             ],
-            'metric.query_generate': [
-                '帮我写一个 PromQL 看订单服务错误率',
-                '生成 checkout 最近一小时 P95 延迟和 QPS 查询',
-            ],
-            'deploy.failure_diagnose': [
-                '订单服务发布失败了，帮我诊断可能原因',
-                '最近一次上线失败和 k8s 事件有没有关系',
+            'host_task.generate': [
+                '帮我建个电商测试环境的服务器巡检任务',
+                '给生产环境生成主机巡检任务',
+                '帮我在电商测试环境安装redis',
+                '在电商测试环境生成一份服务器健康检查任务',
+                '创建一个检查磁盘空间的任务',
+                '给这些主机生成执行 uptime 的命令任务',
+                '安排 ansible playbook 检查 nginx 状态',
             ],
             'slo.analysis': [
+                '分析下最近电商测试环境的SLO情况',
                 '分析 checkout 服务今天 SLO 有没有风险',
                 '订单服务健康度下降主要是延迟还是错误率导致的',
-            ],
-            'notification.policy_suggest': [
-                '生产环境 P1 告警应该通知谁，多久升级一次',
-                '帮我给订单服务设计告警通知升级策略',
-            ],
-            'runbook.generate': [
-                '把这次订单服务 5xx 故障整理成 runbook',
-                '生成一个支付服务超时的排障手册草案',
+                '看看 checkout 可用性有没有跌破目标',
+                '最近接口成功率怎么样',
+                'P95 延迟升高会不会影响 SLA',
             ],
         }
         routed_action_codes = {
@@ -429,6 +463,8 @@ class AIOpsApiTests(TestCase):
             'log.query_generate',
             'k8s.diagnose',
             'self_heal.recommend',
+            'host_task.generate',
+            'slo.analysis',
         }
 
         for action_code, questions in variants.items():
@@ -448,6 +484,30 @@ class AIOpsApiTests(TestCase):
                         routed = _select_action_for_question(question, user=self.user)
                         self.assertIsNotNone(routed)
                         self.assertEqual(routed['code'], action_code)
+
+    def test_legacy_generate_task_tool_call_infers_action_trace(self):
+        from .serializers import AIOpsAuditTraceReader
+
+        session = AIOpsChatSession.objects.create(user=self.user, title='legacy-task-action')
+        message = AIOpsChatMessage.objects.create(
+            session=session,
+            role=AIOpsChatMessage.ROLE_ASSISTANT,
+            content='已生成任务草稿',
+            tool_calls=['query_task_resources', 'generate_host_task'],
+            metadata={
+                'action_trace': {
+                    'draft_generated': True,
+                    'decision': {'status': 'pending_confirmation', 'pending_action_id': 12},
+                    'status': 'pending_confirmation',
+                },
+            },
+        )
+
+        trace = AIOpsAuditTraceReader()._action_trace_for_message(message)
+
+        self.assertEqual(trace['code'], 'host_task.generate')
+        self.assertEqual(trace['display_name'], '任务生成')
+        self.assertTrue(trace['inferred'])
 
     def test_skill_marketplace_can_clone_builtin_skill(self):
         get_agent_config()
@@ -680,13 +740,16 @@ class AIOpsApiTests(TestCase):
             )
 
         default_response = self.client.get('/api/aiops/admin/audit/tool-invocations/')
+        ten_response = self.client.get('/api/aiops/admin/audit/tool-invocations/', {'page_size': 10})
         twenty_response = self.client.get('/api/aiops/admin/audit/tool-invocations/', {'page_size': 20})
         max_response = self.client.get('/api/aiops/admin/audit/tool-invocations/', {'page_size': 999})
 
         self.assertEqual(default_response.status_code, 200)
+        self.assertEqual(ten_response.status_code, 200)
         self.assertEqual(twenty_response.status_code, 200)
         self.assertEqual(max_response.status_code, 200)
         self.assertEqual(len(self.response_results(default_response)), 20)
+        self.assertEqual(len(self.response_results(ten_response)), 10)
         self.assertEqual(len(self.response_results(twenty_response)), 20)
         self.assertEqual(len(self.response_results(max_response)), 100)
 
@@ -695,13 +758,13 @@ class AIOpsApiTests(TestCase):
 
         response = self.client.post('/api/aiops/a2a/tasks/', {
             'source_agent': 'external-orchestrator',
-            'title': '生成故障 Runbook',
-            'action_code': 'runbook.generate',
+            'title': '分析 SLO 风险',
+            'action_code': 'slo.analysis',
             'input_payload': {'environment': 'prod', 'service': 'order-service'},
         }, format='json')
 
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.data['action_code'], 'runbook.generate')
+        self.assertEqual(response.data['action_code'], 'slo.analysis')
         self.assertEqual(response.data['status'], AIOpsExternalTask.STATUS_QUEUED)
         self.assertTrue(response.data['plan_steps'])
 
@@ -735,9 +798,9 @@ class AIOpsApiTests(TestCase):
 
         interrupt_source = self.client.post('/api/aiops/a2a/tasks/', {
             'source_agent': 'external-orchestrator',
-            'title': '发布失败诊断',
-            'action_code': 'deploy.failure_diagnose',
-            'input_payload': {'environment': 'prod', 'service': 'order-service'},
+            'title': 'K8s 异常诊断',
+            'action_code': 'k8s.diagnose',
+            'input_payload': {'environment': 'prod', 'cluster': 'prod-k8s'},
         }, format='json')
         interrupt_response = self.client.post(f"/api/aiops/a2a/tasks/{interrupt_source.data['public_id']}/interrupt/", {}, format='json')
 
@@ -2083,6 +2146,41 @@ class AIOpsApiTests(TestCase):
         self.assertIn('Grafana / PromQL 指标结果', result['sections'][0]['title'])
         mocked_promql.assert_called_once()
 
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_grafana_promql_prefers_knowledge_metric_datasource(self, mocked_promql):
+        metric_source = MetricDataSource.objects.create(
+            name='prod-prometheus',
+            environment='prod',
+            config={'query_url': 'http://prometheus.prod.local:9090'},
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产'],
+            metric_datasource_ids=[metric_source.id],
+            event_environments=['prod'],
+            is_enabled=True,
+        )
+        mocked_promql.return_value = {
+            'query': 'up',
+            'range': True,
+            'source': 'metric_datasource',
+            'description': 'prod-prometheus',
+            'metric_datasource': {'id': metric_source.id, 'name': metric_source.name},
+            'series_count': 1,
+            'result': [{'metric': {'job': 'api'}, 'values': [[1710000000, '1']]}],
+            'sample': [],
+        }
+        session = AIOpsChatSession.objects.create(user=self.user, title='metric-promql')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='prod 看 up')
+
+        result = query_grafana_promql(session, user_message, self.user, query='prod 看 up', promql='up')
+
+        self.assertEqual(result['summary']['source'], 'metric_datasource')
+        self.assertEqual(result['summary']['metric_datasource']['id'], metric_source.id)
+        mocked_promql.assert_called_once()
+        self.assertEqual(mocked_promql.call_args.kwargs['metric_datasource_id'], metric_source.id)
+        self.assertTrue(mocked_promql.call_args.kwargs['prefer_metric_datasource'])
+
     def test_knowledge_graph_filters_k8s_services_by_configured_namespaces(self):
         cluster = K8sCluster.objects.create(
             name='retail-namespace-k8s',
@@ -2305,6 +2403,28 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         keys = {item['key'] for item in response.data['presets']}
         self.assertTrue({'deepseek', 'zhipu_glm', 'minimax'}.issubset(keys))
+
+    def test_provider_preset_key_is_saved_and_returned(self):
+        response = self.client.post(
+            '/api/aiops/admin/providers/',
+            {
+                'name': 'preset-provider',
+                'provider_type': AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+                'provider_preset': 'deepseek',
+                'base_url': 'https://api.deepseek.com',
+                'default_model': 'deepseek-v4-flash',
+                'price_currency': AIOpsModelProvider.CURRENCY_CNY,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['provider_preset'], 'deepseek')
+        self.assertEqual(response.data['max_tokens'], 10000)
+
+        detail_response = self.client.get(f"/api/aiops/admin/providers/{response.data['id']}/")
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data['provider_preset'], 'deepseek')
 
     def test_audit_tool_invocations_support_delete_and_bulk_delete(self):
         session = AIOpsChatSession.objects.create(user=self.user, title='tool-audit-delete')
@@ -3720,6 +3840,8 @@ class AIOpsApiTests(TestCase):
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
         self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_posture_fastpath')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'slo.analysis')
+        self.assertTrue(assistant_message['metadata']['action_trace']['hit'])
         self.assertIn('query_system_posture', assistant_message['tool_calls'])
         self.assertIn('checkout', assistant_message['content'])
         self.assertIn('99.95', assistant_message['content'])
@@ -4501,6 +4623,8 @@ class AIOpsApiTests(TestCase):
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
         self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_events_fastpath')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'change.correlation')
+        self.assertTrue(assistant_message['metadata']['action_trace']['hit'])
         self.assertEqual(assistant_message['metadata']['event_filters']['date_filter'], 'today')
         self.assertIn('query_events', assistant_message['tool_calls'])
         self.assertIn('checkout 发布完成', assistant_message['content'])
@@ -4554,6 +4678,8 @@ class AIOpsApiTests(TestCase):
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
         self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_events_fastpath')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'change.correlation')
+        self.assertTrue(assistant_message['metadata']['action_trace']['hit'])
         self.assertEqual(assistant_message['metadata']['event_filters']['date_filter'], 'today')
         self.assertEqual(assistant_message['tool_calls'], ['query_events'])
         self.assertIn('checkout 发布完成', assistant_message['content'])
@@ -4643,6 +4769,8 @@ class AIOpsApiTests(TestCase):
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
         self.assertEqual(assistant_message['metadata']['execution_mode'], 'deterministic_k8s_rca')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'k8s.diagnose')
+        self.assertTrue(assistant_message['metadata']['action_trace']['hit'])
         self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
         self.assertIn('query_k8s_cluster_summary', assistant_message['tool_calls'])
         self.assertIn('query_alerts', assistant_message['tool_calls'])
@@ -4650,6 +4778,44 @@ class AIOpsApiTests(TestCase):
         self.assertIn('query_system_posture', assistant_message['tool_calls'])
         self.assertIn('nginx-deployment', assistant_message['content'])
         self.assertIn('order deployment failed', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_action_router_routes_slo_question_to_service_health_action(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_ecommerce_knowledge_environment()
+        Alert.objects.create(
+            title='checkout success rate SLO risk',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout success rate below target',
+            environment='电商测试',
+            service='order-service',
+            is_acknowledged=False,
+        )
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'action-slo'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '分析下最近电商测试环境的SLO情况'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        metadata = assistant_message['metadata']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(metadata['execution_mode'], 'deterministic_slo_analysis')
+        self.assertEqual(metadata['selected_action']['code'], 'slo.analysis')
+        self.assertTrue(metadata['action_trace']['hit'])
+        self.assertIn('query_system_posture', assistant_message['tool_calls'])
+        self.assertIn('query_alerts', assistant_message['tool_calls'])
+        self.assertIn('query_dashboard_panel_data', assistant_message['tool_calls'])
+        self.assertIn('query_traces', assistant_message['tool_calls'])
+        self.assertIn('query_knowledge_graph', assistant_message['tool_calls'])
+        self.assertIn('下单成功率', assistant_message['content'])
         mocked_completion.assert_not_called()
 
     @mock.patch('aiops.services._request_model_completion')
@@ -4727,6 +4893,8 @@ class AIOpsApiTests(TestCase):
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
         self.assertEqual(assistant_message['metadata']['execution_mode'], 'deterministic_task_generation')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'host_task.generate')
+        self.assertTrue(assistant_message['metadata']['action_trace']['hit'])
         self.assertIn('query_task_resources', assistant_message['tool_calls'])
         self.assertIn('generate_host_task', assistant_message['tool_calls'])
         self.assertIsNotNone(response.data['pending_action'])
@@ -5508,6 +5676,114 @@ class AIOpsApiTests(TestCase):
 
         generic_draft = build_task_draft(self.user, '生成一份 Redis 巡检任务。', {'request_summary': '生成一份 Redis 巡检任务。'})
         self.assertIn('error', generic_draft)
+
+    def test_playbook_task_draft_title_describes_request(self):
+        Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline')
+
+        draft = build_task_draft(
+            self.user,
+            '在 legacy-data-sync 上执行重启 nginx 的 playbook',
+            {
+                'name': 'playbook执行',
+                'request_summary': '在 legacy-data-sync 上执行重启 nginx 的 playbook',
+                'task_kind': 'run_playbook',
+                'playbook_name': 'restart_nginx',
+                'playbook_content': '- hosts: all\n  tasks:\n    - name: restart nginx\n      service:\n        name: nginx\n        state: restarted\n',
+            },
+        )
+
+        self.assertNotEqual(draft['name'], 'playbook执行')
+        self.assertIn('legacy-data-sync', draft['name'])
+        self.assertIn('重启 nginx', draft['name'])
+
+    def test_confirm_action_repairs_legacy_generic_playbook_title(self):
+        host = Host.objects.create(hostname='legacy-data-sync', ip_address='10.20.30.20', environment='prod', status='offline')
+        session = AIOpsChatSession.objects.create(user=self.user, title='legacy-playbook-title')
+        assistant_message = AIOpsChatMessage.objects.create(session=session, role='assistant', content='已生成任务草稿')
+        legacy_payload = {
+            'name': 'Ansible Playbook 执行',
+            'description': '由 AIOps 智能助手生成的 Playbook 任务',
+            'task_type': HostTask.TASK_RUN_PLAYBOOK,
+            'payload': {
+                'playbook_name': 'aiops_generated',
+                'playbook_content': '- hosts: all\n  tasks:\n    - name: restart nginx\n      service:\n        name: nginx\n        state: restarted\n',
+            },
+            'host_ids': [host.id],
+            'target_refs': [{'source': 'host', 'id': host.id}],
+            'host_count': 1,
+            'execution_mode': HostTask.EXECUTION_MODE_ANSIBLE,
+            'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+            'timeout_seconds': 30,
+            'risk_level': AIOpsPendingAction.RISK_HIGH,
+            'request_summary': '在 legacy-data-sync 上执行重启 nginx 的 playbook',
+        }
+        action = AIOpsPendingAction.objects.create(
+            session=session,
+            message=assistant_message,
+            action_type=AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK,
+            title='Ansible Playbook 执行',
+            risk_level=AIOpsPendingAction.RISK_HIGH,
+            action_payload=legacy_payload,
+        )
+        from .serializers import AIOpsPendingActionSerializer
+
+        serialized_action = AIOpsPendingActionSerializer(action).data
+        self.assertNotEqual(serialized_action['title'], 'Ansible Playbook 执行')
+        self.assertIn('legacy-data-sync', serialized_action['title'])
+        self.assertEqual(serialized_action['action_payload']['name'], serialized_action['title'])
+
+        task_draft = confirm_action(action, self.user)
+
+        self.assertNotEqual(task_draft['name'], 'Ansible Playbook 执行')
+        self.assertIn('legacy-data-sync', task_draft['name'])
+        self.assertIn('重启 nginx', task_draft['name'])
+        self.assertEqual(task_draft['target_hosts'][0]['hostname'], 'legacy-data-sync')
+        action.refresh_from_db()
+        self.assertEqual(action.title, task_draft['name'])
+        self.assertEqual(action.action_payload['name'], task_draft['name'])
+
+    def test_task_draft_title_omits_environment_prefix(self):
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='tf-k3s-single-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.176',
+            ssh_user='root',
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='电商测试环境',
+            aliases=['电商测试'],
+            task_resource_environment_ids=[env.id],
+        )
+
+        draft = build_task_draft(
+            self.user,
+            '电商测试环境 帮我建个电商测试环境的服务器巡检任务',
+            {
+                'request_summary': '电商测试环境 帮我建个电商测试环境的服务器巡检任务',
+                'resource_environment': '电商测试环境',
+                'target_resource_ids': [resource.id],
+                'task_kind': 'refresh_metrics',
+            },
+        )
+
+        self.assertNotIn('电商测试环境', draft['name'])
+        self.assertIn('服务器巡检任务', draft['name'])
+
+        session = AIOpsChatSession.objects.create(user=self.user, title='env-title')
+        assistant_message = AIOpsChatMessage.objects.create(session=session, role='assistant', content='已生成任务草稿')
+        action = create_pending_task_action_from_draft(session, assistant_message, {
+            **draft,
+            'name': '智能巡检任务',
+            'request_summary': '电商测试环境 帮我建个电商测试环境的服务器巡检任务',
+        })
+        from .serializers import AIOpsPendingActionSerializer
+
+        serialized_action = AIOpsPendingActionSerializer(action).data
+        self.assertNotIn('电商测试环境', serialized_action['title'])
+        self.assertIn('服务器巡检任务', serialized_action['title'])
 
     def test_build_task_draft_resolves_config_item_id_before_conflicting_ip(self):
         ci_type, _ = CIType.objects.get_or_create(name='云主机(ECS)')

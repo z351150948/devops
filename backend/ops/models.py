@@ -1371,6 +1371,37 @@ class TracingDataSource(models.Model):
         return f'{self.get_provider_display()} - {self.name}'
 
 
+class MetricDataSource(models.Model):
+    PROVIDER_PROMETHEUS = 'prometheus'
+    PROVIDER_CHOICES = [
+        (PROVIDER_PROMETHEUS, 'Prometheus Like'),
+    ]
+
+    name = models.CharField('指标数据源名称', max_length=128, unique=True)
+    provider = models.CharField('指标数据源类型', max_length=32, choices=PROVIDER_CHOICES, default=PROVIDER_PROMETHEUS)
+    description = models.CharField('描述', max_length=255, blank=True, default='')
+    environment = models.CharField('环境', max_length=32, blank=True, default='')
+    cluster_name = models.CharField('集群标识', max_length=128, blank=True, default='')
+    tsdb_type = models.CharField('TSDB 类型', max_length=32, blank=True, default='prometheus')
+    config = models.JSONField('连接配置', default=dict, blank=True)
+    is_enabled = models.BooleanField('启用', default=True)
+    is_default = models.BooleanField('默认数据源', default=False)
+    created_at = models.DateTimeField('创建时间', auto_now_add=True)
+    updated_at = models.DateTimeField('更新时间', auto_now=True)
+
+    class Meta:
+        verbose_name = '指标数据源'
+        verbose_name_plural = '指标数据源'
+        ordering = ['environment', '-is_default', 'name']
+        indexes = [
+            models.Index(fields=['environment', 'is_enabled'], name='ops_metric_ds_env_enabled_idx'),
+            models.Index(fields=['provider', 'is_enabled'], name='ops_metric_ds_provider_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.name} ({self.get_provider_display()})'
+
+
 class ObservabilityDataSourceLink(models.Model):
     name = models.CharField('关联名称', max_length=128, unique=True)
     log_datasource = models.ForeignKey(

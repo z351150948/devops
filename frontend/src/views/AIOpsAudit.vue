@@ -10,20 +10,6 @@
       </div>
     </section>
 
-    <div class="audit-grid audit-overview-grid">
-      <button
-        v-for="card in overviewCards"
-        :key="card.key"
-        type="button"
-        class="audit-card audit-card--inline audit-card--action"
-        :class="[card.tone, { 'is-active': activeTab === card.tab }]"
-        @click="switchTab(card.tab)"
-      >
-        <div class="stat-label">{{ card.label }}</div>
-        <div class="stat-value">{{ card.value }}</div>
-      </button>
-    </div>
-
     <div class="neo-tabs theme-blue log-center-tabs trace-center-tabs event-tabs-shell audit-tabs">
       <button
         v-for="tab in auditTabs"
@@ -42,7 +28,7 @@
       <div class="section-toolbar">
         <div class="toolbar-head">
           <span class="toolbar-title">运行概览</span>
-          <span class="toolbar-desc">汇总今日活跃、所选时间范围内的模型成本、工具调用与动作状态。</span>
+          <span class="toolbar-desc">聚焦所选时间范围内的调用命中明细与模型成本。</span>
         </div>
         <div class="overview-time-controls">
           <el-date-picker
@@ -73,22 +59,55 @@
         </div>
       </div>
 
-      <div class="overview-metric-strip">
-        <div v-for="item in overviewMetricCards" :key="item.key" class="overview-metric-card">
-          <span>{{ item.label }}</span>
-          <strong>{{ item.value }}</strong>
-          <small>{{ item.desc }}</small>
-        </div>
-      </div>
-
       <div class="overview-dashboard-grid">
+        <div class="overview-invocation-section">
+          <div class="invocation-chart-grid">
+            <div v-for="chart in overviewInvocationCharts" :key="chart.key" class="invocation-chart-card">
+              <div class="invocation-chart-head">
+                <strong>{{ chart.title }}</strong>
+                <el-tag size="small" effect="plain">{{ formatNumber(chart.total) }} 次</el-tag>
+              </div>
+              <div class="invocation-pie-layout">
+                <div
+                  class="invocation-pie"
+                  :style="chart.pieStyle"
+                  @mousemove="handleInvocationPieMove($event, chart)"
+                  @mouseleave="clearInvocationPieHover"
+                >
+                  <div class="invocation-pie-core">
+                    <strong>{{ formatNumber(chart.total) }}</strong>
+                    <span>总计</span>
+                  </div>
+                  <div
+                    v-if="invocationPieHover.chartKey === chart.key && invocationPieHover.item"
+                    class="invocation-pie-tooltip"
+                    :style="{ left: `${invocationPieHover.x}px`, top: `${invocationPieHover.y}px` }"
+                  >
+                    <strong>{{ invocationPieHover.item.label }}</strong>
+                    <span>{{ formatNumber(invocationPieHover.item.value) }} 次</span>
+                  </div>
+                </div>
+                <div v-if="chart.total" class="invocation-pie-legend">
+                  <div v-for="item in chart.rows" :key="item.key" class="invocation-pie-row">
+                    <div class="invocation-pie-row-head">
+                      <span class="invocation-dot" :style="{ background: item.color }"></span>
+                      <span>{{ item.label }}</span>
+                      <em>{{ formatPercent(item.value, chart.total) }}</em>
+                      <strong>{{ formatNumber(item.value) }}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="overview-empty">{{ chart.emptyText }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="overview-panel overview-panel--model">
           <div class="overview-panel-head">
             <div>
               <span class="section-title">模型成本</span>
-              <p>按提供商聚合所选时间范围内的调用、Token 与预估费用。</p>
             </div>
-            <el-tag size="small" effect="plain">平均耗时 {{ formatLatency(modelCostSummary.avg_latency_ms) }}</el-tag>
           </div>
           <div class="overview-mini-grid">
             <div class="overview-mini-stat">
@@ -102,6 +121,10 @@
             <div class="overview-mini-stat">
               <span>费用</span>
               <strong>{{ formatModelCostSummary(modelCostSummary) }}</strong>
+            </div>
+            <div class="overview-mini-stat">
+              <span>平均耗时</span>
+              <strong>{{ formatLatency(modelCostSummary.avg_latency_ms) }}</strong>
             </div>
           </div>
           <div class="overview-rank-list">
@@ -120,67 +143,6 @@
               </div>
             </div>
             <div v-if="!modelProviderRows.length" class="overview-empty">暂无模型调用数据</div>
-          </div>
-        </div>
-
-        <div class="overview-panel overview-panel--tool">
-          <div class="overview-panel-head">
-            <div>
-              <span class="section-title">工具调用</span>
-              <p>观察 MCP 与平台工具的调用频次、平均耗时。</p>
-            </div>
-            <el-tag size="small" effect="plain">{{ auditOverview.mcp_total || 0 }} 个 MCP</el-tag>
-          </div>
-          <div class="overview-mini-grid">
-            <div class="overview-mini-stat">
-              <span>工具调用</span>
-              <strong>{{ formatNumber(toolCostSummary.total_calls) }}</strong>
-            </div>
-            <div class="overview-mini-stat">
-              <span>平均耗时</span>
-              <strong>{{ formatLatency(toolCostSummary.avg_latency_ms) }}</strong>
-            </div>
-            <div class="overview-mini-stat">
-              <span>启用 MCP</span>
-              <strong>{{ formatNumber(auditOverview.mcp_total) }}</strong>
-            </div>
-          </div>
-          <div class="overview-rank-list">
-            <div v-for="item in toolRows" :key="item.tool_name" class="overview-rank-row">
-              <div class="overview-rank-main">
-                <div class="overview-rank-title">
-                  <span>{{ item.tool_name || '未命名工具' }}</span>
-                  <strong>{{ formatNumber(item.calls) }} 次</strong>
-                </div>
-                <div class="overview-rank-meta">
-                  <span>平均 {{ formatLatency(item.avg_latency_ms) }}</span>
-                </div>
-                <div class="overview-rank-bar"><span :style="{ width: `${item.percent}%` }"></span></div>
-              </div>
-            </div>
-            <div v-if="!toolRows.length" class="overview-empty">暂无工具调用数据</div>
-          </div>
-        </div>
-
-        <div class="overview-panel overview-panel--status">
-          <div class="overview-panel-head">
-            <div>
-              <span class="section-title">动作状态</span>
-              <p>查看智能体生成动作的确认、执行与失败分布。</p>
-            </div>
-            <el-tag size="small" effect="plain">{{ formatNumber(actionStatusTotal) }} 个动作</el-tag>
-          </div>
-          <div class="status-stack">
-            <div v-for="item in actionStatusRows" :key="item.status" class="status-row">
-              <div class="status-row-head">
-                <span>{{ item.label }}</span>
-                <strong>{{ formatNumber(item.count) }}</strong>
-              </div>
-              <div class="status-progress">
-                <span :class="`is-${item.tone}`" :style="{ width: `${item.percent}%` }"></span>
-              </div>
-            </div>
-            <div v-if="!actionStatusRows.length" class="overview-empty">暂无动作状态数据</div>
           </div>
         </div>
       </div>
@@ -210,13 +172,37 @@
             批量删除
           </el-button>
           <el-button
-            v-if="activeTab === 'tools' && canManageAudit"
+            v-if="activeTab === 'tools' && invocationAuditTab === 'mcp' && canManageAudit"
             class="audit-flat-action-btn"
             type="danger"
             size="small"
             plain
             :disabled="!selectedAuditToolIds.length"
             @click="handleBatchDeleteAuditTools"
+          >
+            <el-icon><Delete /></el-icon>
+            批量删除
+          </el-button>
+          <el-button
+            v-if="activeTab === 'tools' && invocationAuditTab === 'skills' && canManageAudit"
+            class="audit-flat-action-btn"
+            type="danger"
+            size="small"
+            plain
+            :disabled="!selectedAuditSkillTraceIds.length"
+            @click="handleBatchDeleteAuditSkillTraces"
+          >
+            <el-icon><Delete /></el-icon>
+            批量删除
+          </el-button>
+          <el-button
+            v-if="activeTab === 'tools' && invocationAuditTab === 'actionHits' && canManageAudit"
+            class="audit-flat-action-btn"
+            type="danger"
+            size="small"
+            plain
+            :disabled="!selectedAuditActionTraceIds.length"
+            @click="handleBatchDeleteAuditActionTraces"
           >
             <el-icon><Delete /></el-icon>
             批量删除
@@ -236,6 +222,19 @@
         </div>
       </div>
 
+      <div v-if="activeTab === 'tools'" class="audit-subtabs">
+        <button
+          v-for="tab in invocationAuditTabs"
+          :key="tab.name"
+          type="button"
+          class="audit-subtab-btn"
+          :class="{ active: invocationAuditTab === tab.name }"
+          @click="switchInvocationAuditTab(tab.name)"
+        >
+          <span>{{ tab.label }}</span>
+        </button>
+      </div>
+
       <div class="workbench-toolbar workbench-toolbar--history audit-list-toolbar">
         <div class="workbench-toolbar-left">
           <template v-if="activeTab === 'sessions'">
@@ -247,10 +246,13 @@
             <el-date-picker v-model="auditFilters.sessions.timeRange" class="audit-filter-time" size="small" type="datetimerange" format="YYYY-MM-DD HH:mm" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" clearable @change="applyAuditFilters" />
           </template>
           <template v-else-if="activeTab === 'tools'">
-            <el-input v-model="auditFilters.tools.q" class="audit-filter-search" size="small" clearable placeholder="搜索工具 / 会话" @keyup.enter="applyAuditFilters" />
+            <el-input v-model="auditFilters.tools.q" class="audit-filter-search" size="small" clearable :placeholder="invocationSearchPlaceholder" @keyup.enter="applyAuditFilters" />
             <el-input v-model="auditFilters.tools.username" class="audit-filter-user" size="small" clearable placeholder="用户" @keyup.enter="applyAuditFilters" />
-            <el-select v-model="auditFilters.tools.status" size="small" clearable placeholder="状态" @change="applyAuditFilters">
+            <el-select v-if="invocationAuditTab === 'mcp'" v-model="auditFilters.tools.status" size="small" clearable placeholder="状态" @change="applyAuditFilters">
               <el-option v-for="item in toolStatusOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+            <el-select v-if="invocationAuditTab === 'actionHits'" v-model="auditFilters.tools.risk_level" size="small" clearable placeholder="风险" @change="applyAuditFilters">
+              <el-option v-for="item in actionRiskOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
             <el-date-picker v-model="auditFilters.tools.timeRange" class="audit-filter-time" size="small" type="datetimerange" format="YYYY-MM-DD HH:mm" range-separator="至" start-placeholder="开始时间" end-placeholder="结束时间" clearable @change="applyAuditFilters" />
           </template>
@@ -288,24 +290,79 @@
         :data="auditSessions"
         stripe
         size="small"
-        class="console-table"
+        class="console-table audit-session-table"
         @selection-change="handleAuditSessionSelectionChange"
       >
-        <el-table-column v-if="canManageAudit" type="selection" width="42" />
-        <el-table-column prop="title" label="会话标题" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="username" label="用户" width="120" />
-        <el-table-column prop="message_count" label="消息数" width="90" />
-        <el-table-column label="状态" width="100">
+        <el-table-column v-if="canManageAudit" type="selection" width="34" />
+        <el-table-column type="expand" width="34">
+          <template #default="{ row }">
+            <div class="agent-trace-expand">
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Skill 命中</span>
+                  <small>{{ formatSkillTraceSummary(row) }}</small>
+                </div>
+                <div v-if="skillTraceItems(row).length" class="trace-pill-list">
+                  <span
+                    v-for="skill in skillTraceItems(row)"
+                    :key="skill.slug || skill.id || skill.name"
+                    class="trace-pill"
+                    :class="`is-${skill.status || 'available'}`"
+                  >
+                    <strong>{{ skill.name || skill.slug || '-' }}</strong>
+                    <em>{{ skillStatusLabel(skill.status) }}</em>
+                    <small v-if="skill.used_tools?.length">{{ skill.used_tools.join(' / ') }}</small>
+                  </span>
+                </div>
+                <div v-else class="trace-empty">暂无 Skill 命中记录</div>
+              </div>
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Action 命中</span>
+                  <small>{{ actionTraceTitle(row) }}</small>
+                </div>
+                <div v-if="hasActionTrace(row)" class="trace-action-main">
+                  <el-tag size="small" :type="actionTraceStatusTone(row.action_trace?.status)" effect="plain">
+                    {{ actionTraceStatusLabel(row.action_trace?.status) }}
+                  </el-tag>
+                  <strong>{{ actionTraceTitle(row) }}</strong>
+                  <span>{{ actionTraceDetail(row) }}</span>
+                </div>
+                <div v-else class="trace-empty">暂无 Action 命中记录</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="title" label="会话标题" min-width="260" show-overflow-tooltip />
+        <el-table-column prop="username" label="用户" width="88" show-overflow-tooltip />
+        <el-table-column prop="message_count" label="消息数" width="72" />
+        <el-table-column label="工具" width="68">
+          <template #default="{ row }">
+            {{ formatNumber(row.tool_invocation_count) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Skill" width="96">
+          <template #default="{ row }">
+            <el-tag size="small" :type="skillTraceTone(row)" effect="plain">{{ formatSkillTraceSummary(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Action 命中" width="112" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="hasActionTrace(row)" class="audit-action-hit">{{ actionTraceTitle(row) }}</span>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="78">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ row.status || '-' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="最后消息" min-width="180">
+        <el-table-column label="最后消息" width="132">
           <template #default="{ row }">
             {{ formatDateTimeDisplay(row.last_message_at) }}
           </template>
         </el-table-column>
-        <el-table-column v-if="canManageAudit" label="操作" width="90" fixed="right">
+        <el-table-column v-if="canManageAudit" label="操作" width="56" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" @click="handleDeleteAuditSession(row)">删除</el-button>
           </template>
@@ -313,40 +370,220 @@
       </el-table>
 
       <el-table
-        v-else-if="activeTab === 'tools'"
+        v-else-if="activeTab === 'tools' && invocationAuditTab === 'mcp'"
         v-loading="loading.tools"
         :data="auditTools"
         stripe
         size="small"
-        class="console-table"
+        class="console-table audit-invocation-table"
         @selection-change="handleAuditToolSelectionChange"
       >
-        <el-table-column v-if="canManageAudit" type="selection" width="42" />
-        <el-table-column type="expand">
+        <el-table-column v-if="canManageAudit" type="selection" width="34" />
+        <el-table-column type="expand" width="34">
           <template #default="{ row }">
             <div class="json-preview">{{ formatJsonCompact({ request_payload: row.request_payload, response_summary: row.response_summary }) }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="tool_name" label="工具" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="username" label="用户" width="120" />
-        <el-table-column label="状态" width="100">
+        <el-table-column prop="tool_name" label="MCP 工具" min-width="112" show-overflow-tooltip />
+        <el-table-column prop="session_title" label="会话" min-width="156" show-overflow-tooltip />
+        <el-table-column prop="username" label="用户" width="82" show-overflow-tooltip />
+        <el-table-column label="状态" width="82">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTone(row.status)" effect="plain">{{ row.status || '-' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="耗时" width="110">
+        <el-table-column label="耗时" width="86">
           <template #default="{ row }">
             {{ formatLatency(row.latency_ms) }}
           </template>
         </el-table-column>
-        <el-table-column label="时间" min-width="180">
+        <el-table-column label="时间" width="128">
           <template #default="{ row }">
-            {{ formatDateTimeDisplay(row.created_at) }}
+            {{ formatDateTimeCompact(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column v-if="canManageAudit" label="操作" width="90" fixed="right">
+        <el-table-column v-if="canManageAudit" label="操作" width="62" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" @click="handleDeleteAuditTool(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-table
+        v-else-if="activeTab === 'tools' && invocationAuditTab === 'skills'"
+        v-loading="loading.skillTraces"
+        :data="auditSkillTraces"
+        stripe
+        size="small"
+        class="console-table audit-invocation-table"
+        @selection-change="handleAuditSkillTraceSelectionChange"
+      >
+        <el-table-column v-if="canManageAudit" type="selection" width="34" />
+        <el-table-column type="expand" width="34">
+          <template #default="{ row }">
+            <div class="trace-detail-grid">
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Skill 详情</span>
+                  <small>{{ traceHitReasonLabel(row.hit_reason) }}</small>
+                </div>
+                <div class="trace-detail-list">
+                  <div class="trace-detail-row"><span>名称</span><strong>{{ row.name || row.slug || '-' }}</strong></div>
+                  <div class="trace-detail-row"><span>分类</span><strong>{{ row.category || '-' }}</strong></div>
+                  <div class="trace-detail-row"><span>风险</span><strong>{{ row.risk_level || '-' }}</strong></div>
+                  <div class="trace-detail-row"><span>来源</span><strong>{{ row.inferred ? '历史推断' : '运行记录' }}</strong></div>
+                </div>
+              </div>
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>工具详情</span>
+                  <small>{{ formatTraceCount(row.used_tools, '工具') }}</small>
+                </div>
+                <div class="trace-detail-list">
+                  <div class="trace-detail-row trace-detail-row--stack">
+                    <span>本次使用</span>
+                    <div v-if="traceListItems(row.used_tools).length" class="trace-detail-tags">
+                      <el-tag v-for="tool in traceListItems(row.used_tools)" :key="tool" size="small" effect="plain">{{ tool }}</el-tag>
+                    </div>
+                    <strong v-else>-</strong>
+                  </div>
+                </div>
+              </div>
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Action 关联</span>
+                  <small>{{ row.action_display_name || row.action_code || '-' }}</small>
+                </div>
+                <div v-if="traceDisplayItems(row.applicable_action_names, row.applicable_actions).length" class="trace-detail-tags">
+                  <el-tag v-for="action in traceDisplayItems(row.applicable_action_names, row.applicable_actions)" :key="action" size="small" effect="plain">{{ action }}</el-tag>
+                </div>
+                <div v-else class="trace-empty">暂无关联 Action</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="Skill" min-width="102" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="trace-name-cell">
+              <strong>{{ row.name || row.slug || '-' }}</strong>
+              <small v-if="row.slug">{{ row.slug }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="session_title" label="会话" min-width="118" show-overflow-tooltip />
+        <el-table-column label="命中来源" width="118" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ traceHitReasonLabel(row.hit_reason) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="Action" width="104" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.action_display_name || row.action_code" class="audit-action-hit">{{ row.action_display_name || row.action_code }}</span>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="工具" width="68">
+          <template #default="{ row }">
+            <el-tag v-if="traceListCount(row.used_tools)" size="small" type="success" effect="plain">{{ formatTraceCount(row.used_tools, '工具') }}</el-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="username" label="用户" width="68" show-overflow-tooltip />
+        <el-table-column label="时间" width="118">
+          <template #default="{ row }">
+            {{ formatDateTimeCompact(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canManageAudit" label="操作" width="56" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" @click="handleDeleteAuditSkillTrace(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-table
+        v-else-if="activeTab === 'tools' && invocationAuditTab === 'actionHits'"
+        v-loading="loading.actionTraces"
+        :data="auditActionTraces"
+        stripe
+        size="small"
+        class="console-table audit-invocation-table"
+        @selection-change="handleAuditActionTraceSelectionChange"
+      >
+        <el-table-column v-if="canManageAudit" type="selection" width="34" />
+        <el-table-column type="expand" width="34">
+          <template #default="{ row }">
+            <div class="trace-detail-grid">
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Action 详情</span>
+                  <small>{{ row.code || '-' }}</small>
+                </div>
+                <div class="trace-detail-list">
+                  <div class="trace-detail-row"><span>路由</span><strong>{{ row.route || '-' }}</strong></div>
+                  <div class="trace-detail-row"><span>草稿</span><strong>{{ row.draft_generated ? '已生成' : '-' }}</strong></div>
+                  <div class="trace-detail-row"><span>说明</span><strong>{{ actionTraceRecordDetail(row) }}</strong></div>
+                </div>
+              </div>
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>Skill 详情</span>
+                  <small>{{ formatTraceCount(traceDisplayItems(row.skill_names, row.skills), 'Skill') }}</small>
+                </div>
+                <div v-if="traceDisplayItems(row.skill_names, row.skills).length" class="trace-detail-tags">
+                  <el-tag v-for="skill in traceDisplayItems(row.skill_names, row.skills)" :key="skill" size="small" effect="plain">{{ skill }}</el-tag>
+                </div>
+                <div v-else class="trace-empty">暂无 Skill 记录</div>
+              </div>
+              <div class="trace-panel">
+                <div class="trace-panel-head">
+                  <span>工具详情</span>
+                  <small>{{ formatTraceCount(row.allowed_tools, '工具') }}</small>
+                </div>
+                <div v-if="traceListItems(row.allowed_tools).length" class="trace-detail-tags">
+                  <el-tag v-for="tool in traceListItems(row.allowed_tools)" :key="tool" size="small" effect="plain">{{ tool }}</el-tag>
+                </div>
+                <div v-else class="trace-empty">暂无工具记录</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="Action" min-width="112" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div class="trace-name-cell">
+              <strong>{{ row.display_name || row.code || '-' }}</strong>
+              <small v-if="row.code">{{ row.code }}</small>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="session_title" label="会话" min-width="154" show-overflow-tooltip />
+        <el-table-column label="风险" width="64">
+          <template #default="{ row }">
+            <el-tag v-if="row.risk_level || row.risk_level_display" size="small" :type="riskTone(row.risk_level)" effect="plain">{{ row.risk_level_display || row.risk_level }}</el-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Skill" width="76">
+          <template #default="{ row }">
+            <el-tag v-if="traceListCount(row.skills)" size="small" type="success" effect="plain">{{ formatTraceCount(row.skills, 'Skill') }}</el-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="工具" width="76">
+          <template #default="{ row }">
+            <el-tag v-if="traceListCount(row.allowed_tools)" size="small" type="success" effect="plain">{{ formatTraceCount(row.allowed_tools, '工具') }}</el-tag>
+            <span v-else class="muted-text">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="username" label="用户" width="82" show-overflow-tooltip />
+        <el-table-column label="时间" width="128">
+          <template #default="{ row }">
+            {{ formatDateTimeCompact(row.created_at) }}
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canManageAudit" label="操作" width="62" fixed="right">
+          <template #default="{ row }">
+            <el-button link type="danger" @click="handleDeleteAuditActionTrace(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -408,31 +645,32 @@
         class="console-table"
         @selection-change="handleAuditActionSelectionChange"
       >
-        <el-table-column v-if="canManageAudit" type="selection" width="42" />
+        <el-table-column v-if="canManageAudit" type="selection" width="34" />
         <el-table-column prop="title" label="动作标题" min-width="180" show-overflow-tooltip />
-        <el-table-column label="风险" width="100">
+        <el-table-column prop="environment_display" label="环境" width="112" show-overflow-tooltip />
+        <el-table-column label="风险" width="84">
           <template #default="{ row }">
             <el-tag size="small" :type="riskTone(row.risk_level)" effect="plain">{{ row.risk_level_display || row.risk_level || '-' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="120">
+        <el-table-column label="状态" width="104">
           <template #default="{ row }">
             <el-tag size="small" :type="statusTone(row.status)" effect="plain">{{ row.status_display || row.status || '-' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="confirmed_by" label="确认人" width="120" />
-        <el-table-column label="更新时间" min-width="180">
+        <el-table-column prop="confirmed_by" label="确认人" width="90" show-overflow-tooltip />
+        <el-table-column label="更新时间" width="150">
           <template #default="{ row }">
             {{ formatDateTimeDisplay(row.updated_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="关联任务" width="110">
+        <el-table-column label="关联任务" width="96">
           <template #default="{ row }">
             <el-button v-if="getActionTaskId(row)" link type="primary" @click="goTaskWorkbenchTask(row)">查看任务</el-button>
             <span v-else class="muted-text">-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="canManageAudit" label="操作" width="90" fixed="right">
+        <el-table-column v-if="canManageAudit" label="操作" width="64" fixed="right">
           <template #default="{ row }">
             <el-button link type="danger" @click="handleDeleteAuditAction(row)">删除</el-button>
           </template>
@@ -440,13 +678,14 @@
       </el-table>
 
       <div class="pagination-row">
+        <el-pagination class="pagination-total" :total="activePagination.total" layout="total" />
         <div class="pagination-size-control">
           <span class="audit-page-size-label">每页</span>
           <el-select v-model="activePageSize" class="audit-page-size-select" size="small" @change="handleAuditPageSizeChange">
             <el-option v-for="size in auditPageSizeOptions" :key="size" :label="`${size} 条`" :value="size" />
           </el-select>
         </div>
-        <el-pagination :current-page="activePagination.page" :page-size="activePagination.pageSize" :total="activePagination.total" layout="total, prev, pager, next" @current-change="loadActiveTabPage" />
+        <el-pagination class="pagination-pager" :current-page="activePagination.page" :page-size="activePagination.pageSize" :total="activePagination.total" layout="prev, pager, next" @current-change="loadActiveTabPage" />
       </div>
     </section>
   </div>
@@ -458,19 +697,24 @@ import { useRoute, useRouter } from 'vue-router'
 import { ChatDotSquare, Connection, Cpu, Delete, Promotion, RefreshRight, Tickets } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { normalizePendingActionTitle } from '@/utils/taskDraftTitle'
 import {
+  bulkDeleteAIOpsAuditActionTraces,
   bulkDeleteAIOpsAuditActions,
   bulkDeleteAIOpsAuditSessions,
+  bulkDeleteAIOpsAuditSkillTraces,
   bulkDeleteAIOpsAuditToolInvocations,
   deleteAIOpsAuditAction,
   deleteAIOpsAuditModelInvocation,
   deleteAIOpsAuditSession,
   deleteAIOpsAuditToolInvocation,
+  getAIOpsAuditActionTraces,
   getAIOpsAuditActions,
   getAIOpsAuditCosts,
   getAIOpsAuditModelInvocations,
   getAIOpsAuditOverview,
   getAIOpsAuditSessions,
+  getAIOpsAuditSkillTraces,
   getAIOpsAuditToolInvocations,
 } from '@/api/modules/aiops'
 
@@ -478,31 +722,43 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const activeTab = ref('overview')
+const invocationAuditTab = ref('actionHits')
 const auditOverview = ref({})
 const auditCosts = ref({})
 const auditSessions = ref([])
 const auditTools = ref([])
+const auditSkillTraces = ref([])
+const auditActionTraces = ref([])
 const auditModels = ref([])
 const auditActions = ref([])
 const selectedAuditSessionIds = ref([])
 const selectedAuditToolIds = ref([])
+const selectedAuditSkillTraceIds = ref([])
+const selectedAuditActionTraceIds = ref([])
 const selectedAuditActionIds = ref([])
+const invocationPieHover = reactive({ chartKey: '', item: null, x: 0, y: 0 })
 const loading = reactive({
   overview: false,
   sessions: false,
   tools: false,
+  skillTraces: false,
+  actionTraces: false,
   models: false,
   actions: false,
 })
 const AUDIT_DEFAULT_PAGE_SIZE = 20
-const auditPageSizeOptions = [20, 50, 100]
+const AUDIT_MIN_PAGE_SIZE = 10
+const AUDIT_MAX_PAGE_SIZE = 100
+const auditPageSizeOptions = [10, 20, 50, 100]
 const auditSessionPagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
 const auditToolPagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
+const auditSkillTracePagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
+const auditActionTracePagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
 const auditModelPagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
 const auditActionPagination = reactive({ page: 1, pageSize: AUDIT_DEFAULT_PAGE_SIZE, total: 0 })
 const auditFilters = reactive({
   sessions: { q: '', username: '', status: '', timeRange: [] },
-  tools: { q: '', username: '', status: '', timeRange: [] },
+  tools: { q: '', username: '', status: '', risk_level: '', timeRange: [] },
   models: { q: '', status: '', purpose: '', timeRange: [] },
   actions: { q: '', username: '', status: '', risk_level: '', timeRange: [] },
 })
@@ -553,47 +809,26 @@ const overviewTimeShortcuts = [
 
 const auditTabs = [
   { name: 'overview', label: '运行概览', icon: Tickets, title: '运行概览', desc: '汇总今日使用与所选时间范围成本。' },
-  { name: 'sessions', label: '会话', icon: ChatDotSquare, title: '会话记录', desc: '查看智能助手会话、用户与消息数量。' },
-  { name: 'tools', label: '工具调用', icon: Connection, title: '工具调用', desc: '追踪 MCP、平台工具与只读查询调用明细。' },
+  { name: 'sessions', label: '会话历史', icon: ChatDotSquare, title: '会话历史', desc: '查看智能助手会话、用户与消息数量。' },
+  { name: 'tools', label: '调用审计', icon: Connection, title: '调用审计', desc: '分层查看 Action 命中、Skill 命中与 MCP 工具调用。' },
   { name: 'models', label: '模型调用', icon: Cpu, title: '模型调用', desc: '查看模型用途、Token、耗时与预估费用。' },
   { name: 'actions', label: '待执行动作', icon: Promotion, title: '待执行动作', desc: '审计待确认、已执行、失败和被策略拦截的动作。' },
 ]
 const validTabs = auditTabs.map(item => item.name)
+const invocationAuditTabs = [
+  { name: 'actionHits', label: 'Action 命中' },
+  { name: 'skills', label: 'Skill 命中' },
+  { name: 'mcp', label: 'MCP 工具' },
+]
+const validInvocationAuditTabs = invocationAuditTabs.map(item => item.name)
+const invocationPiePalettes = {
+  mcp: ['#245bdb', '#3b82f6', '#60a5fa', '#93c5fd', '#1d4ed8', '#2563eb', '#38bdf8', '#0ea5e9'],
+  skills: ['#16a34a', '#22c55e', '#4ade80', '#86efac', '#15803d', '#059669', '#34d399', '#10b981'],
+  actions: ['#f59e0b', '#fbbf24', '#f97316', '#fb923c', '#d97706', '#ea580c', '#facc15', '#eab308'],
+}
 const canManageAudit = computed(() => authStore.hasPermission('aiops.audit.manage'))
 const modelCostSummary = computed(() => auditCosts.value?.model || {})
 const toolCostSummary = computed(() => auditCosts.value?.tools || {})
-const overviewCards = computed(() => ([
-  { key: 'sessions', label: '今日会话', value: auditOverview.value.sessions_today || 0, tab: 'sessions', tone: '' },
-  { key: 'messages', label: '今日消息', value: auditOverview.value.messages_today || 0, tab: 'sessions', tone: 'audit-card--success' },
-  { key: 'actions', label: '今日动作', value: auditOverview.value.actions_today || 0, tab: 'actions', tone: 'audit-card--warning' },
-  { key: 'models', label: '模型调用', value: auditOverview.value.model_calls_today || 0, tab: 'models', tone: 'audit-card--danger' },
-]))
-const overviewMetricCards = computed(() => ([
-  {
-    key: 'model-calls',
-    label: '模型调用',
-    value: formatNumber(modelCostSummary.value.total_calls),
-    desc: `平均 ${formatLatency(modelCostSummary.value.avg_latency_ms)} / 次`,
-  },
-  {
-    key: 'model-tokens',
-    label: 'Token',
-    value: formatTokenCount(modelCostSummary.value.total_tokens),
-    desc: `Prompt ${formatTokenCount(modelCostSummary.value.prompt_tokens)} / Completion ${formatTokenCount(modelCostSummary.value.completion_tokens)}`,
-  },
-  {
-    key: 'model-cost',
-    label: '预估模型费用',
-    value: formatModelCostSummary(modelCostSummary.value),
-    desc: '按模型调用记录估算',
-  },
-  {
-    key: 'tool-calls',
-    label: '工具调用',
-    value: formatNumber(toolCostSummary.value.total_calls),
-    desc: `平均 ${formatLatency(toolCostSummary.value.avg_latency_ms)} / 次`,
-  },
-]))
 const modelProviderRows = computed(() => {
   const rows = Array.isArray(modelCostSummary.value.by_provider) ? modelCostSummary.value.by_provider : []
   const maxCalls = Math.max(...rows.map(item => toNumber(item.calls)), 1)
@@ -602,37 +837,59 @@ const modelProviderRows = computed(() => {
     percent: Math.max(6, Math.round((toNumber(item.calls) / maxCalls) * 100)),
   }))
 })
-const toolRows = computed(() => {
-  const rows = Array.isArray(toolCostSummary.value.by_tool) ? toolCostSummary.value.by_tool : []
-  const maxCalls = Math.max(...rows.map(item => toNumber(item.calls)), 1)
-  return rows.slice(0, 6).map(item => ({
-    ...item,
-    percent: Math.max(6, Math.round((toNumber(item.calls) / maxCalls) * 100)),
-  }))
-})
-const actionStatusRows = computed(() => {
-  const rows = Array.isArray(auditOverview.value.action_status) ? auditOverview.value.action_status : []
-  const order = ['pending', 'confirmed', 'executed', 'failed', 'canceled']
-  const total = rows.reduce((sum, item) => sum + toNumber(item.count), 0)
-  return rows
-    .map(item => ({
-      status: item.status || 'unknown',
-      label: actionStatusLabel(item.status),
-      count: toNumber(item.count),
-      tone: actionStatusTone(item.status),
-      percent: total ? Math.max(6, Math.round((toNumber(item.count) / total) * 100)) : 0,
+const overviewInvocationCharts = computed(() => {
+  const distribution = auditOverview.value?.invocation_distribution || {}
+  const fallbackMcpItems = Array.isArray(toolCostSummary.value.by_tool)
+    ? toolCostSummary.value.by_tool.map(item => ({
+      key: item.tool_name || 'unknown',
+      label: item.tool_name || '未命名工具',
+      count: item.calls,
     }))
-    .sort((left, right) => {
-      const leftIndex = order.includes(left.status) ? order.indexOf(left.status) : order.length
-      const rightIndex = order.includes(right.status) ? order.indexOf(right.status) : order.length
-      return leftIndex - rightIndex
-    })
+    : []
+  return [
+    buildInvocationPieChart({
+      key: 'mcp',
+      title: 'MCP 工具调用',
+      items: Array.isArray(distribution.mcp_tools) ? distribution.mcp_tools : fallbackMcpItems,
+      palette: invocationPiePalettes.mcp,
+      emptyText: '暂无 MCP 工具调用',
+    }),
+    buildInvocationPieChart({
+      key: 'skills',
+      title: 'Skill 命中',
+      items: Array.isArray(distribution.skills) ? distribution.skills : [],
+      palette: invocationPiePalettes.skills,
+      emptyText: '暂无 Skill 命中记录',
+    }),
+    buildInvocationPieChart({
+      key: 'actions',
+      title: 'Action 命中',
+      items: Array.isArray(distribution.actions) ? distribution.actions : [],
+      palette: invocationPiePalettes.actions,
+      emptyText: '暂无 Action 命中记录',
+    }),
+  ]
 })
-const actionStatusTotal = computed(() => actionStatusRows.value.reduce((sum, item) => sum + item.count, 0))
 const activeTabMeta = computed(() => auditTabs.find(item => item.name === activeTab.value) || auditTabs[0])
-const activeLoading = computed(() => Boolean(loading[activeTab.value]))
+const invocationSearchPlaceholder = computed(() => {
+  if (invocationAuditTab.value === 'skills') return '搜索 Skill / Action / 会话'
+  if (invocationAuditTab.value === 'actionHits') return '搜索 Action / Skill / 会话'
+  return '搜索 MCP 工具 / 会话'
+})
+const activeLoading = computed(() => {
+  if (activeTab.value === 'tools') {
+    if (invocationAuditTab.value === 'skills') return loading.skillTraces
+    if (invocationAuditTab.value === 'actionHits') return loading.actionTraces
+    return loading.tools
+  }
+  return Boolean(loading[activeTab.value])
+})
 const activePagination = computed(() => {
-  if (activeTab.value === 'tools') return auditToolPagination
+  if (activeTab.value === 'tools') {
+    if (invocationAuditTab.value === 'skills') return auditSkillTracePagination
+    if (invocationAuditTab.value === 'actionHits') return auditActionTracePagination
+    return auditToolPagination
+  }
   if (activeTab.value === 'models') return auditModelPagination
   if (activeTab.value === 'actions') return auditActionPagination
   return auditSessionPagination
@@ -645,6 +902,77 @@ const activePageSize = computed({
 function toNumber(value) {
   const numberValue = Number(value)
   return Number.isFinite(numberValue) ? numberValue : 0
+}
+
+function normalizeInvocationPieRows(items, palette) {
+  const rowMap = new Map()
+  ;(Array.isArray(items) ? items : []).forEach((item, index) => {
+    const value = toNumber(item?.count ?? item?.value ?? item?.calls)
+    if (!value) return
+    const label = String(item?.label || item?.name || item?.tool_name || item?.code || item?.key || '未命名').trim()
+    const key = String(item?.key || item?.slug || item?.code || item?.tool_name || label || index).trim()
+    const current = rowMap.get(key) || { key, label, value: 0 }
+    current.value += value
+    rowMap.set(key, current)
+  })
+  return Array.from(rowMap.values())
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label, 'zh-CN'))
+    .map((item, index) => ({
+      ...item,
+      color: palette[index % palette.length],
+    }))
+}
+
+function buildInvocationPieStyle(rows, total) {
+  if (!total) return { background: 'conic-gradient(#e2e8f0 0deg 360deg)' }
+  let cursor = 0
+  const segments = rows.map((item) => {
+    const start = cursor
+    cursor += (item.value / total) * 360
+    return `${item.color} ${start.toFixed(2)}deg ${cursor.toFixed(2)}deg`
+  })
+  return { background: `conic-gradient(${segments.join(', ')})` }
+}
+
+function buildInvocationPieChart({ key, title, desc, items, palette, emptyText }) {
+  const rows = normalizeInvocationPieRows(items, palette)
+  const total = rows.reduce((sum, item) => sum + item.value, 0)
+  return {
+    key,
+    title,
+    desc,
+    rows,
+    total,
+    emptyText,
+    pieStyle: buildInvocationPieStyle(rows, total),
+  }
+}
+
+function handleInvocationPieMove(event, chart) {
+  if (!chart?.total || !Array.isArray(chart.rows) || !chart.rows.length) {
+    clearInvocationPieHover()
+    return
+  }
+  const rect = event.currentTarget.getBoundingClientRect()
+  const centerX = rect.width / 2
+  const centerY = rect.height / 2
+  const x = event.clientX - rect.left
+  const y = event.clientY - rect.top
+  const angle = (Math.atan2(y - centerY, x - centerX) * 180 / Math.PI + 90 + 360) % 360
+  let cursor = 0
+  const hovered = chart.rows.find((item, index) => {
+    cursor += (item.value / chart.total) * 360
+    return angle <= cursor || index === chart.rows.length - 1
+  })
+  invocationPieHover.chartKey = chart.key
+  invocationPieHover.item = hovered || null
+  invocationPieHover.x = Math.min(Math.max(x, 40), rect.width - 40)
+  invocationPieHover.y = Math.min(Math.max(y, 26), rect.height - 26)
+}
+
+function clearInvocationPieHover() {
+  invocationPieHover.chartKey = ''
+  invocationPieHover.item = null
 }
 
 function buildRecentTimeRange(days) {
@@ -668,6 +996,11 @@ function formatDateTimeDisplay(value) {
   }
   const text = String(value).trim()
   return text ? text.replace('T', ' ').replace(/\.\d+.*$/, '').replace(/(?:Z|[+-]\d{2}:?\d{2})$/, '') : '-'
+}
+
+function formatDateTimeCompact(value) {
+  const text = formatDateTimeDisplay(value)
+  return text.length > 16 ? text.slice(0, 16) : text
 }
 
 function buildOverviewCostParams() {
@@ -700,15 +1033,19 @@ function compactParams(params) {
   }, []))
 }
 
-function auditPageSize(tab) {
-  if (tab === 'tools') return auditToolPagination.pageSize
+function auditPageSize(tab, subTab = invocationAuditTab.value) {
+  if (tab === 'tools') {
+    if (subTab === 'skills') return auditSkillTracePagination.pageSize
+    if (subTab === 'actionHits') return auditActionTracePagination.pageSize
+    return auditToolPagination.pageSize
+  }
   if (tab === 'models') return auditModelPagination.pageSize
   if (tab === 'actions') return auditActionPagination.pageSize
   return auditSessionPagination.pageSize
 }
 
-function buildAuditListParams(tab, page = 1) {
-  const base = { page, page_size: auditPageSize(tab) }
+function buildAuditListParams(tab, page = 1, subTab = invocationAuditTab.value) {
+  const base = { page, page_size: auditPageSize(tab, subTab) }
   if (tab === 'sessions') {
     const filters = auditFilters.sessions
     appendTimeRangeParams(base, filters.timeRange)
@@ -717,7 +1054,7 @@ function buildAuditListParams(tab, page = 1) {
   if (tab === 'tools') {
     const filters = auditFilters.tools
     appendTimeRangeParams(base, filters.timeRange)
-    return compactParams({ ...base, q: filters.q, username: filters.username, status: filters.status })
+    return compactParams({ ...base, q: filters.q, username: filters.username, status: filters.status, risk_level: filters.risk_level })
   }
   if (tab === 'models') {
     const filters = auditFilters.models
@@ -746,7 +1083,7 @@ function resetAuditFilters() {
 }
 
 function setAuditPageSize(size) {
-  activePagination.value.pageSize = Math.min(Math.max(Number(size) || AUDIT_DEFAULT_PAGE_SIZE, AUDIT_DEFAULT_PAGE_SIZE), 100)
+  activePagination.value.pageSize = Math.min(Math.max(Number(size) || AUDIT_DEFAULT_PAGE_SIZE, AUDIT_MIN_PAGE_SIZE), AUDIT_MAX_PAGE_SIZE)
 }
 
 function handleAuditPageSizeChange(size) {
@@ -763,6 +1100,7 @@ async function handleOverviewRangeChange() {
 async function selectAllOverviewTime() {
   overviewAllTime.value = true
   overviewRecentDays.value = null
+  overviewTimeRange.value = []
   await loadOverview()
 }
 
@@ -781,6 +1119,13 @@ function inferRecentDaysFromRange(range) {
 
 function formatNumber(value) {
   return toNumber(value).toLocaleString('zh-CN')
+}
+
+function formatPercent(value, total) {
+  const totalValue = toNumber(total)
+  if (!totalValue) return '0%'
+  const percent = (toNumber(value) / totalValue) * 100
+  return `${percent >= 10 ? Math.round(percent) : percent.toFixed(1)}%`
 }
 
 function formatTokenCount(value) {
@@ -822,27 +1167,14 @@ function formatLatency(value) {
   return numberValue ? `${formatNumber(numberValue)} ms` : '-'
 }
 
-function actionStatusLabel(status) {
-  const labels = {
-    pending: '待确认',
-    confirmed: '已确认',
-    executed: '已执行',
-    failed: '执行失败',
-    canceled: '已取消',
-  }
-  return labels[status] || status || '未知'
-}
-
-function actionStatusTone(status) {
-  if (status === 'failed') return 'danger'
-  if (status === 'pending') return 'warning'
-  if (status === 'executed' || status === 'confirmed') return 'success'
-  return 'muted'
-}
-
 function normalizeTab(tab) {
   const value = Array.isArray(tab) ? tab[0] : tab
   return validTabs.includes(value) ? value : 'overview'
+}
+
+function normalizeInvocationAuditTab(tab) {
+  const value = Array.isArray(tab) ? tab[0] : tab
+  return validInvocationAuditTabs.includes(value) ? value : 'actionHits'
 }
 
 function syncRouteTab(tab) {
@@ -859,9 +1191,62 @@ function switchTab(tab) {
   syncRouteTab(nextTab)
 }
 
+async function switchInvocationAuditTab(tab) {
+  const nextTab = normalizeInvocationAuditTab(tab)
+  if (invocationAuditTab.value === nextTab) return
+  invocationAuditTab.value = nextTab
+  auditFilters.tools.status = ''
+  auditFilters.tools.risk_level = ''
+  selectedAuditToolIds.value = []
+  await loadActiveInvocationTabPage(1)
+}
+
 function getActionTaskId(action) {
   const value = action?.result_payload?.task_id || action?.result_payload?.created_task_id || action?.result_payload?.host_task_id
   return value ? String(value) : ''
+}
+
+function appendEnvironmentValue(list, value) {
+  const text = String(value || '').trim()
+  if (text && !list.includes(text)) list.push(text)
+}
+
+function appendEnvironmentItems(list, items) {
+  if (!Array.isArray(items)) return
+  items.forEach(item => {
+    appendEnvironmentValue(list, item?.environment_name)
+    appendEnvironmentValue(list, item?.environment)
+    appendEnvironmentValue(list, item?.env)
+    appendEnvironmentValue(list, item?.namespace)
+  })
+}
+
+function formatEnvironmentValues(values) {
+  const items = values.filter(Boolean)
+  if (!items.length) return '-'
+  if (items.length === 1) return items[0]
+  return `${items[0]} 等 ${items.length} 个`
+}
+
+function pendingActionEnvironmentDisplay(row = {}) {
+  const payload = row.action_payload || {}
+  const resultPayload = row.result_payload || {}
+  const sourceContext = payload.source_context || resultPayload.source_context || {}
+  const selectionFilters = payload.selection_filters || resultPayload.selection_filters || {}
+  const values = []
+  appendEnvironmentValue(values, payload.environment_name)
+  appendEnvironmentValue(values, payload.environment)
+  appendEnvironmentValue(values, sourceContext.environment_name)
+  appendEnvironmentValue(values, sourceContext.environment)
+  appendEnvironmentValue(values, sourceContext.resource_environment)
+  appendEnvironmentValue(values, selectionFilters.environment_name)
+  appendEnvironmentValue(values, selectionFilters.environment)
+  appendEnvironmentItems(values, payload.target_hosts)
+  appendEnvironmentItems(values, payload.target_snapshot)
+  appendEnvironmentItems(values, payload.k8s_targets)
+  appendEnvironmentItems(values, resultPayload.target_hosts)
+  appendEnvironmentItems(values, resultPayload.target_snapshot)
+  return formatEnvironmentValues(values)
 }
 
 function goTaskWorkbenchTask(action) {
@@ -877,6 +1262,128 @@ function goTaskWorkbenchTask(action) {
   })
 }
 
+function skillTraceItems(row) {
+  const items = Array.isArray(row?.skill_trace?.items) ? row.skill_trace.items : []
+  return [...items].sort((left, right) => {
+    const leftHit = left?.status && left.status !== 'available'
+    const rightHit = right?.status && right.status !== 'available'
+    if (leftHit !== rightHit) return leftHit ? -1 : 1
+    return String(left?.name || '').localeCompare(String(right?.name || ''), 'zh-CN')
+  })
+}
+
+function formatSkillTraceSummary(row) {
+  const trace = row?.skill_trace || {}
+  const matched = toNumber(trace.matched_count)
+  if (!matched) return '暂无'
+  return `${matched} 命中`
+}
+
+function skillTraceTone(row) {
+  const matched = toNumber(row?.skill_trace?.matched_count)
+  if (matched > 0) return 'success'
+  if (toNumber(row?.skill_trace?.enabled_count) > 0) return 'info'
+  return 'info'
+}
+
+function skillStatusLabel(status) {
+  const labels = {
+    available: '已加载',
+    matched: '命中',
+    called: '已调用',
+    fallback: '已回退',
+  }
+  return labels[status] || status || '已加载'
+}
+
+function hasActionTrace(row) {
+  const trace = row?.action_trace
+  return Boolean(trace && typeof trace === 'object' && Object.keys(trace).length)
+}
+
+function actionTraceTitle(row) {
+  const trace = row?.action_trace || {}
+  return trace.display_name || trace.code || '-'
+}
+
+function actionTraceStatusLabel(status) {
+  const labels = {
+    matched: '已命中',
+    needs_info: '待补充',
+    pending_confirmation: '待确认',
+    materialized: '已落库',
+    blocked: '已拦截',
+    failed: '失败',
+  }
+  return labels[status] || status || '已命中'
+}
+
+function actionTraceStatusTone(status) {
+  if (status === 'failed' || status === 'blocked') return 'danger'
+  if (status === 'needs_info' || status === 'pending_confirmation') return 'warning'
+  if (status === 'materialized') return 'success'
+  return 'info'
+}
+
+function actionTraceDetail(row) {
+  const trace = row?.action_trace || {}
+  const decision = trace.decision || {}
+  if (decision.task_name) return `任务中心：${decision.task_name}`
+  if (decision.pending_action_id) return `待执行动作 #${decision.pending_action_id}`
+  if (decision.reason === 'analysis_only') return '仅分析模式已拦截执行动作'
+  if (decision.reason === 'policy') return '策略已拦截执行动作'
+  if (decision.reason === 'missing_context') return '缺少必要上下文'
+  if (trace.route) return `路由：${trace.route}`
+  if (Array.isArray(trace.allowed_tools) && trace.allowed_tools.length) return `允许工具 ${trace.allowed_tools.length} 个`
+  return trace.code || '-'
+}
+
+function traceHitReasonLabel(reason) {
+  const labels = {
+    runtime_enabled: '运行时启用',
+    action_matched: 'Action 命中',
+    action_called: 'Action 调用',
+    legacy_action_router: '历史 Action 推断',
+    legacy_tool_dependency: '历史工具推断',
+  }
+  return labels[reason] || reason || '-'
+}
+
+function traceListItems(values) {
+  const items = Array.isArray(values) ? values : []
+  return items.reduce((list, item) => {
+    const value = String(item || '').trim()
+    if (value && !list.includes(value)) list.push(value)
+    return list
+  }, [])
+}
+
+function traceDisplayItems(values, fallbackValues = []) {
+  const displayValues = traceListItems(values)
+  return displayValues.length ? displayValues : traceListItems(fallbackValues)
+}
+
+function traceListCount(values) {
+  return traceListItems(values).length
+}
+
+function formatTraceCount(values, label) {
+  const count = traceListCount(values)
+  return count ? `${count} ${label}` : '-'
+}
+
+function actionTraceRecordDetail(row) {
+  const decision = row?.decision || {}
+  if (decision.task_name) return `任务中心：${decision.task_name}`
+  if (decision.pending_action_id) return `待执行动作 #${decision.pending_action_id}`
+  if (decision.reason === 'analysis_only') return '仅分析模式已拦截执行动作'
+  if (decision.reason === 'policy') return '策略已拦截执行动作'
+  if (decision.reason === 'missing_context') return '缺少必要上下文'
+  if (row?.route) return `路由：${row.route}`
+  if (Array.isArray(row?.allowed_tools) && row.allowed_tools.length) return `允许工具 ${row.allowed_tools.length} 个`
+  return row?.code || '-'
+}
+
 function formatJsonCompact(value) {
   try {
     return JSON.stringify(value || {}, null, 2)
@@ -886,9 +1393,9 @@ function formatJsonCompact(value) {
 }
 
 function statusTone(status) {
-  if (['success', 'completed', 'confirmed', 'executed'].includes(status)) return 'success'
-  if (['failed', 'error', 'canceled', 'rejected'].includes(status)) return 'danger'
-  if (['pending', 'draft', 'running'].includes(status)) return 'warning'
+  if (['success', 'completed', 'confirmed', 'executed', 'matched', 'called', 'materialized'].includes(status)) return 'success'
+  if (['failed', 'error', 'canceled', 'rejected', 'blocked'].includes(status)) return 'danger'
+  if (['pending', 'draft', 'running', 'fallback', 'needs_info', 'pending_confirmation'].includes(status)) return 'warning'
   return 'info'
 }
 
@@ -901,9 +1408,10 @@ function riskTone(risk) {
 async function loadOverview() {
   loading.overview = true
   try {
+    const overviewParams = buildOverviewCostParams()
     const [overviewData, costData] = await Promise.all([
-      getAIOpsAuditOverview({ skipErrorMessage: true }),
-      getAIOpsAuditCosts(buildOverviewCostParams(), { skipErrorMessage: true }),
+      getAIOpsAuditOverview(overviewParams, { skipErrorMessage: true }),
+      getAIOpsAuditCosts(overviewParams, { skipErrorMessage: true }),
     ])
     auditOverview.value = overviewData || {}
     auditCosts.value = costData || {}
@@ -932,7 +1440,7 @@ async function loadAuditSessions(page = 1, config = {}) {
 async function loadAuditTools(page = 1, config = {}) {
   loading.tools = true
   try {
-    const data = await getAIOpsAuditToolInvocations(buildAuditListParams('tools', page), config)
+    const data = await getAIOpsAuditToolInvocations(buildAuditListParams('tools', page, 'mcp'), config)
     auditToolPagination.page = page
     auditToolPagination.total = data.count || 0
     auditTools.value = data.results || data || []
@@ -943,6 +1451,40 @@ async function loadAuditTools(page = 1, config = {}) {
     throw error
   } finally {
     loading.tools = false
+  }
+}
+
+async function loadAuditSkillTraces(page = 1, config = {}) {
+  loading.skillTraces = true
+  try {
+    const data = await getAIOpsAuditSkillTraces(buildAuditListParams('tools', page, 'skills'), config)
+    auditSkillTracePagination.page = page
+    auditSkillTracePagination.total = data.count || 0
+    auditSkillTraces.value = data.results || data || []
+    selectedAuditSkillTraceIds.value = []
+  } catch (error) {
+    const message = String(error?.response?.data?.detail || '')
+    if (page > 1 && message.includes('无效页面')) return loadAuditSkillTraces(page - 1, config)
+    throw error
+  } finally {
+    loading.skillTraces = false
+  }
+}
+
+async function loadAuditActionTraces(page = 1, config = {}) {
+  loading.actionTraces = true
+  try {
+    const data = await getAIOpsAuditActionTraces(buildAuditListParams('tools', page, 'actionHits'), config)
+    auditActionTracePagination.page = page
+    auditActionTracePagination.total = data.count || 0
+    auditActionTraces.value = data.results || data || []
+    selectedAuditActionTraceIds.value = []
+  } catch (error) {
+    const message = String(error?.response?.data?.detail || '')
+    if (page > 1 && message.includes('无效页面')) return loadAuditActionTraces(page - 1, config)
+    throw error
+  } finally {
+    loading.actionTraces = false
   }
 }
 
@@ -968,7 +1510,12 @@ async function loadAuditActions(page = 1, config = {}) {
     const data = await getAIOpsAuditActions(buildAuditListParams('actions', page), config)
     auditActionPagination.page = page
     auditActionPagination.total = data.count || 0
-    auditActions.value = data.results || data || []
+    const rows = data.results || data || []
+    auditActions.value = rows.map(row => ({
+      ...row,
+      title: normalizePendingActionTitle(row),
+      environment_display: pendingActionEnvironmentDisplay(row),
+    }))
     selectedAuditActionIds.value = []
   } catch (error) {
     const message = String(error?.response?.data?.detail || '')
@@ -979,8 +1526,14 @@ async function loadAuditActions(page = 1, config = {}) {
   }
 }
 
+function loadActiveInvocationTabPage(page = 1) {
+  if (invocationAuditTab.value === 'skills') return loadAuditSkillTraces(page)
+  if (invocationAuditTab.value === 'actionHits') return loadAuditActionTraces(page)
+  return loadAuditTools(page)
+}
+
 function loadActiveTabPage(page = 1) {
-  if (activeTab.value === 'tools') return loadAuditTools(page)
+  if (activeTab.value === 'tools') return loadActiveInvocationTabPage(page)
   if (activeTab.value === 'models') return loadAuditModels(page)
   if (activeTab.value === 'actions') return loadAuditActions(page)
   return loadAuditSessions(page)
@@ -997,6 +1550,14 @@ function handleAuditSessionSelectionChange(rows) {
 
 function handleAuditToolSelectionChange(rows) {
   selectedAuditToolIds.value = rows.map(item => item.id)
+}
+
+function handleAuditSkillTraceSelectionChange(rows) {
+  selectedAuditSkillTraceIds.value = rows.map(item => item.id)
+}
+
+function handleAuditActionTraceSelectionChange(rows) {
+  selectedAuditActionTraceIds.value = rows.map(item => item.id)
 }
 
 function handleAuditActionSelectionChange(rows) {
@@ -1037,6 +1598,42 @@ async function handleBatchDeleteAuditTools() {
   await bulkDeleteAIOpsAuditToolInvocations(selectedAuditToolIds.value)
   ElMessage.success(`已删除 ${deletedCount} 个工具调用`)
   await Promise.all([loadOverview(), loadAuditTools(shouldFallbackPage ? auditToolPagination.page - 1 : auditToolPagination.page)])
+}
+
+async function handleDeleteAuditSkillTrace(row) {
+  await ElMessageBox.confirm(`确认删除 Skill 命中《${row.name || row.slug || '-'}》吗？该操作不可恢复。`, '删除确认', { type: 'warning' })
+  const shouldFallbackPage = auditSkillTraces.value.length === 1 && auditSkillTracePagination.page > 1
+  await bulkDeleteAIOpsAuditSkillTraces([row.id])
+  ElMessage.success('Skill 命中记录已删除')
+  await loadAuditSkillTraces(shouldFallbackPage ? auditSkillTracePagination.page - 1 : auditSkillTracePagination.page)
+}
+
+async function handleBatchDeleteAuditSkillTraces() {
+  if (!selectedAuditSkillTraceIds.value.length) return
+  const shouldFallbackPage = selectedAuditSkillTraceIds.value.length === auditSkillTraces.value.length && auditSkillTracePagination.page > 1
+  const deletedCount = selectedAuditSkillTraceIds.value.length
+  await ElMessageBox.confirm(`确认批量删除已选中的 ${deletedCount} 个 Skill 命中记录吗？该操作不可恢复。`, '批量删除确认', { type: 'warning' })
+  await bulkDeleteAIOpsAuditSkillTraces(selectedAuditSkillTraceIds.value)
+  ElMessage.success(`已删除 ${deletedCount} 个 Skill 命中记录`)
+  await loadAuditSkillTraces(shouldFallbackPage ? auditSkillTracePagination.page - 1 : auditSkillTracePagination.page)
+}
+
+async function handleDeleteAuditActionTrace(row) {
+  await ElMessageBox.confirm(`确认删除 Action 命中《${row.display_name || row.code || '-'}》吗？该操作不可恢复。`, '删除确认', { type: 'warning' })
+  const shouldFallbackPage = auditActionTraces.value.length === 1 && auditActionTracePagination.page > 1
+  await bulkDeleteAIOpsAuditActionTraces([row.id])
+  ElMessage.success('Action 命中记录已删除')
+  await loadAuditActionTraces(shouldFallbackPage ? auditActionTracePagination.page - 1 : auditActionTracePagination.page)
+}
+
+async function handleBatchDeleteAuditActionTraces() {
+  if (!selectedAuditActionTraceIds.value.length) return
+  const shouldFallbackPage = selectedAuditActionTraceIds.value.length === auditActionTraces.value.length && auditActionTracePagination.page > 1
+  const deletedCount = selectedAuditActionTraceIds.value.length
+  await ElMessageBox.confirm(`确认批量删除已选中的 ${deletedCount} 个 Action 命中记录吗？该操作不可恢复。`, '批量删除确认', { type: 'warning' })
+  await bulkDeleteAIOpsAuditActionTraces(selectedAuditActionTraceIds.value)
+  ElMessage.success(`已删除 ${deletedCount} 个 Action 命中记录`)
+  await loadAuditActionTraces(shouldFallbackPage ? auditActionTracePagination.page - 1 : auditActionTracePagination.page)
 }
 
 async function handleDeleteAuditModel(row) {
@@ -1261,6 +1858,40 @@ watch(
   line-height: 1.1;
 }
 
+.audit-subtabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.82);
+}
+
+.audit-subtab-btn {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #4e5969;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.audit-subtab-btn:hover {
+  background: rgba(51, 112, 255, 0.06);
+}
+
+.audit-subtab-btn.active {
+  color: #245bdb;
+  background: #e8f0ff;
+  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.08);
+}
+
 .section-toolbar {
   display: flex;
   align-items: center;
@@ -1413,49 +2044,15 @@ watch(
   width: 94px !important;
 }
 
-.overview-metric-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.overview-metric-card {
-  min-height: 74px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(15,23,42,.08);
-  background: linear-gradient(180deg, rgba(255,255,255,.98) 0%, rgba(248,251,255,.94) 100%);
-  box-shadow: 0 4px 14px rgba(15,23,42,.03);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 4px;
-}
-
-.overview-metric-card span {
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.overview-metric-card strong {
-  color: #0f172a;
-  font-size: 22px;
-  font-weight: 760;
-  line-height: 1.1;
-}
-
-.overview-metric-card small {
-  color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 .overview-dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.12fr) minmax(0, .96fr);
+  grid-template-columns: 1fr;
+  align-items: start;
   gap: 10px;
+}
+
+.overview-invocation-section {
+  min-width: 0;
 }
 
 .overview-panel {
@@ -1465,10 +2062,6 @@ watch(
   border: 1px solid rgba(15,23,42,.08);
   background: linear-gradient(180deg, rgba(255,255,255,.99) 0%, rgba(249,251,253,.96) 100%);
   box-shadow: 0 4px 14px rgba(15,23,42,.03);
-}
-
-.overview-panel--status {
-  grid-column: 1 / -1;
 }
 
 .overview-panel-head {
@@ -1486,19 +2079,24 @@ watch(
   line-height: 1.45;
 }
 
+.overview-panel--model .section-title {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
 .overview-mini-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
 
 .overview-mini-stat {
-  min-height: 56px;
-  padding: 9px 10px;
+  min-height: 58px;
+  padding: 10px;
   border-radius: 12px;
   border: 1px solid rgba(148,163,184,.18);
-  background: rgba(248,250,252,.8);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.9), rgba(255, 255, 255, 0.72));
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -1518,8 +2116,189 @@ watch(
   line-height: 1.15;
 }
 
-.overview-rank-list,
-.status-stack {
+.invocation-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.invocation-chart-card {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.invocation-chart-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.invocation-chart-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invocation-pie-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  gap: 10px;
+}
+
+.invocation-pie {
+  position: relative;
+  width: 152px;
+  aspect-ratio: 1;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06), 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.invocation-pie-core {
+  width: 86px;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 3px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.14);
+}
+
+.invocation-pie-core strong {
+  color: #0f172a;
+  font-size: 20px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.invocation-pie-core span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.invocation-pie-tooltip {
+  position: absolute;
+  z-index: 2;
+  max-width: 132px;
+  padding: 5px 7px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.16);
+  color: #fff;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+.invocation-pie-tooltip strong,
+.invocation-pie-tooltip span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invocation-pie-tooltip strong {
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.invocation-pie-tooltip span {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.invocation-pie-legend {
+  width: 100%;
+  min-width: 0;
+  height: calc(24px * 3 + 4px * 2);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.invocation-pie-row {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0 6px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.62);
+  display: flex;
+  align-items: center;
+}
+
+.invocation-pie-row-head {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.invocation-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.08);
+}
+
+.invocation-pie-row-head span:not(.invocation-dot) {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invocation-pie-row-head em {
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.invocation-pie-row-head strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.overview-rank-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1538,8 +2317,7 @@ watch(
 }
 
 .overview-rank-title,
-.overview-rank-meta,
-.status-row-head {
+.overview-rank-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1556,8 +2334,7 @@ watch(
   font-weight: 700;
 }
 
-.overview-rank-title strong,
-.status-row-head strong {
+.overview-rank-title strong {
   color: #0f172a;
   font-size: 13px;
   font-weight: 760;
@@ -1572,8 +2349,7 @@ watch(
   flex-wrap: wrap;
 }
 
-.overview-rank-bar,
-.status-progress {
+.overview-rank-bar {
   height: 5px;
   margin-top: 7px;
   overflow: hidden;
@@ -1581,41 +2357,11 @@ watch(
   background: rgba(226,232,240,.78);
 }
 
-.overview-rank-bar span,
-.status-progress span {
+.overview-rank-bar span {
   display: block;
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #60a5fa 0%, #2563eb 100%);
-}
-
-.status-row {
-  padding: 9px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(148,163,184,.16);
-  background: rgba(255,255,255,.78);
-}
-
-.status-row-head span {
-  color: #334155;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.status-progress .is-warning {
-  background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
-}
-
-.status-progress .is-success {
-  background: linear-gradient(90deg, #34d399 0%, #10b981 100%);
-}
-
-.status-progress .is-danger {
-  background: linear-gradient(90deg, #fb7185 0%, #ef4444 100%);
-}
-
-.status-progress .is-muted {
-  background: linear-gradient(90deg, #cbd5e1 0%, #94a3b8 100%);
 }
 
 .overview-empty {
@@ -1647,6 +2393,31 @@ watch(
   font-weight: 700;
 }
 
+.audit-invocation-table :deep(.cell) {
+  padding: 0 6px;
+}
+
+.audit-invocation-table :deep(.el-table__expand-icon) {
+  width: 22px;
+}
+
+.audit-invocation-table :deep(.el-tag--small) {
+  padding: 0 6px;
+}
+
+.audit-session-table :deep(.cell) {
+  padding: 0 6px;
+}
+
+.audit-session-table {
+  width: 100%;
+  max-width: 100%;
+}
+
+.audit-session-table :deep(.el-table__expand-icon) {
+  width: 22px;
+}
+
 .json-preview {
   white-space: pre-wrap;
   word-break: break-word;
@@ -1663,6 +2434,222 @@ watch(
   line-height: 1.55;
 }
 
+.agent-trace-expand {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 4px 4px;
+}
+
+.trace-panel {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.86));
+}
+
+.trace-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.trace-panel-head span {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trace-panel-head small {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trace-pill {
+  min-height: 28px;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.trace-pill strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-pill em {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.trace-pill small {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-pill.is-matched,
+.trace-pill.is-called {
+  border-color: rgba(22, 163, 74, 0.2);
+  background: rgba(240, 253, 244, 0.82);
+}
+
+.trace-pill.is-fallback {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: rgba(255, 251, 235, 0.82);
+}
+
+.trace-empty {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(148, 163, 184, 0.26);
+  border-radius: 10px;
+  color: #94a3b8;
+  font-size: 12px;
+  background: rgba(248, 250, 252, 0.58);
+}
+
+.trace-action-main {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+}
+
+.trace-action-main strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-action-main span:last-child {
+  grid-column: 1 / -1;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.audit-action-hit {
+  color: #245bdb;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trace-name-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.trace-name-cell strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-name-cell small {
+  min-width: 0;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px 4px 4px;
+}
+
+.trace-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.trace-detail-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.trace-detail-row span {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.trace-detail-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-detail-row--stack {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.trace-detail-tags {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
 .pagination-row {
   display: flex;
   align-items: center;
@@ -1677,8 +2664,15 @@ watch(
   gap: 6px;
 }
 
+.pagination-total :deep(.el-pagination__total) {
+  margin-right: 0;
+}
+
+.pagination-pager {
+  margin-left: 0;
+}
+
 @media (max-width: 860px) {
-  .overview-metric-strip,
   .overview-dashboard-grid {
     grid-template-columns: 1fr;
   }
@@ -1697,9 +2691,25 @@ watch(
     width: 100%;
   }
 
+  .invocation-pie-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .invocation-pie {
+    width: 128px;
+  }
+
   .audit-list-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .audit-subtabs {
+    overflow-x: auto;
+  }
+
+  .audit-subtab-btn {
+    flex: 0 0 auto;
   }
 
   .audit-list-toolbar .workbench-toolbar-left,
@@ -1719,6 +2729,24 @@ watch(
   .pagination-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .agent-trace-expand {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .overview-mini-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .invocation-chart-grid {
+    grid-template-columns: 1fr;
   }
 }
 
