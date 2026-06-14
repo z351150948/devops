@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from decimal import Decimal
 from unittest import mock
@@ -53,6 +54,7 @@ from .services import (
     recover_masked_suggested_question,
     build_action_preflight_contract,
     _should_materialize_host_task,
+    _run_tool_call,
     build_task_draft,
     confirm_action,
     create_pending_task_action_from_draft,
@@ -69,6 +71,7 @@ from .services import (
     query_knowledge_graph,
     query_task_resources,
     query_k8s_cluster_summary,
+    query_k8s_resources,
     query_grafana_promql,
     query_alert_root_cause,
     query_logs,
@@ -4432,8 +4435,10 @@ class AIOpsApiTests(TestCase):
         self.assertIn('query_k8s_cluster_summary', assistant_message['tool_calls'])
         self.assertIn('电商测试环境-k3s', assistant_message['content'])
         self.assertIn('Pod 运行情况', assistant_message['content'])
+        self.assertIn('全部命名空间', assistant_message['content'])
         self.assertIn('nginx-deployment', assistant_message['content'])
-        self.assertNotIn('web-frontend', assistant_message['content'])
+        self.assertIn('web-frontend', assistant_message['content'])
+        self.assertIn('grafana', assistant_message['content'])
         mocked_completion.assert_not_called()
 
     @mock.patch('aiops.services._request_model_completion')
@@ -4503,7 +4508,7 @@ class AIOpsApiTests(TestCase):
 
         assistant_message = response.data['assistant_message']
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_k8s_resource_lookup')
         self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
         self.assertIn('Deployment 列表', assistant_message['content'])
         self.assertIn('nginx-deployment', assistant_message['content'])
@@ -4553,12 +4558,123 @@ class AIOpsApiTests(TestCase):
                 )
                 assistant_message = response.data['assistant_message']
                 self.assertEqual(response.status_code, 201)
-                self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_container_fastpath')
+                self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_k8s_resource_lookup')
                 self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
                 self.assertIn(title, assistant_message['content'])
                 self.assertIn(expected_item, assistant_message['content'])
                 self.assertNotIn('Pod 运行情况', assistant_message['content'])
         mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_k8s_svc_lookup_uses_resource_tool(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_ecommerce_knowledge_environment()
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-svc-lookup'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '查看电商测试环境 monitoring 命名空间下的 svc grafana'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_k8s_resource_lookup')
+        self.assertEqual(assistant_message['tool_calls'], ['query_k8s_resources'])
+        self.assertIn('Service 列表', assistant_message['content'])
+        self.assertIn('monitoring / grafana', assistant_message['content'])
+        self.assertNotIn('query_task_resources', assistant_message['tool_calls'])
+        self.assertIsNone(response.data['pending_action'])
+        mocked_completion.assert_not_called()
+
+    def test_query_k8s_resources_respects_explicit_namespace_over_environment_scope(self):
+        self.ensure_ecommerce_knowledge_environment()
+        session = AIOpsChatSession.objects.create(user=self.user, title='k8s-explicit-namespace')
+        question = '查看电商测试环境 monitoring 命名空间下的 service'
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=question)
+
+        result = query_k8s_resources(
+            session,
+            user_message,
+            self.user,
+            query=question,
+            resource_type='services',
+            limit=5,
+        )
+
+        names = [item['name'] for item in result['items']]
+        namespaces = {item['namespace'] for item in result['items']}
+        self.assertEqual(result['summary']['namespaces'], ['monitoring'])
+        self.assertEqual(namespaces, {'monitoring'})
+        self.assertIn('prometheus', names)
+        self.assertIn('grafana', names)
+        self.assertNotIn('api-service', names)
+
+    def test_query_k8s_resources_promotes_explicit_service_name(self):
+        self.ensure_ecommerce_knowledge_environment()
+        session = AIOpsChatSession.objects.create(user=self.user, title='k8s-service-priority')
+        question = '查看电商测试环境 monitoring 命名空间下的 svc grafana'
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=question)
+
+        result = query_k8s_resources(
+            session,
+            user_message,
+            self.user,
+            query=question,
+            resource_type='services',
+            limit=1,
+        )
+
+        self.assertEqual(result['summary']['namespaces'], ['monitoring'])
+        self.assertEqual(result['items'][0]['namespace'], 'monitoring')
+        self.assertEqual(result['items'][0]['name'], 'grafana')
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_send_message_direct_k8s_svc_lookup_survives_mojibake_namespace_text(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_ecommerce_knowledge_environment()
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'direct-k8s-svc-mojibake'}, format='json')
+        session_id = session_response.data['id']
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': '查看电商测试环境 ???? monitoring ?????? svc grafana'},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'direct_k8s_resource_lookup')
+        self.assertEqual(assistant_message['tool_calls'], ['query_k8s_resources'])
+        self.assertIn('monitoring / grafana', assistant_message['content'])
+        self.assertIsNone(response.data['pending_action'])
+        mocked_completion.assert_not_called()
+
+    def test_query_k8s_resources_without_namespace_queries_all_namespaces(self):
+        self.ensure_ecommerce_knowledge_environment()
+        session = AIOpsChatSession.objects.create(user=self.user, title='k8s-all-namespace-query')
+        question = '查看电商测试环境的 service'
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=question)
+
+        result = query_k8s_resources(
+            session,
+            user_message,
+            self.user,
+            query=question,
+            resource_type='services',
+            limit=20,
+        )
+
+        namespaces = {item['namespace'] for item in result['items']}
+        names = {item['name'] for item in result['items']}
+        self.assertEqual(result['summary']['namespaces'], [])
+        self.assertTrue({'production', 'monitoring', 'default', 'kube-system'}.issubset(namespaces))
+        self.assertIn('api-service', names)
+        self.assertIn('prometheus', names)
+        self.assertIn('kube-dns', names)
 
     @mock.patch('aiops.services.execute_promql_query')
     @mock.patch('aiops.services._request_model_completion')
@@ -4900,6 +5016,380 @@ class AIOpsApiTests(TestCase):
         self.assertIsNotNone(response.data['pending_action'])
         self.assertFalse(HostTask.objects.filter(trigger_source=HostTask.TRIGGER_SOURCE_AIOPS).exists())
         self.assertIn('tf-k3s-single-node', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_service_patch_chat_generation_uses_resource_base_not_namespace_graph_scope(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-service-patch'}, format='json')
+        session_id = session_response.data['id']
+        question = '帮我把电商测试环境 monitoring 命名空间下的svc “kube-prometheus-stack-prometheus” 的9090端口改成nodeport方式，端口为31001'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        pending_action = response.data['pending_action']
+        payload = pending_action['action_payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'deterministic_task_generation')
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'host_task.generate')
+        self.assertIn('query_task_resources', assistant_message['tool_calls'])
+        self.assertIn('generate_host_task', assistant_message['tool_calls'])
+        self.assertNotIn('query_k8s_resources', assistant_message['tool_calls'])
+        self.assertIsNotNone(pending_action)
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(payload['resource_ids'], [resource.id])
+        self.assertEqual(payload['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(payload['payload']['namespace'], 'monitoring')
+        self.assertEqual(
+            payload['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        self.assertEqual(payload['payload']['patch_type'], 'strategic')
+        self.assertIn('kubectl patch svc kube-prometheus-stack-prometheus -n monitoring', payload['payload']['command'])
+        self.assertIn('--type strategic', payload['payload']['command'])
+        self.assertIn('K8s API', payload['reason'])
+        self.assertEqual(payload['k8s_targets'][0]['cluster_id'], cluster.id)
+        self.assertEqual(payload['k8s_targets'][0]['resource_id'], resource.id)
+        self.assertEqual(payload['k8s_targets'][0]['environment_name'], '电商测试环境')
+        self.assertEqual(payload['k8s_targets'][0]['kind'], 'service')
+        self.assertEqual(payload['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(payload['k8s_targets'][0]['name'], 'kube-prometheus-stack-prometheus')
+        self.assertFalse(HostTask.objects.filter(trigger_source=HostTask.TRIGGER_SOURCE_AIOPS).exists())
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_service_patch_chat_generation_bypasses_model_even_when_provider_ready(self, mocked_completion):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-k8s-task-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        self.ensure_ecommerce_knowledge_environment()
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-service-provider-ready'}, format='json')
+        session_id = session_response.data['id']
+        question = '帮我把电商测试环境 monitoring 命名空间下的 service kube-prometheus-stack-prometheus 的9090端口改成 NodePort，nodePort 31001'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        payload = response.data['pending_action']['action_payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'host_task.generate')
+        self.assertEqual(assistant_message['metadata']['action_route'], 'selected_host_task_generation')
+        self.assertEqual(assistant_message['tool_calls'], ['query_task_resources', 'generate_host_task'])
+        self.assertEqual(payload['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(payload['payload']['namespace'], 'monitoring')
+        self.assertEqual(
+            payload['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        planning_calls = [
+            call
+            for call in mocked_completion.call_args_list
+            if call.kwargs.get('purpose') == AIOpsModelInvocation.PURPOSE_CHAT_PLANNING
+        ]
+        self.assertFalse(planning_calls)
+
+    @mock.patch('aiops.services._run_answer_formatter', return_value={'used': False, 'fell_back': False, 'attempts': 0})
+    @mock.patch('aiops.services._is_direct_container_question', return_value=False)
+    @mock.patch('aiops.services._is_k8s_analysis_question', return_value=False)
+    @mock.patch('aiops.services._is_task_generation_question', return_value=False)
+    @mock.patch('aiops.services._select_action_for_question', return_value=None)
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_service_patch_tool_runtime_recovers_after_service_lookup_miss(
+        self,
+        mocked_completion,
+        mocked_select_action,
+        mocked_is_task_generation,
+        mocked_is_k8s_analysis,
+        mocked_is_direct_container,
+        mocked_formatter,
+    ):
+        provider = AIOpsModelProvider.objects.create(
+            name='mock-k8s-runtime-provider',
+            provider_type=AIOpsModelProvider.PROVIDER_OPENAI_COMPATIBLE,
+            base_url='https://example.com/v1',
+            default_model='mock-model',
+            is_enabled=True,
+        )
+        provider.set_api_key('test-key')
+        provider.save(update_fields=['api_key_encrypted'])
+        config = get_agent_config()
+        config.default_provider = provider
+        config.save(update_fields=['default_provider'])
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-tool-runtime-miss'}, format='json')
+        session_id = session_response.data['id']
+        question = '帮我把电商测试环境 monitoring 命名空间下的svc kube-prometheus-stack-prometheus 的9090端口改成nodeport方式，端口为31001'
+        mocked_completion.side_effect = [
+            {
+                'choices': [{
+                    'message': {
+                        'content': '',
+                        'tool_calls': [
+                            {
+                                'id': 'call-query-services',
+                                'type': 'function',
+                                'function': {
+                                    'name': 'query_k8s_resources',
+                                    'arguments': json.dumps({
+                                        'query': '电商测试环境 ecommerce 命名空间 service',
+                                        'resource_type': 'services',
+                                        'limit': 8,
+                                    }, ensure_ascii=False),
+                                },
+                            },
+                            {
+                                'id': 'call-generate-task',
+                                'type': 'function',
+                                'function': {
+                                    'name': 'generate_host_task',
+                                    'arguments': json.dumps({
+                                        'request_summary': '修改 Service',
+                                        'environment': '电商测试环境',
+                                        'namespace': 'monitoring',
+                                        'service_name': 'kube-prometheus-stack-prometheus',
+                                        'service_type': 'NodePort',
+                                        'ports': [{'port': 9090, 'nodePort': 31001}],
+                                    }, ensure_ascii=False),
+                                },
+                            },
+                        ],
+                    },
+                }],
+            },
+            {
+                'choices': [{
+                    'message': {
+                        'content': (
+                            '结论：当前无法生成任务草稿，因为没有查到 monitoring 命名空间下的 Service。\n'
+                            '执行概要：任务生成条件不满足，未识别到目标主机。\n'
+                            '下一步：请先补充目标主机。'
+                        ),
+                    },
+                }],
+            },
+        ]
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        pending_action = response.data['pending_action']
+        payload = pending_action['action_payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'mcp_skills')
+        self.assertIn('query_k8s_resources', assistant_message['tool_calls'])
+        self.assertIn('generate_host_task', assistant_message['tool_calls'])
+        self.assertIsNotNone(pending_action)
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(payload['resource_ids'], [resource.id])
+        self.assertEqual(payload['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(payload['payload']['namespace'], 'monitoring')
+        self.assertEqual(
+            payload['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        self.assertIn('kubectl patch svc kube-prometheus-stack-prometheus -n monitoring', payload['payload']['command'])
+        self.assertNotIn('无法生成任务草稿', assistant_message['content'])
+        self.assertNotIn('未识别到目标主机', assistant_message['content'])
+        self.assertNotIn('仅支持生成主机级', assistant_message['content'])
+
+    def test_generate_host_task_tool_recovers_k8s_service_patch_from_original_question(self):
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        session = AIOpsChatSession.objects.create(user=self.user, title='k8s-tool-call')
+        question = '帮我把电商测试环境 monitoring 命名空间下的svc kube-prometheus-stack-prometheus 的9090端口改成nodeport方式，端口为31001'
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=question)
+
+        lookup_result = _run_tool_call(
+            session,
+            user_message,
+            self.user,
+            'query_k8s_resources',
+            {
+                'query': '电商测试环境 ecommerce 命名空间 service',
+                'resource_type': 'services',
+                'limit': 8,
+            },
+        )
+        service_names = {
+            (item.get('namespace'), item.get('name'))
+            for item in (lookup_result.get('tool_output') or {}).get('items', [])
+        }
+        self.assertNotIn(('monitoring', 'kube-prometheus-stack-prometheus'), service_names)
+
+        result = _run_tool_call(
+            session,
+            user_message,
+            self.user,
+            'generate_host_task',
+            {
+                'request_summary': '修改 Service',
+                'environment': '电商测试环境',
+                'namespace': 'monitoring',
+                'service_name': 'kube-prometheus-stack-prometheus',
+                'service_type': 'NodePort',
+                'ports': [{'port': 9090, 'nodePort': 31001}],
+            },
+        )
+
+        draft = result['pending_action_draft']
+        self.assertNotIn('error', result.get('tool_output') or {})
+        self.assertEqual(result['message_type'], AIOpsChatMessage.TYPE_ACTION)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['k8s_targets'][0]['kind'], 'service')
+        self.assertEqual(draft['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(draft['k8s_targets'][0]['environment_name'], '电商测试环境')
+        self.assertEqual(draft['payload']['namespace'], 'monitoring')
+        self.assertEqual(draft['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(
+            draft['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        self.assertIn('kubectl patch svc kube-prometheus-stack-prometheus -n monitoring', draft['payload']['command'])
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_service_patch_chat_generation_handles_expose_wording(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_ecommerce_knowledge_environment()
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-service-expose'}, format='json')
+        session_id = session_response.data['id']
+        question = '把电商测试环境 monitoring 下 svc kube-prometheus-stack-prometheus 暴露为 NodePort，9090 对应 nodePort 31001'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        payload = response.data['pending_action']['action_payload']['payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['tool_calls'], ['query_task_resources', 'generate_host_task'])
+        self.assertEqual(payload['namespace'], 'monitoring')
+        self.assertEqual(payload['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(payload['patch']['spec']['type'], 'NodePort')
+        self.assertEqual(payload['patch']['spec']['ports'], [{'port': 9090, 'nodePort': 31001}])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_service_patch_chat_generation_requires_namespace(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        self.ensure_ecommerce_knowledge_environment()
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-service-missing-namespace'}, format='json')
+        session_id = session_response.data['id']
+        question = '帮我把电商测试环境的 svc kube-prometheus-stack-prometheus 的9090端口改成nodeport方式，端口为31001'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['execution_mode'], 'deterministic_task_generation')
+        self.assertEqual(assistant_message['tool_calls'], ['query_task_resources', 'generate_host_task'])
+        self.assertIsNone(response.data['pending_action'])
+        self.assertIn('命名空间', assistant_message['content'])
+        self.assertIn('monitoring 命名空间', assistant_message['content'])
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_workload_scale_chat_generation_uses_resource_base(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-scale-task'}, format='json')
+        session_id = session_response.data['id']
+        question = '帮我把电商测试环境 production 命名空间 deployment checkout 扩容到 3 个副本'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        payload = response.data['pending_action']['action_payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['metadata']['selected_action']['code'], 'host_task.generate')
+        self.assertEqual(assistant_message['tool_calls'], ['query_task_resources', 'generate_host_task'])
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['task_type'], HostTask.TASK_K8S_SCALE_WORKLOAD)
+        self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(payload['resource_ids'], [resource.id])
+        self.assertEqual(payload['payload']['workload_type'], 'deployment')
+        self.assertEqual(payload['payload']['workload_name'], 'checkout')
+        self.assertEqual(payload['payload']['namespace'], 'production')
+        self.assertEqual(payload['payload']['replicas'], 3)
+        self.assertEqual(payload['k8s_targets'][0]['kind'], 'deployment')
+        self.assertEqual(payload['k8s_targets'][0]['name'], 'checkout')
+        mocked_completion.assert_not_called()
+
+    @mock.patch('aiops.services._request_model_completion')
+    def test_k8s_pod_restart_chat_generation_uses_resource_base(self, mocked_completion):
+        get_agent_config()
+        AIOpsModelProvider.objects.all().update(is_enabled=False)
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        session_response = self.client.post('/api/aiops/sessions/', {'title': 'k8s-restart-task'}, format='json')
+        session_id = session_response.data['id']
+        question = '请直接重启电商测试环境 monitoring 命名空间 pod prometheus-0'
+
+        response = self.client.post(
+            f'/api/aiops/sessions/{session_id}/send_message/',
+            {'content': question},
+            format='json',
+        )
+
+        assistant_message = response.data['assistant_message']
+        payload = response.data['pending_action']['action_payload']
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(assistant_message['tool_calls'], ['query_task_resources', 'generate_host_task'])
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['task_type'], HostTask.TASK_K8S_RESTART_POD)
+        self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(payload['resource_ids'], [resource.id])
+        self.assertEqual(payload['payload']['pod_name'], 'prometheus-0')
+        self.assertEqual(payload['payload']['namespace'], 'monitoring')
+        self.assertEqual(payload['k8s_targets'][0]['kind'], 'pod')
+        self.assertEqual(payload['k8s_targets'][0]['name'], 'prometheus-0')
         mocked_completion.assert_not_called()
 
     @mock.patch('aiops.services._request_model_completion')
@@ -5784,6 +6274,217 @@ class AIOpsApiTests(TestCase):
         serialized_action = AIOpsPendingActionSerializer(action).data
         self.assertNotIn('电商测试环境', serialized_action['title'])
         self.assertIn('服务器巡检任务', serialized_action['title'])
+
+    def test_build_task_draft_creates_generic_k8s_command_task(self):
+        cluster = K8sCluster.objects.create(
+            name='demo-k8s-aiops',
+            api_server='https://demo-k8s-aiops.example.com:6443',
+            kubeconfig='demo',
+            status='connected',
+        )
+        env = TaskResourceGroup.objects.create(name='monitoring', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='demo-k8s-aiops',
+            resource_type=TaskResource.RESOURCE_K8S,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            cluster=cluster,
+        )
+
+        draft = build_task_draft(
+            self.user,
+            '直接生成修改任务把 monitoring 命名空间下的 svc kube-prome type 改为 NodePort',
+            {
+                'request_summary': '直接生成修改任务把 monitoring 命名空间下的 svc kube-prome type 改为 NodePort',
+            },
+        )
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['execution_strategy'], HostTask.STRATEGY_STOP_ON_ERROR)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['host_count'], 1)
+        self.assertEqual(draft['payload']['service_name'], 'kube-prome')
+        self.assertEqual(draft['payload']['namespace'], 'monitoring')
+        self.assertEqual(draft['payload']['patch'], {'spec': {'type': 'NodePort'}})
+        self.assertEqual(draft['payload']['patch_type'], 'strategic')
+        self.assertEqual(draft['payload']['resource_kind'], 'service')
+        self.assertIn('kubectl patch svc kube-prome -n monitoring', draft['payload']['command'])
+        self.assertIn('NodePort', draft['payload']['command'])
+        self.assertEqual(draft['k8s_targets'][0]['cluster_id'], cluster.id)
+        self.assertEqual(draft['k8s_targets'][0]['resource_id'], resource.id)
+        self.assertEqual(draft['k8s_targets'][0]['environment_name'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['kind'], 'service')
+        self.assertEqual(draft['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['name'], 'kube-prome')
+        self.assertIn('K8s API', draft['reason'])
+
+    def test_build_task_draft_creates_nodeport_service_task_without_namespace_graph_scope(self):
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        question = '帮我把电商测试环境 monitoring 命名空间下的svc “kube-prometheus-stack-prometheus” 的9090端口改成nodeport方式，端口为31001'
+
+        draft = build_task_draft(self.user, question, {'request_summary': question})
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(draft['payload']['namespace'], 'monitoring')
+        self.assertEqual(
+            draft['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        self.assertEqual(draft['payload']['patch_type'], 'strategic')
+        self.assertIn('kubectl patch svc kube-prometheus-stack-prometheus -n monitoring', draft['payload']['command'])
+        self.assertIn('--type strategic', draft['payload']['command'])
+        self.assertIn('31001', draft['payload']['command'])
+        self.assertIn('9090', draft['payload']['command'])
+        self.assertEqual(draft['k8s_targets'][0]['cluster_id'], cluster.id)
+        self.assertEqual(draft['k8s_targets'][0]['resource_id'], resource.id)
+        self.assertEqual(draft['k8s_targets'][0]['environment_name'], '电商测试环境')
+        self.assertEqual(draft['k8s_targets'][0]['kind'], 'service')
+        self.assertEqual(draft['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(draft['knowledge_environment'], '电商测试环境')
+
+    def test_build_task_draft_infers_k8s_service_patch_from_structured_fields(self):
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+
+        draft = build_task_draft(self.user, '修改 Service', {
+            'request_summary': '修改 Service',
+            'environment': '电商测试环境',
+            'namespace': 'monitoring',
+            'service_name': 'kube-prometheus-stack-prometheus',
+            'service_type': 'NodePort',
+            'ports': [{'port': 9090, 'nodePort': 31001}],
+        })
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['payload']['service_name'], 'kube-prometheus-stack-prometheus')
+        self.assertEqual(draft['payload']['namespace'], 'monitoring')
+        self.assertEqual(
+            draft['payload']['patch'],
+            {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+        )
+        self.assertIn('kubectl patch svc kube-prometheus-stack-prometheus -n monitoring', draft['payload']['command'])
+
+    def test_build_task_draft_requires_namespace_for_k8s_service_patch(self):
+        self.ensure_ecommerce_knowledge_environment()
+        question = '帮我把电商测试环境的 svc kube-prometheus-stack-prometheus 的9090端口改成nodeport方式，端口为31001'
+
+        draft = build_task_draft(self.user, question, {'request_summary': question})
+
+        self.assertIn('error', draft)
+        self.assertIn('命名空间', draft['error'])
+        self.assertIn('Service', draft['error'])
+
+    def test_build_task_draft_creates_k8s_scale_workload_task(self):
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        question = '帮我把电商测试环境 production 命名空间 deployment checkout 扩容到 3 个副本'
+
+        draft = build_task_draft(self.user, question, {'request_summary': question})
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_SCALE_WORKLOAD)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['payload']['workload_type'], 'deployment')
+        self.assertEqual(draft['payload']['workload_name'], 'checkout')
+        self.assertEqual(draft['payload']['namespace'], 'production')
+        self.assertEqual(draft['payload']['replicas'], 3)
+        self.assertEqual(draft['k8s_targets'][0]['cluster_id'], cluster.id)
+        self.assertEqual(draft['k8s_targets'][0]['kind'], 'deployment')
+        self.assertEqual(draft['k8s_targets'][0]['namespace'], 'production')
+        self.assertEqual(draft['k8s_targets'][0]['name'], 'checkout')
+        self.assertIn('K8s API', draft['reason'])
+
+    def test_build_task_draft_creates_k8s_restart_pod_task(self):
+        cluster, _, _ = self.ensure_ecommerce_knowledge_environment()
+        resource = TaskResource.objects.get(resource_type=TaskResource.RESOURCE_K8S, cluster=cluster)
+        question = '请直接重启电商测试环境 monitoring 命名空间 pod prometheus-0'
+
+        draft = build_task_draft(self.user, question, {'request_summary': question})
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(draft['task_type'], HostTask.TASK_K8S_RESTART_POD)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(draft['resource_ids'], [resource.id])
+        self.assertEqual(draft['payload']['pod_name'], 'prometheus-0')
+        self.assertEqual(draft['payload']['namespace'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['cluster_id'], cluster.id)
+        self.assertEqual(draft['k8s_targets'][0]['kind'], 'pod')
+        self.assertEqual(draft['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(draft['k8s_targets'][0]['name'], 'prometheus-0')
+        self.assertIn('K8s API', draft['reason'])
+
+    def test_build_task_draft_requires_namespace_for_k8s_write_tasks(self):
+        self.ensure_ecommerce_knowledge_environment()
+
+        scale_draft = build_task_draft(
+            self.user,
+            '帮我把电商测试环境 deployment checkout 扩容到 3 个副本',
+            {'request_summary': '帮我把电商测试环境 deployment checkout 扩容到 3 个副本'},
+        )
+        restart_draft = build_task_draft(
+            self.user,
+            '请直接重启电商测试环境 pod prometheus-0',
+            {'request_summary': '请直接重启电商测试环境 pod prometheus-0'},
+        )
+
+        self.assertIn('error', scale_draft)
+        self.assertIn('命名空间', scale_draft['error'])
+        self.assertIn('error', restart_draft)
+        self.assertIn('命名空间', restart_draft['error'])
+
+    def test_confirm_action_preserves_k8s_command_task_draft(self):
+        cluster = K8sCluster.objects.create(name='demo-k8s-confirm', kubeconfig='demo', status='connected')
+        env = TaskResourceGroup.objects.create(name='monitoring', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='demo-k8s-confirm',
+            resource_type=TaskResource.RESOURCE_K8S,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            cluster=cluster,
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='k8s-service-patch')
+        assistant_message = AIOpsChatMessage.objects.create(session=session, role='assistant', content='已生成 K8s 命令草稿')
+        draft = build_task_draft(
+            self.user,
+            '直接生成修改任务把 monitoring 命名空间下的 svc kube-prome type 改为 NodePort',
+            {'request_summary': '直接生成修改任务把 monitoring 命名空间下的 svc kube-prome type 改为 NodePort'},
+        )
+        action = create_pending_task_action_from_draft(session, assistant_message, draft)
+
+        task_draft = confirm_action(action, self.user)
+
+        self.assertEqual(task_draft['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(task_draft['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(task_draft['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(task_draft['resource_ids'], [resource.id])
+        self.assertEqual(task_draft['payload']['patch'], {'spec': {'type': 'NodePort'}})
+        self.assertEqual(task_draft['payload']['patch_type'], 'strategic')
+        self.assertIn('kubectl patch svc kube-prome -n monitoring', task_draft['payload']['command'])
+        self.assertEqual(task_draft['k8s_targets'][0]['kind'], 'service')
+        self.assertEqual(task_draft['k8s_targets'][0]['namespace'], 'monitoring')
+        self.assertEqual(task_draft['k8s_targets'][0]['name'], 'kube-prome')
+        self.assertEqual(task_draft['source_context']['resource_environment'], 'monitoring')
+        action.refresh_from_db()
+        self.assertTrue(action.result_payload['draft_ready'])
+        self.assertFalse(action.result_payload['materialized_in_task_center'])
+        self.assertEqual(action.result_payload['task_draft']['k8s_targets'][0]['kind'], 'service')
 
     def test_build_task_draft_resolves_config_item_id_before_conflicting_ip(self):
         ci_type, _ = CIType.objects.get_or_create(name='云主机(ECS)')

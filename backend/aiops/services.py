@@ -28,6 +28,7 @@ from cmdb.models import ConfigItem
 from eventwall.models import EventRecord
 from eventwall.services import record_event
 from ops.host_tasks import build_host_target_snapshot as build_ops_host_target_snapshot
+from ops.host_tasks import build_k8s_target_snapshot as build_ops_k8s_target_snapshot
 from ops.host_tasks import resolve_host_source_refs, start_host_task
 from ops.models import (
     Alert,
@@ -307,7 +308,7 @@ BUILTIN_MCP_SERVERS = [
     {
         'name': '任务中心 MCP',
         'server_type': AIOpsMCPServer.SERVER_PLATFORM_BUILTIN,
-        'description': '查询主机任务并生成任务草稿。',
+        'description': '查询任务记录并生成任务中心草稿。',
         'tool_whitelist': ['query_task_resources', 'generate_host_task'],
     },
     {
@@ -784,8 +785,8 @@ BUILTIN_SKILLS = [
         'description': '约束 assistant 如何根据目标资源、环境和风险选择任务中心模板。',
         'source_type': AIOpsSkill.SOURCE_INLINE,
         'applicable_actions': ['self_heal.recommend', 'host_task.generate'],
-        'examples': ['给生产环境生成巡检任务', '选择 Redis 检查模板', '帮我安排基础健康检查'],
-        'builtin_tools': ['query_task_resources', 'generate_host_task', 'query_knowledge_graph'],
+        'examples': ['给生产环境生成巡检任务', '选择 Redis 检查模板', '帮我安排基础健康检查', '修改 monitoring 命名空间 kube-prome Service'],
+        'builtin_tools': ['query_task_resources', 'generate_host_task'],
         'recommended_tools': ['query_alerts'],
         'max_iterations': 3,
         'risk_level': AIOpsSkill.RISK_DRAFT,
@@ -794,8 +795,12 @@ BUILTIN_SKILLS = [
             'blocks': ['approval_form', 'risk_notice'],
         },
         'content': """任务生成要求：
-- 先通过知识图谱和任务资源底座确定环境、系统、服务和资源范围。
-- 任务模板必须匹配资源类型和风险场景，不能为未知目标生成执行任务。
+- 任务生成类请求以任务中心资源底座为权威资源来源，先查询 query_task_resources，再生成任务草稿。
+- 知识图谱只用于识别环境、系统、服务和辅助元信息，不作为任务目标存在性的硬前置。
+- 任务模板必须匹配资源类型和风险场景，不能为未知资源底座目标生成执行任务。
+- K8s 写操作必须生成 K8s API 类型任务，不能退化成 SSH、主机脚本或空脚本任务。
+- K8s Service 修改、Pod 重启、工作负载伸缩等写操作不需要先查实时 K8s 资源列表；即使 query_k8s_resources 未查到对象，也不能据此拒绝生成任务草稿。
+- K8s 写操作必须明确 namespace；无法从用户输入或参数判断时，先提醒用户补充命名空间，不能默认使用 default。
 - 输出要包含任务名称、目标资源数量、执行方式、执行策略、风险和确认项。
 - 未确认前只能是草稿或待确认动作。""",
         'allowed_role_codes': [],
@@ -1004,14 +1009,13 @@ BUILTIN_ACTION_REGISTRY = [
         'code': 'host_task.generate',
         'display_name': '任务生成',
         'category': '任务生成',
-        'description': '根据自然语言生成任务中心主机巡检、命令或 Playbook 待执行任务草稿。',
+        'description': '根据自然语言生成任务中心主机、Playbook 或 K8s API 待执行任务草稿。',
         'risk_level': 'draft',
         'agent_mode': 'direct',
         'required_context': ['environment'],
         'allowed_tools': [
             'query_task_resources',
             'generate_host_task',
-            'query_knowledge_graph',
         ],
         'skills': [
             'sx-task-template-selection',
@@ -1029,6 +1033,7 @@ BUILTIN_ACTION_REGISTRY = [
             '帮我建个电商测试环境的服务器巡检任务',
             '给生产环境生成主机巡检任务',
             '帮我在电商测试环境安装 Redis',
+            '直接生成修改 monitoring 命名空间 kube-prome Service type 为 NodePort 的任务',
             '在电商测试环境生成一份服务器健康检查任务',
         ],
     },
@@ -2003,6 +2008,8 @@ def _action_question_matches(action_code, question, analysis_scope=None):
             and _question_contains_any(lowered, ['推荐', '方案', '脚本', '处置', '建议', '确认', '可以', '能不能', '是否', '恢复'])
         )
     if action_code == 'host_task.generate':
+        if _looks_like_k8s_task_request(text, {}):
+            return True
         has_create_intent = _question_contains_any(lowered, [
             '生成', '创建', '新建', '建个', '建一', '安排', '发起', '准备', '构建',
             'generate', 'create', 'schedule',
@@ -3644,6 +3651,10 @@ def _resolve_knowledge_environment_for_query(query='', environment=''):
     return matches[0] if matches else None
 
 
+def _resource_environment_name_from_text(text):
+    return _resolve_task_resource_environment_from_text(text) or _extract_environment(text)
+
+
 def _enabled_knowledge_environment_options():
     options = []
     for config in AIOpsKnowledgeEnvironment.objects.filter(is_enabled=True).order_by('name', 'id'):
@@ -4337,6 +4348,24 @@ def _resolve_task_resource_environment_from_text(text):
     return best
 
 
+def _task_resource_environment_ids_for_name(environment):
+    environment_text = str(environment or '').strip()
+    if not environment_text:
+        return []
+    ids = []
+    for group in TaskResourceGroup.objects.filter(group_type=TaskResourceGroup.GROUP_ENVIRONMENT):
+        name = str(group.name or '').strip()
+        code = str(group.code or '').strip()
+        if (
+            environment_text == name
+            or environment_text in name
+            or (name and name in environment_text)
+            or (code and environment_text.lower() == code.lower())
+        ):
+            ids.append(group.id)
+    return ids
+
+
 def _knowledge_environment_for_session(session):
     context = session.context if isinstance(getattr(session, 'context', None), dict) else {}
     current_environment = context.get('current_environment') or {}
@@ -4379,12 +4408,15 @@ def query_task_resources(session, user_message, user, query='', environment='', 
     queryset = TaskResource.objects.select_related('environment', 'system', 'cluster').all()
     if resource_type:
         queryset = queryset.filter(resource_type=resource_type)
-    scoped_env_ids = list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
-    if scoped_env_ids:
+    scoped_env_ids = _dedupe_int_list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
+    explicit_environment_ids = _task_resource_environment_ids_for_name(environment)
+    if explicit_environment_ids:
+        queryset = queryset.filter(environment_id__in=explicit_environment_ids)
+    elif scoped_env_ids:
         queryset = queryset.filter(environment_id__in=scoped_env_ids)
     elif environment:
         queryset = _task_resource_environment_filter(queryset, environment)
-    has_environment_scope = bool(scoped_env_ids or environment)
+    has_environment_scope = bool(explicit_environment_ids or scoped_env_ids or environment)
     queryset = _soft_filter_task_resources_by_system(
         queryset,
         system_name,
@@ -5871,7 +5903,7 @@ def _is_direct_container_question(question):
         any(keyword in lowered for keyword in [
             'k8s', 'kubernetes', 'pod', 'pods', '容器', '集群', 'namespace', '命名空间',
             '工作负载', '节点', 'node', 'nodes', 'deployment', 'deployments', 'daemonset',
-            'statefulset', 'service', 'services', 'docker',
+            'statefulset', 'svc', 'service', 'services', 'docker',
         ])
         and any(keyword in lowered for keyword in [
             '有没有', '是否', '哪些', '列表', '状态', '运行状态', '运行情况', '情况', '异常',
@@ -5880,12 +5912,40 @@ def _is_direct_container_question(question):
     ):
         return True
     has_container_scope = any(keyword in lowered for keyword in [
-        'k8s', 'kubernetes', 'pod', 'pods', '容器', '集群', 'namespace', '工作负载', 'docker',
+        'k8s', 'kubernetes', 'pod', 'pods', '容器', '集群', 'namespace', '工作负载', 'svc', 'docker',
     ])
     has_lookup_intent = any(keyword in lowered for keyword in [
         '有没有', '是否', '哪些', '列表', '状态', '异常', '当前', '今天', '多少', '情况',
     ])
     return has_container_scope and has_lookup_intent
+
+
+def _is_direct_k8s_resource_lookup_question(question):
+    lowered = str(question or '').lower()
+    if _looks_like_k8s_task_request(question, {}):
+        return False
+    if any(keyword in lowered for keyword in [
+        '生成', '创建', '新建', '执行', '重启', '扩容', '缩容', '删除', '修改', '更新',
+        '变更', '调整', '更改', '设置', '改成', '改为',
+    ]) or re.search(r'\b(?:patch|apply|scale|restart|delete|change|update|set)\b', lowered):
+        return False
+    resource_type = _detect_k8s_resource_type(question)
+    if not resource_type:
+        return False
+    has_explicit_namespace = bool(_extract_k8s_namespace(question, {}))
+    has_likely_mojibake_namespace = bool(re.search(
+        r'\?{2,}\s+([a-z0-9][a-z0-9_.-]{0,62})\s+\?{2,}\s*(?:svc|service|services|pod|pods|deployment|deploy|statefulset|sts)',
+        lowered,
+        flags=re.IGNORECASE,
+    ))
+    has_lookup_intent = any(keyword in lowered for keyword in [
+        '查看', '查看下', '看下', '看一下', '查询', '查下', '列出', '列表', '当前',
+        '状态', '详情', '信息', '有哪些', '哪些', 'show', 'get', 'list',
+    ])
+    has_k8s_scope = any(keyword in lowered for keyword in [
+        'k8s', 'kubernetes', 'namespace', '命名空间', '集群',
+    ]) or has_explicit_namespace or has_likely_mojibake_namespace
+    return (has_lookup_intent and has_k8s_scope) or has_explicit_namespace or has_likely_mojibake_namespace
 
 
 def _extract_promql_from_question(question):
@@ -6034,6 +6094,8 @@ def _is_task_generation_question(question):
     text = str(question or '').lower()
     if _is_direct_log_question(question) or _is_direct_promql_question(question):
         return False
+    if _looks_like_k8s_task_request(question, {}):
+        return True
     return any(keyword in text for keyword in ['生成', '创建', '新建', '安排', '巡检任务', '任务', 'task'])
 
 
@@ -6436,6 +6498,8 @@ def _run_latest_alert_rca_evidence(session, user_message, user, question, scoped
 
 
 def _run_task_generation_evidence(session, user_message, user, question, scoped_question, knowledge_environment, analysis_scope, provider, active_skills, emit):
+    is_k8s_task = _looks_like_k8s_task_request(question, {})
+    resource_type = TaskResource.RESOURCE_K8S if is_k8s_task else TaskResource.RESOURCE_HOST
     emit(
         step={'title': '任务生成证据收集', 'detail': '先查询资源底座，再生成待确认任务草稿。', 'status': PROCESSING_STATUS_COMPLETED},
         text='正在查询任务资源并生成任务草稿',
@@ -6450,7 +6514,7 @@ def _run_task_generation_evidence(session, user_message, user, question, scoped_
         citations,
         tool_names,
         'query_task_resources',
-        {'query': scoped_question, 'environment': knowledge_environment.get('name'), 'resource_type': 'host', 'status': 'active', 'limit': 50},
+        {'query': scoped_question, 'environment': knowledge_environment.get('name'), 'resource_type': resource_type, 'status': 'active', 'limit': 50},
         emit=emit,
     )
     resource_output = resources_result.get('tool_output') or {}
@@ -6459,10 +6523,10 @@ def _run_task_generation_evidence(session, user_message, user, question, scoped_
         'request_summary': scoped_question,
         'environment': knowledge_environment.get('name'),
         'resource_environment': knowledge_environment.get('name'),
-        'resource_type': 'host',
+        'resource_type': resource_type,
         'resource_status': 'active',
         'resource_ids': resource_ids,
-        'task_kind': 'run_playbook' if any(keyword in question for keyword in ['巡检', '检查', 'inspection']) else '',
+        'task_kind': _detect_k8s_task_kind_from_request(question, {}) if is_k8s_task else ('run_playbook' if any(keyword in question for keyword in ['巡检', '检查', 'inspection']) else ''),
     }
     if draft_args['task_kind'] == 'run_playbook':
         draft_args['playbook_content'] = (
@@ -7224,19 +7288,18 @@ def query_event_wall(session, user_message, user, query='', date_filter='', limi
     return query_events(session, user_message, user, query=query, date_filter=date_filter, limit=limit)
 
 
-def _configured_k8s_namespaces(knowledge_environment, cluster):
-    if not knowledge_environment or not cluster:
-        return []
-    namespace_map = knowledge_environment.get('k8s_namespaces') or {}
-    if not isinstance(namespace_map, dict):
-        return []
-    values = namespace_map.get(str(cluster.id)) or namespace_map.get(cluster.id) or []
-    namespaces = []
-    for value in values:
-        namespace = str(value or '').strip()
-        if namespace and namespace not in namespaces:
-            namespaces.append(namespace)
-    return namespaces
+def _explicit_k8s_namespaces_from_query(query):
+    namespace = _extract_k8s_namespace(query, {})
+    return [namespace] if namespace else []
+
+
+def _k8s_namespaces_for_query(knowledge_environment, cluster, query=''):
+    # Knowledge graph namespace configuration is only a topology display filter.
+    # Read-only assistant K8s queries default to all namespaces unless the user explicitly scopes them.
+    explicit_namespaces = _explicit_k8s_namespaces_from_query(query)
+    if explicit_namespaces:
+        return explicit_namespaces
+    return []
 
 
 def _load_k8s_pods_for_environment(cluster, namespaces):
@@ -7301,6 +7364,46 @@ def _load_k8s_nodes(cluster):
     from ops.k8s_views import get_k8s_nodes_snapshot
 
     return get_k8s_nodes_snapshot(cluster)
+
+
+def _extract_k8s_query_object_name(query, resource_type):
+    if resource_type == 'services':
+        return _extract_k8s_service_name(query, {})
+    if resource_type in {'deployments', 'statefulsets'}:
+        return _extract_k8s_workload_name(query, {})
+    if resource_type == 'pods':
+        return _extract_k8s_pod_name(query, {})
+    return _k8s_object_name_from_patterns(
+        query,
+        [
+            rf'(?:{resource_type})\s*[:=：]?\s*([a-z0-9][a-z0-9_.-]{{1,126}})',
+            rf'([a-z0-9][a-z0-9_.-]{{1,126}})\s*(?:{resource_type})',
+        ],
+        blocked=['k8s', 'kubernetes'],
+    )
+
+
+def _rank_k8s_resource_items(items, query='', resource_type=''):
+    target_name = _extract_k8s_query_object_name(query, resource_type)
+    target_namespace = (_extract_k8s_namespace(query, {}) or '').lower()
+    if not target_name and not target_namespace:
+        return list(items or [])
+    target_name = target_name.lower()
+
+    def rank(item):
+        name = str(item.get('name') or '').lower()
+        namespace = str(item.get('namespace') or '').lower()
+        score = 0
+        if target_namespace and namespace == target_namespace:
+            score -= 10
+        if target_name:
+            if name == target_name:
+                score -= 100
+            elif target_name in name or name in target_name:
+                score -= 50
+        return score
+
+    return sorted(list(items or []), key=rank)
 
 
 def _format_k8s_resource_item(resource_type, item):
@@ -7374,7 +7477,7 @@ def query_k8s_resources(session, user_message, user, query='', resource_type='',
         _finish_tool_invocation(invocation, {'count': 0}, started_at, success=True)
         return {'summary': {'count': 0, 'resource_type': resource_type}, 'sections': [], 'citations': [{'title': 'K8s 集群', 'path': '/containers/k8s'}], 'items': []}
 
-    namespaces = _configured_k8s_namespaces(knowledge_environment, cluster)
+    namespaces = _k8s_namespaces_for_query(knowledge_environment, cluster, query)
     error = ''
     try:
         if resource_type == 'nodes':
@@ -7389,7 +7492,8 @@ def query_k8s_resources(session, user_message, user, query='', resource_type='',
         items = []
         error = str(exc)[:240]
 
-    visible_items = items[:max(int(limit or 8), 1)]
+    ranked_items = _rank_k8s_resource_items(items, query, resource_type)
+    visible_items = ranked_items[:max(int(limit or 8), 1)]
     scope = '、'.join(namespaces) if namespaces and resource_type != 'nodes' else '全部命名空间'
     if resource_type == 'nodes':
         scope = '集群节点'
@@ -7415,7 +7519,7 @@ def query_k8s_resources(session, user_message, user, query='', resource_type='',
         'summary': summary,
         'sections': [{'title': _k8s_resource_title(resource_type), 'items': section_items}],
         'citations': [{'title': 'K8s 集群', 'path': '/containers/k8s'}],
-        'items': items,
+        'items': ranked_items,
     }
 
 
@@ -7493,7 +7597,7 @@ def query_k8s_cluster_summary(session, user_message, user, query='', cluster_nam
     from ops.k8s_views import _build_summary_alerts, get_k8s_summary_snapshot
 
     summary_payload = get_k8s_summary_snapshot(cluster)
-    namespaces = _configured_k8s_namespaces(knowledge_environment, cluster)
+    namespaces = _k8s_namespaces_for_query(knowledge_environment, cluster, query)
     pods = []
     pod_error = ''
     try:
@@ -8814,6 +8918,30 @@ def _content_conflicts_with_tool_facts(content, collected_tool_outputs):
     return False
 
 
+def _answer_conflicts_with_pending_action(content, pending_action_draft=None):
+    if not pending_action_draft:
+        return False
+    text = _normalize_formatter_output(_sanitize_assistant_content(content))
+    if not text:
+        return False
+    compact = re.sub(r'\s+', '', text).lower()
+    conflict_patterns = [
+        '无法生成任务',
+        '不能生成任务',
+        '未能生成任务',
+        '没有生成任务',
+        '无法创建任务',
+        '不能创建任务',
+        '无法生成修改',
+        '未识别到目标主机',
+        '任务生成条件不满足',
+        '仅支持生成主机级',
+        '不支持直接对service对象生成',
+        '不支持直接对svc对象生成',
+    ]
+    return any(pattern in compact for pattern in conflict_patterns)
+
+
 def _log_answer_lacks_analysis(content, collected_tool_outputs):
     log_context = _collect_log_context(collected_tool_outputs or [])
     if not log_context.get('samples'):
@@ -8931,6 +9059,8 @@ def _is_formatted_answer_valid(content, *, pending_action_draft=None, message_ty
     text = _normalize_formatter_output(content)
     if not text:
         return False
+    if _answer_conflicts_with_pending_action(text, pending_action_draft):
+        return False
     compact = re.sub(r'\s+', '', text)
     if len(compact) < 24:
         return False
@@ -8955,6 +9085,8 @@ def _is_formatted_answer_valid(content, *, pending_action_draft=None, message_ty
 def _formatter_repair_issue(content, *, fallback_content='', collected_tool_outputs=None, pending_action_draft=None, message_type=AIOpsChatMessage.TYPE_TEXT, profile='general'):
     if _content_conflicts_with_tool_facts(content, collected_tool_outputs or []):
         return '回答内容与工具事实冲突，请严格按工具事实重写。'
+    if _answer_conflicts_with_pending_action(content, pending_action_draft):
+        return '已生成待确认任务草稿，回答不能再声称无法生成任务；请按任务草稿事实重写。'
     if _log_answer_lacks_analysis(content, collected_tool_outputs or []):
         return '日志类回答只列出了查询结果，缺少结论、共同模式、影响判断或建议操作；请基于日志样本重写分析。'
     if not _is_formatted_answer_valid(content, pending_action_draft=pending_action_draft, message_type=message_type, profile=profile):
@@ -9055,28 +9187,43 @@ def _run_answer_formatter(provider, *, question, draft_content, sections, citati
 
 
 def _build_task_sections(draft):
+    is_k8s_task = draft.get('target_type') == HostTask.TARGET_K8S or str(draft.get('task_type') or '').startswith('k8s_')
+    target_label = 'K8s 目标' if is_k8s_task else '目标主机'
+    target_unit = '个' if is_k8s_task else '台'
     sections = [{
         'title': '任务草稿',
         'items': [
             f"任务名称：{draft['name']}",
             f"任务类型：{draft['task_type']}",
-            f"目标主机：{draft['host_count']} 台",
+            f"{target_label}：{draft['host_count']} {target_unit}",
             f"执行方式：{draft['execution_mode']}",
             f"执行策略：{draft['execution_strategy']}",
             f"风险等级：{draft['risk_level']}",
         ],
     }]
-    target_hosts = draft.get('target_hosts') or []
-    if target_hosts:
+    if is_k8s_task:
+        k8s_targets = draft.get('k8s_targets') or draft.get('target_hosts') or []
         sections.append({
-            'title': '目标主机',
-            'items': [f"{item['hostname']} ({item['ip_address']})" for item in target_hosts[:6]],
+            'title': 'K8s 目标',
+            'items': [
+                f"{item.get('cluster_name') or item.get('hostname') or item.get('cluster_id')} / {item.get('namespace') or '-'} / {item.get('kind') or '-'} / {item.get('name') or '-'}"
+                for item in k8s_targets[:6]
+            ],
         })
+    else:
+        target_hosts = draft.get('target_hosts') or []
+        if target_hosts:
+            sections.append({
+                'title': '目标主机',
+                'items': [f"{item['hostname']} ({item['ip_address']})" for item in target_hosts[:6]],
+            })
     payload = draft.get('payload') or {}
     if payload.get('command'):
         sections.append({'title': '命令内容', 'items': [payload['command']]})
     if payload.get('service_name'):
         sections.append({'title': '服务名称', 'items': [payload['service_name']]})
+    if payload.get('patch'):
+        sections.append({'title': 'K8s Patch', 'items': [json.dumps(payload['patch'], ensure_ascii=False, default=_json_default)]})
     if payload.get('playbook_content'):
         sections.append({'title': 'Playbook 摘要', 'items': ['已生成内联 Playbook 草稿']})
     return sections
@@ -9240,6 +9387,15 @@ def _playbook_task_title(draft_request, request_summary, question, payload, targ
 def _task_title_from_draft_payload(draft):
     payload = draft.get('payload') or {}
     task_type = draft.get('task_type') or ''
+    k8s_targets = draft.get('k8s_targets') or []
+    k8s_target = k8s_targets[0] if k8s_targets and isinstance(k8s_targets[0], dict) else {}
+    if task_type == HostTask.TASK_K8S_POD_EXEC and (payload.get('resource_kind') or '').lower() == 'service':
+        service_name = payload.get('service_name') or k8s_target.get('name') or ''
+        namespace = payload.get('namespace') or k8s_target.get('namespace') or ''
+        if service_name and namespace:
+            return _compact_task_title(f'修改 {namespace}/{service_name} Service')
+        if service_name:
+            return _compact_task_title(f'修改 {service_name} Service')
     title_targets = draft.get('target_hosts') or []
     if not title_targets:
         target_refs = _dedupe_target_refs(draft.get('target_refs') or [])
@@ -9282,11 +9438,717 @@ def _ensure_task_draft_title(draft):
     return payload
 
 
+K8S_TASK_KIND_ALIASES = {
+    'k8s_patch_service': HostTask.TASK_K8S_POD_EXEC,
+    'patch_service': HostTask.TASK_K8S_POD_EXEC,
+    'service_patch': HostTask.TASK_K8S_POD_EXEC,
+    'modify_service': HostTask.TASK_K8S_POD_EXEC,
+    'update_service': HostTask.TASK_K8S_POD_EXEC,
+    'k8s_service_patch': HostTask.TASK_K8S_POD_EXEC,
+    'k8s_pod_exec': HostTask.TASK_K8S_POD_EXEC,
+    'k8s_command': HostTask.TASK_K8S_POD_EXEC,
+    'k8s_scale_workload': HostTask.TASK_K8S_SCALE_WORKLOAD,
+    'k8s_restart_pod': HostTask.TASK_K8S_RESTART_POD,
+}
+
+
+def _normalize_task_kind(value):
+    task_kind = str(value or '').strip()
+    if not task_kind:
+        return ''
+    return K8S_TASK_KIND_ALIASES.get(task_kind, task_kind)
+
+
+K8S_TASK_DIRECTIVE_KEYWORDS = [
+    '帮我', '请', '麻烦', '直接', '给我', '为我', '把', '将', '对', '替我',
+    '生成', '创建', '新建', '安排', '发起', '执行', '处理',
+]
+
+K8S_SERVICE_MUTATION_KEYWORDS = [
+    '修改', '更新', '变更', '调整', '更改', '设置', '改成', '改为', '设置为',
+    '暴露', '开放', '切换', '转换', 'patch', 'apply', 'change', 'update', 'set',
+]
+
+
+def _has_k8s_task_directive(text):
+    lowered = str(text or '').lower()
+    if any(keyword in lowered for keyword in K8S_TASK_DIRECTIVE_KEYWORDS):
+        return True
+    return bool(re.search(r'\b(?:create|generate|run|execute|patch|apply|set|scale|restart|delete)\b', lowered))
+
+
+def _contains_k8s_service_type(text):
+    return bool(re.search(r'\b(?:clusterip|nodeport|loadbalancer|externalname)\b', str(text or ''), flags=re.IGNORECASE))
+
+
+def _looks_like_k8s_service_patch_request(text, draft_request=None):
+    draft_request = draft_request or {}
+    task_kind = _normalize_task_kind(draft_request.get('task_kind'))
+    if task_kind == HostTask.TASK_K8S_POD_EXEC and (
+        draft_request.get('patch')
+        or draft_request.get('service_type')
+        or draft_request.get('ports')
+        or draft_request.get('labels')
+        or draft_request.get('annotations')
+        or draft_request.get('selector')
+    ):
+        return True
+    lowered = str(text or '').lower()
+    has_service_resource = bool(re.search(r'(?<![a-z0-9_])(?:svc|service|services)(?![a-z0-9_])', lowered))
+    has_service = has_service_resource or '服务' in lowered or _contains_k8s_service_type(lowered)
+    has_k8s_scope = any(keyword in lowered for keyword in ['k8s', 'kubernetes', '命名空间', 'namespace', 'kubectl'])
+    has_k8s = has_k8s_scope or has_service_resource
+    has_mutation = any(keyword in lowered for keyword in K8S_SERVICE_MUTATION_KEYWORDS)
+    return has_k8s and has_service and has_mutation and _has_k8s_task_directive(lowered)
+
+
+def _looks_like_k8s_scale_request(text, draft_request=None):
+    draft_request = draft_request or {}
+    task_kind = _normalize_task_kind(draft_request.get('task_kind'))
+    if task_kind == HostTask.TASK_K8S_SCALE_WORKLOAD:
+        return True
+    lowered = str(text or '').lower()
+    has_workload = any(keyword in lowered for keyword in [
+        'deployment', 'deploy', 'statefulset', 'sts', '工作负载', '无状态', '有状态',
+    ])
+    has_k8s_scope = any(keyword in lowered for keyword in ['k8s', 'kubernetes', '命名空间', 'namespace', 'kubectl', 'pod', 'pods'])
+    has_replicas_scope = any(keyword in lowered for keyword in ['副本', 'replica', 'replicas'])
+    has_scale_action = any(keyword in lowered for keyword in ['扩容', '缩容', '伸缩', 'scale'])
+    has_replicas_mutation = has_replicas_scope and any(keyword in lowered for keyword in [
+        '调整', '改成', '改为', '设置', '设置为', '变更', '到', '至', '=',
+    ])
+    return has_workload and (has_k8s_scope or has_replicas_scope) and (has_scale_action or has_replicas_mutation) and _has_k8s_task_directive(lowered)
+
+
+def _looks_like_k8s_restart_pod_request(text, draft_request=None):
+    draft_request = draft_request or {}
+    task_kind = _normalize_task_kind(draft_request.get('task_kind'))
+    if task_kind == HostTask.TASK_K8S_RESTART_POD:
+        return True
+    lowered = str(text or '').lower()
+    has_pod = bool(re.search(r'(?<![a-z0-9_])pods?(?![a-z0-9_])', lowered))
+    has_restart = any(keyword in lowered for keyword in ['重启', 'restart', '删除pod', 'delete pod', 'delete pods'])
+    has_howto = any(keyword in lowered for keyword in ['怎么', '如何', '怎样', '能不能', '是否可以', '建议', '方案'])
+    if has_howto and not any(keyword in lowered for keyword in ['帮我', '请', '直接', '把', '将', '执行']):
+        return False
+    return has_pod and has_restart and _has_k8s_task_directive(lowered)
+
+
+def _looks_like_k8s_task_request(text, draft_request=None):
+    return (
+        _looks_like_k8s_service_patch_request(text, draft_request)
+        or _looks_like_k8s_scale_request(text, draft_request)
+        or _looks_like_k8s_restart_pod_request(text, draft_request)
+    )
+
+
+def _detect_k8s_task_kind_from_request(text='', draft_request=None):
+    draft_request = draft_request or {}
+    task_kind = _normalize_task_kind(draft_request.get('task_kind'))
+    if task_kind:
+        return task_kind
+    if _looks_like_k8s_scale_request(text, draft_request):
+        return HostTask.TASK_K8S_SCALE_WORKLOAD
+    if _looks_like_k8s_restart_pod_request(text, draft_request):
+        return HostTask.TASK_K8S_RESTART_POD
+    if _looks_like_k8s_service_patch_request(text, draft_request):
+        return HostTask.TASK_K8S_POD_EXEC
+    return ''
+
+
+K8S_WRITE_TASK_KINDS = {
+    HostTask.TASK_K8S_POD_EXEC,
+    HostTask.TASK_K8S_SCALE_WORKLOAD,
+    HostTask.TASK_K8S_RESTART_POD,
+}
+
+K8S_SERVICE_KIND_VALUES = {'service', 'services', 'svc'}
+K8S_WORKLOAD_KIND_VALUES = {'deployment', 'deploy', 'deployments', 'statefulset', 'statefulsets', 'sts'}
+K8S_POD_KIND_VALUES = {'pod', 'pods'}
+K8S_WRITE_KIND_VALUES = K8S_SERVICE_KIND_VALUES.union(K8S_WORKLOAD_KIND_VALUES, K8S_POD_KIND_VALUES)
+
+
+def _has_meaningful_value(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _merge_task_request_text(request_summary='', original_question=''):
+    summary = str(request_summary or '').strip()
+    original = str(original_question or '').strip()
+    if summary and original:
+        if original in summary:
+            return summary
+        if summary in original:
+            return original
+        return f'{summary}\n{original}'
+    return summary or original
+
+
+def _draft_request_has_k8s_write_fields(draft_request):
+    if not isinstance(draft_request, dict):
+        return False
+    task_kind = _normalize_task_kind(draft_request.get('task_kind'))
+    if task_kind in K8S_WRITE_TASK_KINDS:
+        return True
+    kind = str(draft_request.get('resource_kind') or draft_request.get('kind') or '').strip().lower()
+    if kind in K8S_WRITE_KIND_VALUES:
+        return True
+    has_namespace = any(_has_meaningful_value(draft_request.get(key)) for key in ['namespace', 'k8s_namespace'])
+    has_service_name = any(_has_meaningful_value(draft_request.get(key)) for key in ['service_name', 'k8s_service_name', 'service'])
+    has_service_patch = any(_has_meaningful_value(draft_request.get(key)) for key in [
+        'service_type',
+        'ports',
+        'patch',
+        'labels',
+        'annotations',
+        'selector',
+    ])
+    has_workload = any(_has_meaningful_value(draft_request.get(key)) for key in [
+        'workload_name',
+        'deployment_name',
+        'statefulset_name',
+        'workload_type',
+        'replicas',
+    ])
+    has_pod = _has_meaningful_value(draft_request.get('pod_name'))
+    resource_type = str(draft_request.get('resource_type') or '').strip().lower()
+    if resource_type == TaskResource.RESOURCE_K8S and (
+        has_namespace
+        or has_service_name
+        or has_service_patch
+        or has_workload
+        or has_pod
+        or _has_meaningful_value(draft_request.get('name'))
+    ):
+        return True
+    if has_namespace and (has_service_name or has_service_patch or has_workload or has_pod):
+        return True
+    return has_service_patch or has_workload or has_pod
+
+
+def _infer_k8s_task_kind_from_fields(draft_request):
+    draft_request = draft_request or {}
+    kind = str(draft_request.get('resource_kind') or draft_request.get('kind') or '').strip().lower()
+    if (
+        kind in K8S_WORKLOAD_KIND_VALUES
+        or _has_meaningful_value(draft_request.get('workload_name'))
+        or _has_meaningful_value(draft_request.get('deployment_name'))
+        or _has_meaningful_value(draft_request.get('statefulset_name'))
+        or _has_meaningful_value(draft_request.get('replicas'))
+    ):
+        return HostTask.TASK_K8S_SCALE_WORKLOAD
+    if kind in K8S_POD_KIND_VALUES or _has_meaningful_value(draft_request.get('pod_name')):
+        return HostTask.TASK_K8S_RESTART_POD
+    if (
+        kind in K8S_SERVICE_KIND_VALUES
+        or _has_meaningful_value(draft_request.get('service_name'))
+        or _has_meaningful_value(draft_request.get('k8s_service_name'))
+        or _has_meaningful_value(draft_request.get('service'))
+        or _has_meaningful_value(draft_request.get('service_type'))
+        or _has_meaningful_value(draft_request.get('patch'))
+        or _has_meaningful_value(draft_request.get('ports'))
+    ):
+        return HostTask.TASK_K8S_POD_EXEC
+    return ''
+
+
+def _normalize_k8s_draft_request_for_generation(draft_request=None, original_question=''):
+    arguments = dict(draft_request or {})
+    arguments['task_kind'] = _normalize_task_kind(arguments.get('task_kind'))
+    combined_text = _merge_task_request_text(arguments.get('request_summary', ''), original_question)
+    if not (_looks_like_k8s_task_request(combined_text, arguments) or _draft_request_has_k8s_write_fields(arguments)):
+        return arguments
+
+    if combined_text:
+        arguments['request_summary'] = combined_text
+    arguments['resource_type'] = TaskResource.RESOURCE_K8S
+    if arguments.get('environment') and not arguments.get('resource_environment'):
+        arguments['resource_environment'] = arguments.get('environment')
+
+    task_kind = _detect_k8s_task_kind_from_request(combined_text, arguments) or _infer_k8s_task_kind_from_fields(arguments)
+    if task_kind:
+        arguments['task_kind'] = task_kind
+    return arguments
+
+
+def _k8s_object_name_from_patterns(text, patterns, blocked=None):
+    raw = str(text or '')
+    blocked_names = {str(item or '').lower() for item in (blocked or [])}
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = match.group(1).strip(' "\'“”‘’，,。；;')
+        if candidate and candidate.lower() not in blocked_names:
+            return candidate
+    return ''
+
+
+def _extract_k8s_namespace(text='', draft_request=None):
+    draft_request = draft_request or {}
+    explicit = (draft_request.get('namespace') or draft_request.get('k8s_namespace') or '').strip()
+    if explicit:
+        return explicit
+    raw = str(text or '')
+    patterns = [
+        r'(?:namespace|ns)\s*[:=：]?\s*([a-z0-9][a-z0-9_.-]{0,62})',
+        r'([a-z0-9][a-z0-9_.-]{0,62})\s*(?:命名空间|namespace|ns)\s*(?:下|里|中|内)?',
+        r'(?:命名空间|namespace|ns)\s*(?:下|里|中|内|为|是|:|：)?\s*([a-z0-9][a-z0-9_.-]{0,62})',
+        r'([a-z0-9][a-z0-9_.-]{0,62})\s*(?:下|里|中|内)\s*(?:的)?\s*(?:svc|service|services|pod|pods|deployment|deploy|statefulset|sts|工作负载)',
+        r'\?{2,}\s+([a-z0-9][a-z0-9_.-]{0,62})\s+\?{2,}\s*(?:svc|service|services|pod|pods|deployment|deploy|statefulset|sts)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip(' "\'“”‘’')
+    return ''
+
+
+def _extract_k8s_service_name(text='', draft_request=None):
+    draft_request = draft_request or {}
+    explicit = (
+        draft_request.get('service_name')
+        or draft_request.get('k8s_service_name')
+        or draft_request.get('service')
+        or draft_request.get('name')
+        or ''
+    )
+    explicit = str(explicit or '').strip()
+    if explicit:
+        return explicit
+    raw = str(text or '')
+    patterns = [
+        r'(?:svc|service|services)\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?',
+        r'(?:svc|service|services)\s+(?:名|名称|named|name)?\s*[:=：]?\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?',
+        r'(?:名为|名称为)\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?\s*(?:的)?\s*(?:svc|service|服务)',
+        r'(?:把|将)\s*(?:(?:[a-z0-9][a-z0-9_.-]{0,62})\s*(?:命名空间|namespace|ns|下|里|中|内)\s*(?:下|里|中|内|的)?\s*)?["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?\s*(?:暴露|设置|修改|更新|调整|变更|更改|改成|改为|切换|转换)',
+        r'["“]([a-z0-9][a-z0-9_.-]{1,120})["”]\s*(?:这个|的)?\s*(?:svc|service|服务)?',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip(' "\'“”‘’，,。；;')
+            if candidate and candidate.lower() not in {'svc', 'service', 'services'}:
+                return candidate
+    return ''
+
+
+def _extract_k8s_workload_type(text='', draft_request=None):
+    explicit = str((draft_request or {}).get('workload_type') or (draft_request or {}).get('kind') or '').strip().lower()
+    if explicit in {'deployment', 'deploy', 'deployments'}:
+        return 'deployment'
+    if explicit in {'statefulset', 'statefulsets', 'sts'}:
+        return 'statefulset'
+    lowered = str(text or '').lower()
+    if any(keyword in lowered for keyword in ['statefulset', 'statefulsets', 'sts', '有状态']):
+        return 'statefulset'
+    return 'deployment'
+
+
+def _extract_k8s_workload_name(text='', draft_request=None):
+    draft_request = draft_request or {}
+    explicit = (
+        draft_request.get('workload_name')
+        or draft_request.get('deployment_name')
+        or draft_request.get('statefulset_name')
+        or draft_request.get('name')
+        or ''
+    )
+    explicit = str(explicit or '').strip()
+    if explicit:
+        return explicit
+    patterns = [
+        r'(?:deployment|deploy|statefulset|sts)\s*(?:名|名称|named|name)?\s*[:=：]?\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?',
+        r'(?:名为|名称为)\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?\s*(?:的)?\s*(?:deployment|deploy|statefulset|sts|工作负载)',
+        r'(?:把|将|对)\s*(?:(?:[a-z0-9][a-z0-9_.-]{0,62})\s*(?:命名空间|namespace|ns|下|里|中|内)\s*(?:下|里|中|内|的)?\s*)?(?:(?:deployment|deploy|statefulset|sts|工作负载)\s*)?["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?\s*(?:扩容|缩容|伸缩|调整|scale|副本)',
+    ]
+    return _k8s_object_name_from_patterns(text, patterns, blocked={'deployment', 'deploy', 'statefulset', 'sts', 'workload'})
+
+
+def _extract_k8s_replicas(text='', draft_request=None):
+    draft_request = draft_request or {}
+    if draft_request.get('replicas') not in (None, ''):
+        try:
+            replicas = int(draft_request.get('replicas'))
+            return replicas if replicas >= 0 else None
+        except (TypeError, ValueError):
+            return None
+    raw = str(text or '')
+    patterns = [
+        r'--replicas\s*[= ]\s*(\d+)',
+        r'(?:副本|replicas?)\s*(?:数)?\s*(?:改成|改为|设置为|调整为|变更为|为|是|=|:|：)?\s*(\d+)',
+        r'(?:扩容|缩容|伸缩|scale|调整)\s*(?:到|至|为|成|=|:|：)?\s*(\d+)\s*(?:个)?\s*(?:副本|replicas?)?',
+        r'(?:到|至|为|成)\s*(\d+)\s*(?:个)?\s*(?:副本|replicas?)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _extract_k8s_pod_name(text='', draft_request=None):
+    draft_request = draft_request or {}
+    explicit = draft_request.get('pod_name') or draft_request.get('name') or ''
+    explicit = str(explicit or '').strip()
+    if explicit:
+        return explicit
+    patterns = [
+        r'(?:pod|pods)\s*(?:名|名称|named|name)?\s*[:=：]?\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?',
+        r'(?:名为|名称为)\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?\s*(?:的)?\s*(?:pod|pods)',
+        r'(?:重启|restart|删除|delete)\s*(?:pod|pods)?\s*["“]?([a-z0-9][a-z0-9_.-]{1,120})["”]?',
+    ]
+    return _k8s_object_name_from_patterns(text, patterns, blocked={'pod', 'pods'})
+
+
+def _parse_key_value_pairs(text):
+    pairs = {}
+    for raw_key, raw_value in re.findall(r'([A-Za-z0-9_.\-/]+)\s*[:=]\s*([A-Za-z0-9_.\-/]+)', str(text or '')):
+        key = raw_key.strip().strip('/ ')
+        value = raw_value.strip().strip('/ ')
+        if key and value:
+            pairs[key] = value
+    return pairs
+
+
+def _extract_k8s_service_patch(text='', draft_request=None):
+    draft_request = draft_request or {}
+    patch = draft_request.get('patch') if isinstance(draft_request.get('patch'), dict) else {}
+    if patch:
+        return patch
+
+    raw = str(text or '')
+    lowered = raw.lower()
+    patch = {}
+    spec = {}
+    metadata = {}
+
+    type_match = re.search(r'(?:type|类型)\s*(?:改成|改为|设置为|=|:|：)?\s*(ClusterIP|NodePort|LoadBalancer|ExternalName)', raw, flags=re.IGNORECASE)
+    if type_match:
+        spec['type'] = type_match.group(1)
+    else:
+        for service_type in ['LoadBalancer', 'NodePort', 'ClusterIP', 'ExternalName']:
+            if service_type.lower() in lowered and any(keyword in raw for keyword in ['改', '设置', '暴露', '修改', '变更', '调整']):
+                spec['type'] = service_type
+                break
+
+    node_port_match = re.search(r'(?:nodeport|node port|节点端口)\s*(?:端口)?\s*(?:改成|改为|设置为|调整为|变更为|为|是|=|:|：)?\s*(\d{2,5})', raw, flags=re.IGNORECASE)
+    if not node_port_match:
+        node_port_match = re.search(r'(?:nodeport|node port|节点端口)[^\d]{0,24}(?:端口)?\s*(?:为|是|=|:|：)?\s*(\d{2,5})', raw, flags=re.IGNORECASE)
+    service_port_match = re.search(r'(\d{1,5})\s*(?:端口|port)\s*(?:改成|改为|调整为|变更为)?\s*(?:nodeport|node port|节点端口)', raw, flags=re.IGNORECASE)
+    if not service_port_match:
+        service_port_match = re.search(r'(?:service\s*)?(?:port|服务端口|svc端口|端口)\s*(?:为|是|=|:|：)?\s*(\d{1,5}).{0,40}(?:nodeport|node port|节点端口)', raw, flags=re.IGNORECASE)
+    if not service_port_match:
+        service_port_match = re.search(r'(\d{1,5})\s*(?:对应|映射到|映射为|->|=>|转到|暴露到|关联)\s*(?:nodeport|node port|节点端口)', raw, flags=re.IGNORECASE)
+    port_match = re.search(r'(?:端口|port)\s*(?:改成|改为|设置为|调整为|变更为|为|是|=|:|：)?\s*(\d{1,5})', raw, flags=re.IGNORECASE)
+    target_port_match = re.search(r'(?:targetport|target port|目标端口)\s*(?:改成|改为|设置为|调整为|变更为|为|是|=|:|：)?\s*(\d{1,5})', raw, flags=re.IGNORECASE)
+    if node_port_match or service_port_match or target_port_match or (port_match and 'nodeport' not in lowered):
+        port = {}
+        if service_port_match:
+            port['port'] = int(service_port_match.group(1))
+        elif port_match and 'nodeport' not in lowered:
+            port['port'] = int(port_match.group(1))
+        if target_port_match:
+            port['targetPort'] = int(target_port_match.group(1))
+        if node_port_match:
+            port['nodePort'] = int(node_port_match.group(1))
+        if port:
+            spec['ports'] = [port]
+
+    for field_name, target_key in [('selector', 'selector'), ('label', 'labels'), ('labels', 'labels'), ('annotation', 'annotations'), ('annotations', 'annotations')]:
+        field_match = re.search(rf'{field_name}\s*(?:改成|改为|设置为|=|:|：)?\s*([A-Za-z0-9_.\-/]+=[A-Za-z0-9_.\-/]+(?:[,，]\s*[A-Za-z0-9_.\-/]+=[A-Za-z0-9_.\-/]+)*)', raw, flags=re.IGNORECASE)
+        if not field_match:
+            continue
+        values = _parse_key_value_pairs(field_match.group(1).replace('，', ','))
+        if not values:
+            continue
+        if target_key == 'selector':
+            spec['selector'] = values
+        else:
+            metadata[target_key] = values
+
+    explicit_labels = draft_request.get('labels') if isinstance(draft_request.get('labels'), dict) else {}
+    explicit_annotations = draft_request.get('annotations') if isinstance(draft_request.get('annotations'), dict) else {}
+    explicit_selector = draft_request.get('selector') if isinstance(draft_request.get('selector'), dict) else {}
+    if explicit_labels:
+        metadata['labels'] = {**metadata.get('labels', {}), **explicit_labels}
+    if explicit_annotations:
+        metadata['annotations'] = {**metadata.get('annotations', {}), **explicit_annotations}
+    if explicit_selector:
+        spec['selector'] = {**spec.get('selector', {}), **explicit_selector}
+    if draft_request.get('service_type'):
+        spec['type'] = draft_request.get('service_type')
+    if draft_request.get('ports') and isinstance(draft_request.get('ports'), list):
+        spec['ports'] = draft_request.get('ports')
+
+    if metadata:
+        patch['metadata'] = metadata
+    if spec:
+        patch['spec'] = spec
+    return patch
+
+
+def _resolve_k8s_task_resource_targets(question='', environment='', draft_request=None, max_targets=20):
+    draft_request = draft_request or {}
+    explicit_resource_ids = []
+    for key in ['target_resource_ids', 'resource_ids', 'target_task_resource_ids', 'task_resource_ids']:
+        explicit_resource_ids.extend(_coerce_int_list(draft_request.get(key)))
+    resolved_resource_environment = _resolve_task_resource_environment_from_text(question)
+    resource_environment = draft_request.get('resource_environment') or resolved_resource_environment or environment
+    knowledge_environment = _resolve_knowledge_environment_for_query(question, resource_environment or environment)
+    resource_system = draft_request.get('resource_system') or draft_request.get('system_name') or ''
+    resource_scope_environment = dict(knowledge_environment or {})
+    explicit_environment_ids = _task_resource_environment_ids_for_name(resource_environment)
+    if explicit_environment_ids:
+        resource_scope_environment['task_resource_environment_ids'] = explicit_environment_ids
+    resources = _resolve_task_resource_targets_for_task(
+        question=question,
+        environment=resource_environment,
+        system_name=resource_system,
+        resource_type=TaskResource.RESOURCE_K8S,
+        status=draft_request.get('resource_status') or TaskResource.STATUS_ACTIVE,
+        explicit_resource_ids=explicit_resource_ids,
+        max_hosts=max_targets,
+        knowledge_environment=resource_scope_environment,
+    )
+    if resources:
+        return resources, knowledge_environment
+    cluster_ids = _dedupe_int_list(draft_request.get('cluster_ids') or draft_request.get('k8s_cluster_ids') or draft_request.get('cluster_id') or [])
+    queryset = K8sCluster.objects.all()
+    if cluster_ids:
+        queryset = queryset.filter(id__in=cluster_ids)
+    elif knowledge_environment and knowledge_environment.get('k8s_cluster_ids'):
+        queryset = queryset.filter(id__in=knowledge_environment.get('k8s_cluster_ids') or [])
+    cluster_name = (draft_request.get('cluster_name') or draft_request.get('k8s_cluster_name') or '').strip()
+    if cluster_name:
+        queryset = queryset.filter(name__icontains=cluster_name)
+    resources = [
+        resource
+        for resource in TaskResource.objects.select_related('environment', 'system', 'cluster').filter(
+            resource_type=TaskResource.RESOURCE_K8S,
+            status=TaskResource.STATUS_ACTIVE,
+            cluster_id__in=[cluster.id for cluster in queryset],
+        ).order_by('environment__sort_order', 'system__sort_order', 'name', 'id')[:max_targets]
+    ]
+    if resources:
+        return resources, knowledge_environment
+    return list(queryset.order_by('-updated_at', '-id')[:max_targets]), knowledge_environment
+
+
+def _build_k8s_target_items(k8s_sources, namespace='', name='', kind='service', container=''):
+    targets = []
+    for source in k8s_sources or []:
+        cluster = source.cluster if isinstance(source, TaskResource) else source
+        if not cluster and isinstance(source, TaskResource):
+            cluster = K8sCluster.objects.filter(name=source.name).first()
+        if not cluster:
+            continue
+        targets.append({
+            'cluster_id': cluster.id,
+            'cluster_name': cluster.name,
+            'resource_id': source.id if isinstance(source, TaskResource) else None,
+            'task_resource_id': source.id if isinstance(source, TaskResource) else None,
+            'resource_name': source.name if isinstance(source, TaskResource) else cluster.name,
+            'environment_name': source.environment.name if isinstance(source, TaskResource) and source.environment_id else '',
+            'system_name': source.system.name if isinstance(source, TaskResource) and source.system_id else '',
+            'namespace': '' if kind == 'cluster' else (namespace or getattr(source, 'namespace', '') or 'default'),
+            'name': name,
+            'kind': kind,
+            'container': container or '',
+        })
+    return targets
+
+
+def _build_k8s_target_snapshot_for_draft(k8s_targets):
+    return build_ops_k8s_target_snapshot(k8s_targets)
+
+
+def _build_k8s_service_patch_draft(user, question='', draft_request=None):
+    draft_request = draft_request or {}
+    if not user_has_permissions(user, ['ops.k8s.view']):
+        return {'error': '当前账号无权生成 K8s 任务草稿。'}
+    environment = draft_request.get('environment') or _extract_environment(question)
+    max_targets = draft_request.get('max_hosts') or draft_request.get('max_targets') or 20
+    namespace = _extract_k8s_namespace(question, draft_request)
+    service_name = _extract_k8s_service_name(question, draft_request)
+    patch = _extract_k8s_service_patch(question, draft_request)
+    if not namespace:
+        return {'error': '未识别到目标 Service 所在命名空间，请补充 K8s 命名空间后再生成任务草稿。'}
+    if not service_name:
+        return {'error': '未识别到需要修改的 Service 名称，请补充 svc/service 名称。'}
+    if not patch:
+        return {'error': '未识别到 Service 具体修改内容，请补充要修改的 type、port、selector、label 或 annotation。'}
+    k8s_sources, knowledge_environment = _resolve_k8s_task_resource_targets(
+        question=question,
+        environment=environment,
+        draft_request=draft_request,
+        max_targets=max_targets,
+    )
+    if not k8s_sources:
+        return {'error': '未识别到目标 K8s 集群，请在问题中指定集群或先配置任务中心 K8s 资源底座。'}
+    k8s_targets = _build_k8s_target_items(k8s_sources, namespace=namespace, name=service_name, kind='service')
+    request_summary = (draft_request.get('request_summary') or question or '').strip()
+    patch_type = draft_request.get('patch_type') or 'strategic'
+    patch_text = json.dumps(patch, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    command = (
+        f"kubectl patch svc {shlex.quote(service_name)} "
+        f"-n {shlex.quote(namespace)} "
+        f"--type {shlex.quote(patch_type)} "
+        f"-p {shlex.quote(patch_text)}"
+    )
+    payload = {
+        'command': command,
+        'resource_kind': 'service',
+        'service_name': service_name,
+        'namespace': namespace,
+        'patch': patch,
+        'patch_type': patch_type,
+    }
+    return _ensure_task_draft_title({
+        'name': f'修改 {namespace}/{service_name} Service',
+        'description': '由 AIOps 智能助手生成的 K8s 命令任务草稿',
+        'target_type': HostTask.TARGET_K8S,
+        'task_type': HostTask.TASK_K8S_POD_EXEC,
+        'payload': payload,
+        'host_ids': [],
+        'resource_ids': [item.id for item in k8s_sources if isinstance(item, TaskResource)],
+        'target_refs': [],
+        'target_hosts': _build_k8s_target_snapshot_for_draft(k8s_targets),
+        'k8s_targets': k8s_targets,
+        'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
+        'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'host_count': len(k8s_targets),
+        'risk_level': AIOpsPendingAction.RISK_HIGH,
+        'request_summary': request_summary,
+        'reason': '已转换为通用 K8s 命令任务，通过 K8s API 执行 kubectl patch，避免退化为主机脚本或空脚本。',
+        'knowledge_environment': (knowledge_environment or {}).get('name'),
+    })
+
+
+def _build_k8s_scale_workload_draft(user, question='', draft_request=None):
+    draft_request = draft_request or {}
+    if not user_has_permissions(user, ['ops.k8s.view']):
+        return {'error': '当前账号无权生成 K8s 任务草稿。'}
+    environment = draft_request.get('environment') or _resource_environment_name_from_text(question)
+    max_targets = draft_request.get('max_hosts') or draft_request.get('max_targets') or 20
+    namespace = _extract_k8s_namespace(question, draft_request)
+    workload_type = _extract_k8s_workload_type(question, draft_request)
+    workload_name = _extract_k8s_workload_name(question, draft_request)
+    replicas = _extract_k8s_replicas(question, draft_request)
+    if not namespace:
+        return {'error': '未识别到目标工作负载所在命名空间，请补充 K8s 命名空间后再生成任务草稿。'}
+    if not workload_name:
+        return {'error': '未识别到需要伸缩的工作负载名称，请补充 Deployment 或 StatefulSet 名称。'}
+    if replicas is None:
+        return {'error': '未识别到目标副本数，请补充 replicas 或副本数。'}
+    k8s_sources, knowledge_environment = _resolve_k8s_task_resource_targets(
+        question=question,
+        environment=environment,
+        draft_request=draft_request,
+        max_targets=max_targets,
+    )
+    if not k8s_sources:
+        return {'error': '未识别到目标 K8s 集群，请在问题中指定集群或先配置任务中心 K8s 资源底座。'}
+    k8s_targets = _build_k8s_target_items(k8s_sources, namespace=namespace, name=workload_name, kind=workload_type)
+    request_summary = (draft_request.get('request_summary') or question or '').strip()
+    payload = {
+        'resource_kind': workload_type,
+        'workload_type': workload_type,
+        'workload_name': workload_name,
+        'namespace': namespace,
+        'replicas': replicas,
+    }
+    return _ensure_task_draft_title({
+        'name': f'伸缩 {namespace}/{workload_name} {workload_type}',
+        'description': '由 AIOps 智能助手生成的 K8s 工作负载伸缩任务草稿',
+        'target_type': HostTask.TARGET_K8S,
+        'task_type': HostTask.TASK_K8S_SCALE_WORKLOAD,
+        'payload': payload,
+        'host_ids': [],
+        'resource_ids': [item.id for item in k8s_sources if isinstance(item, TaskResource)],
+        'target_refs': [],
+        'target_hosts': _build_k8s_target_snapshot_for_draft(k8s_targets),
+        'k8s_targets': k8s_targets,
+        'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
+        'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'host_count': len(k8s_targets),
+        'risk_level': AIOpsPendingAction.RISK_HIGH,
+        'request_summary': request_summary,
+        'reason': '已转换为 K8s API 工作负载伸缩任务，由任务中心调用 Kubernetes API 调整副本数。',
+        'knowledge_environment': (knowledge_environment or {}).get('name'),
+    })
+
+
+def _build_k8s_restart_pod_draft(user, question='', draft_request=None):
+    draft_request = draft_request or {}
+    if not user_has_permissions(user, ['ops.k8s.view']):
+        return {'error': '当前账号无权生成 K8s 任务草稿。'}
+    environment = draft_request.get('environment') or _resource_environment_name_from_text(question)
+    max_targets = draft_request.get('max_hosts') or draft_request.get('max_targets') or 20
+    namespace = _extract_k8s_namespace(question, draft_request)
+    pod_name = _extract_k8s_pod_name(question, draft_request)
+    if not namespace:
+        return {'error': '未识别到目标 Pod 所在命名空间，请补充 K8s 命名空间后再生成任务草稿。'}
+    if not pod_name:
+        return {'error': '未识别到需要重启的 Pod 名称，请补充 pod 名称。'}
+    k8s_sources, knowledge_environment = _resolve_k8s_task_resource_targets(
+        question=question,
+        environment=environment,
+        draft_request=draft_request,
+        max_targets=max_targets,
+    )
+    if not k8s_sources:
+        return {'error': '未识别到目标 K8s 集群，请在问题中指定集群或先配置任务中心 K8s 资源底座。'}
+    k8s_targets = _build_k8s_target_items(k8s_sources, namespace=namespace, name=pod_name, kind='pod')
+    request_summary = (draft_request.get('request_summary') or question or '').strip()
+    payload = {
+        'resource_kind': 'pod',
+        'pod_name': pod_name,
+        'namespace': namespace,
+    }
+    return _ensure_task_draft_title({
+        'name': f'重启 {namespace}/{pod_name} Pod',
+        'description': '由 AIOps 智能助手生成的 K8s Pod 重启任务草稿',
+        'target_type': HostTask.TARGET_K8S,
+        'task_type': HostTask.TASK_K8S_RESTART_POD,
+        'payload': payload,
+        'host_ids': [],
+        'resource_ids': [item.id for item in k8s_sources if isinstance(item, TaskResource)],
+        'target_refs': [],
+        'target_hosts': _build_k8s_target_snapshot_for_draft(k8s_targets),
+        'k8s_targets': k8s_targets,
+        'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
+        'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'host_count': len(k8s_targets),
+        'risk_level': AIOpsPendingAction.RISK_HIGH,
+        'request_summary': request_summary,
+        'reason': '已转换为 K8s API Pod 重启任务，由任务中心通过 Kubernetes API 删除 Pod 并等待控制器重建。',
+        'knowledge_environment': (knowledge_environment or {}).get('name'),
+    })
+
+
 def build_task_draft(user, question='', draft_request=None):
     if not user_has_permissions(user, ['aiops.task.generate']):
         return {'error': '当前账号无权生成任务草稿。'}
 
-    draft_request = draft_request or {}
+    draft_request = _normalize_k8s_draft_request_for_generation(draft_request or {}, question)
+    question = draft_request.get('request_summary') or question
+    if _looks_like_k8s_service_patch_request(question, draft_request):
+        return _build_k8s_service_patch_draft(user, question=question, draft_request=draft_request)
+    if _looks_like_k8s_scale_request(question, draft_request):
+        return _build_k8s_scale_workload_draft(user, question=question, draft_request=draft_request)
+    if _looks_like_k8s_restart_pod_request(question, draft_request):
+        return _build_k8s_restart_pod_draft(user, question=question, draft_request=draft_request)
+
     environment = draft_request.get('environment') or _extract_environment(question)
     target_status = draft_request.get('target_status') or ('offline' if '离线' in (question or '') else 'all')
     max_hosts = draft_request.get('max_hosts') or 20
@@ -9564,12 +10426,15 @@ def _resolve_task_resource_targets_for_task(question='', environment='', system_
     queryset = TaskResource.objects.select_related('environment', 'system', 'cluster').all()
     if resource_type:
         queryset = queryset.filter(resource_type=resource_type)
-    scoped_env_ids = list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
-    if scoped_env_ids:
+    scoped_env_ids = _dedupe_int_list((knowledge_environment or {}).get('task_resource_environment_ids') or [])
+    explicit_environment_ids = _task_resource_environment_ids_for_name(environment)
+    if explicit_environment_ids:
+        queryset = queryset.filter(environment_id__in=explicit_environment_ids)
+    elif scoped_env_ids:
         queryset = queryset.filter(environment_id__in=scoped_env_ids)
     else:
         queryset = _task_resource_environment_filter(queryset, environment)
-    has_environment_scope = bool(scoped_env_ids or environment)
+    has_environment_scope = bool(explicit_environment_ids or scoped_env_ids or environment)
     queryset = _soft_filter_task_resources_by_system(
         queryset,
         system_name,
@@ -9633,15 +10498,34 @@ def _resolve_task_targets_from_draft(question='', environment='', target_status=
 def _build_task_center_draft_from_aiops_draft(draft, action=None):
     payload = _ensure_task_draft_title(draft)
     task_type = payload.get('task_type') or HostTask.TASK_REFRESH_METRICS
-    target_type = HostTask.TARGET_K8S if str(task_type).startswith('k8s_') else HostTask.TARGET_HOST
+    target_type = payload.get('target_type') or (HostTask.TARGET_K8S if str(task_type).startswith('k8s_') else HostTask.TARGET_HOST)
     target_refs = _dedupe_target_refs(payload.get('target_refs') or [])
     if not target_refs:
         target_refs = [{'source': 'host', 'id': item} for item in (payload.get('host_ids') or [])]
         target_refs.extend({'source': 'task_resource', 'id': item} for item in (payload.get('resource_ids') or []))
         target_refs = _dedupe_target_refs(target_refs)
     target_hosts = payload.get('target_hosts') or []
-    if not target_hosts and target_refs:
+    if target_type == HostTask.TARGET_K8S:
+        target_refs = []
+    elif not target_hosts and target_refs:
         target_hosts = build_ops_host_target_snapshot(resolve_host_source_refs(target_refs))
+    k8s_targets = payload.get('k8s_targets') or []
+    target_environment = (
+        payload.get('resource_environment')
+        or payload.get('environment_name')
+        or payload.get('knowledge_environment')
+        or ''
+    )
+    if not target_environment:
+        for item in target_hosts or []:
+            target_environment = item.get('environment_name') or item.get('environment') or ''
+            if target_environment:
+                break
+    if not target_environment:
+        for item in k8s_targets or []:
+            target_environment = item.get('environment_name') or item.get('environment') or ''
+            if target_environment:
+                break
     request_summary = payload.get('request_summary', '')
     session_id = action.session_id if action else None
     pending_action_id = action.id if action else None
@@ -9658,7 +10542,8 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
         'resource_ids': payload.get('resource_ids') or [],
         'target_refs': target_refs,
         'target_hosts': target_hosts,
-        'host_count': payload.get('host_count') or len(target_refs),
+        'k8s_targets': k8s_targets,
+        'host_count': payload.get('host_count') or (len(k8s_targets) if target_type == HostTask.TARGET_K8S else len(target_refs)),
         'risk_level': payload.get('risk_level') or HostTask.RISK_LOW,
         'request_summary': request_summary,
         'trigger_source': HostTask.TRIGGER_SOURCE_AIOPS,
@@ -9668,6 +10553,9 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
             'pending_action_id': pending_action_id,
             'request_summary': request_summary,
             'reason': payload.get('reason', ''),
+            'resource_environment': target_environment,
+            'environment_name': target_environment,
+            'knowledge_environment': payload.get('knowledge_environment') or '',
         },
     }
 
@@ -9790,6 +10678,7 @@ def confirm_action(action, user, request=None):
         'draft_ready': True,
         'task_name': task_draft['name'],
         'materialized_in_task_center': False,
+        'task_draft': task_draft,
     }
     action.save(update_fields=['status', 'result_payload', 'updated_at'])
     return task_draft
@@ -11283,7 +12172,11 @@ def _build_runtime_prompt(config, active_mcp_servers, active_skills, user, mcp_d
         '运行约束：',
         '\n'.join(runtime_lines),
         '要求：优先调用工具获取事实；未确认前不能声称任务已执行；如果数据不足，请明确说明。',
-        '如果用户明确要求生成、创建、新建、安排任务或巡检任务，不要只做查询，必须调用 generate_host_task。',
+        '如果用户明确要求生成、创建、新建、安排任务、巡检任务或 K8s 修改任务，不要只做查询，必须调用 generate_host_task。',
+        '任务生成类请求必须以 query_task_resources 返回的任务中心资源底座为目标来源；知识图谱只用于环境识别和辅助元信息，不能把知识图谱命名空间或实时资源列表当作生成任务草稿的硬前置。',
+        '知识图谱里的“图谱展示命名空间”只控制拓扑图展示，不限制 query_k8s_resources 或 query_k8s_cluster_summary；只读 K8s 查询默认允许查询全部命名空间，用户显式指定命名空间时才按命名空间收窄。',
+        'K8s 写操作（Service 修改、NodePort/LoadBalancer/端口调整、Pod 重启、Deployment/StatefulSet 伸缩）应生成 K8s API 类型任务草稿；不要因为 query_k8s_resources 没查到目标 Service/Pod/Deployment 就拒绝生成草稿。',
+        'K8s 写操作如果用户没有明确命名空间，且无法从参数中确定目标命名空间，必须提醒用户先补充命名空间，不能默认使用 default。',
         '只要已经调用 generate_host_task，就要在最终回答里明确说明：是生成任务草稿，还是已经在任务中心创建真实任务。',
         '工具选择示例：',
         '- “查/分析 xxx 环境 xxx 服务最近半小时 warn/error/info 日志” => 必须调用 query_logs，并设置 service、level/levels、duration_minutes；不要先调用 query_alerts。',
@@ -11295,8 +12188,10 @@ def _build_runtime_prompt(config, active_mcp_servers, active_skills, user, mcp_d
         '- “某环境的系统、服务、依赖、上下游或资源关联是什么” => 调用 query_knowledge_graph，并设置 environment、system_name 或 service。',
         '- “app-prod-k8s集群有没有异常的pod” => 调用 query_k8s_cluster_summary，并传 cluster_name=app-prod-k8s。',
         '- “生成一份 Redis 巡检任务” => 调用 generate_host_task，而不是只做查询。',
+        '- “修改 monitoring 命名空间下的 svc kube-prome type 为 NodePort” => 先用 query_task_resources(resource_type=k8s) 查任务资源底座，再调用 generate_host_task，task_kind=k8s_command，namespace=monitoring，service_name=kube-prome，patch={"spec":{"type":"NodePort"}}；系统会生成通用 K8s 命令任务并通过 K8s API 执行 kubectl patch。',
+        '- “把 monitoring 下 deployment checkout 扩到 3 个副本 / 重启 monitoring 下 pod api-xxx” => 先查 query_task_resources(resource_type=k8s)，再调用 generate_host_task 生成 k8s_scale_workload 或 k8s_restart_pod 草稿；query_k8s_resources 不是前置条件。',
     ]
-    parts.append('- “任务中心资源底座/资源底座里的主机/某环境全部主机” => 调用 query_task_resources；如果用户要求新建巡检任务，先查资源底座，再把 resource_ids 传给 generate_host_task。')
+    parts.append('- “任务中心资源底座/资源底座里的主机/某环境全部主机/K8s 修改任务目标集群” => 调用 query_task_resources；如果用户要求新建或修改类任务，先查资源底座，再把 resource_ids 传给 generate_host_task。')
     return '\n'.join(parts)
 
 
@@ -11400,11 +12295,11 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'status': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_task_center': {
-            'description': '查询任务中心中的主机任务。',
+            'description': '查询任务中心中的任务记录。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['pending', 'running', 'success', 'partial', 'failed', 'canceled']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_task_resources': {
-            'description': '查询任务中心资源底座中的执行资源。用户提到资源底座、任务中心资源、某环境全部主机/服务器时优先使用；新建巡检任务前用它拿 resource_ids。',
+            'description': '查询任务中心资源底座中的执行资源。任务生成类请求的目标来源以本工具为准；用户提到资源底座、任务中心资源、某环境全部主机/服务器，或要生成 K8s 修改、Pod 重启、工作负载伸缩任务时优先使用；新建或修改类任务前用它拿 resource_ids。',
             'parameters': {
                 'type': 'object',
                 'properties': {
@@ -11426,11 +12321,11 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_k8s_cluster_summary': {
-            'description': '查询 K8s 集群摘要，适合“app-prod-k8s集群有没有异常的pod”这类问题。',
+            'description': '查询 K8s 集群摘要，适合“app-prod-k8s集群有没有异常的pod”这类问题。知识图谱的图谱展示命名空间不限制本工具；用户未显式指定命名空间时默认查询全部命名空间。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'cluster_name': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_k8s_resources': {
-            'description': '查询 K8s 资源列表。用户明确问 Deployment、Service、Node、StatefulSet、DaemonSet、Job、CronJob、Ingress、PVC、ConfigMap、Secret 时必须使用本工具，不要用 Pod 摘要代替。',
+            'description': '查询 K8s 资源列表，适用于只读查看和分析。用户明确问 Deployment、Service、Node、StatefulSet、DaemonSet、Job、CronJob、Ingress、PVC、ConfigMap、Secret 时使用本工具，不要用 Pod 摘要代替。知识图谱的图谱展示命名空间不限制本工具；用户未显式指定命名空间时默认查询全部命名空间。注意：生成 K8s 修改/重启/伸缩任务时，本工具不是前置条件；不得因为这里没有查到目标资源而拒绝生成任务草稿，应以 query_task_resources 的 K8s 资源底座和 generate_host_task 为准。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'resource_type': {'type': 'string', 'enum': ['deployments', 'services', 'nodes', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'ingresses', 'pvcs', 'configmaps', 'secrets', 'workloads']}, 'cluster_name': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20}}},
         },
         'query_alerts': {
@@ -11468,20 +12363,33 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'query_host_tasks': {
-            'description': '查询任务中心的主机任务。',
+            'description': '查询任务中心的任务记录。',
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['pending', 'running', 'success', 'partial', 'failed', 'canceled']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'generate_host_task': {
-            'description': '生成任务中心主机任务；当用户明确要求生成、创建、新建巡检任务或运维任务时必须调用。',
+            'description': '生成任务中心待执行任务草稿；当用户明确要求生成、创建、新建巡检任务、运维任务或 K8s 修改/重启/伸缩任务时必须调用。任务目标来自任务中心资源底座 query_task_resources，知识图谱只做环境辅助识别。K8s 资源修改统一生成 K8s API 类型任务；Service 修改可提供 namespace、service_name 和 patch，系统会生成 kubectl patch 命令并通过 K8s API 执行。不要因实时 query_k8s_resources 未查到目标对象而拒绝生成草稿；如果 K8s 写任务缺少 namespace 且无法明确判断，应提示用户补充命名空间。',
             'parameters': {
                 'type': 'object',
                 'required': ['request_summary'],
                 'properties': {
-                    'request_summary': {'type': 'string', 'description': '原始任务诉求，例如“生成一份 Redis 巡检任务”。'},
-                    'task_kind': {'type': 'string', 'enum': ['refresh_metrics', 'service_status', 'run_command', 'check_connection', 'run_playbook']},
+                    'request_summary': {'type': 'string', 'description': '原始任务诉求，例如“生成一份 Redis 巡检任务”或“修改 monitoring 命名空间 kube-prome Service type 为 NodePort”。'},
+                    'task_kind': {'type': 'string', 'enum': ['refresh_metrics', 'service_status', 'run_command', 'check_connection', 'run_playbook', 'k8s_command', 'k8s_scale_workload', 'k8s_restart_pod']},
                     'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']},
                     'target_status': {'type': 'string', 'enum': ['all', 'offline']},
                     'service_name': {'type': 'string'},
+                    'namespace': {'type': 'string', 'description': 'K8s 命名空间；仅 K8s 任务使用，例如 monitoring。'},
+                    'cluster_name': {'type': 'string', 'description': 'K8s 集群名；仅 K8s 任务使用。'},
+                    'cluster_id': {'type': 'integer', 'description': 'K8s 集群 ID；仅 K8s 任务使用。'},
+                    'patch': {'type': 'object', 'description': 'K8s Service merge patch，例如 {"spec":{"type":"NodePort"}}。'},
+                    'service_type': {'type': 'string', 'enum': ['ClusterIP', 'NodePort', 'LoadBalancer', 'ExternalName']},
+                    'ports': {'type': 'array', 'items': {'type': 'object'}, 'description': 'Service spec.ports patch，例如 [{"port":9090,"targetPort":9090,"nodePort":30090}]。'},
+                    'workload_type': {'type': 'string', 'enum': ['deployment', 'statefulset'], 'description': 'K8s 工作负载类型；仅伸缩任务使用。'},
+                    'workload_name': {'type': 'string', 'description': 'K8s 工作负载名称；仅伸缩任务使用。'},
+                    'replicas': {'type': 'integer', 'minimum': 0, 'description': '目标副本数；仅伸缩任务使用。'},
+                    'pod_name': {'type': 'string', 'description': 'K8s Pod 名称；仅 Pod 重启任务使用。'},
+                    'labels': {'type': 'object', 'description': '要写入 metadata.labels 的键值对。'},
+                    'annotations': {'type': 'object', 'description': '要写入 metadata.annotations 的键值对。'},
+                    'selector': {'type': 'object', 'description': '要写入 spec.selector 的键值对。'},
                     'command': {'type': 'string'},
                     'playbook_content': {'type': 'string'},
                     'target_host_ids': {'type': 'array', 'items': {'type': 'integer'}},
@@ -12045,17 +12953,25 @@ def _run_tool_call(session, user_message, user, tool_name, arguments, registry_e
         return {'tool_output': result, 'sections': result.get('sections', []), 'citations': result.get('citations', []), 'message_type': AIOpsChatMessage.TYPE_TEXT}
     if tool_name == 'generate_host_task':
         started_at = time.time()
+        original_question = getattr(user_message, 'content', '') or ''
+        arguments = _normalize_k8s_draft_request_for_generation(arguments, original_question)
         invocation = _create_tool_invocation(session, user_message, 'generate_host_task', arguments)
-        draft = build_task_draft(user, arguments.get('request_summary', ''), draft_request=arguments)
+        draft_question = arguments.get('request_summary') or original_question
+        draft = build_task_draft(user, draft_question, draft_request=arguments)
         if draft.get('error'):
             _finish_tool_invocation(invocation, {'detail': draft['error']}, started_at, success=False)
+            guidance = (
+                '请补充目标 K8s 命名空间，例如：把 monitoring 命名空间下的 svc kube-prome 改为 NodePort。'
+                if '命名空间' in draft['error']
+                else '请补充目标主机名、应用名或 IP，例如：在生产环境对主机 order-api-ecs-02（10.10.1.11）生成 Redis 巡检任务。'
+            )
             return {
                 'tool_output': draft,
                 'sections': [{
                     'title': '任务生成限制',
                     'items': [
                         draft['error'],
-                        '请补充目标主机名、应用名或 IP，例如：在生产环境对主机 order-api-ecs-02（10.10.1.11）生成 Redis 巡检任务。',
+                        guidance,
                     ],
                 }],
                 'citations': [{'title': '任务中心', 'path': '/tasks'}],
@@ -12160,6 +13076,20 @@ def _run_selected_action(session, user_message, user, question, scoped_question,
             action,
             emit,
         )
+    if action_code == 'host_task.generate':
+        result = _run_task_generation_evidence(
+            session,
+            user_message,
+            user,
+            question,
+            scoped_question,
+            knowledge_environment,
+            analysis_scope,
+            provider,
+            action_skills,
+            emit,
+        )
+        return _attach_selected_action_metadata(result, action, extra_metadata={'action_route': 'selected_host_task_generation'})
     return None
 
 
@@ -12278,6 +13208,33 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         )
         alert_action = selected_action if selected_action and selected_action.get('code') == 'alert.root_cause' else _action_registry_item_by_code('alert.root_cause', user=user)
         return _attach_selected_action_metadata(result, alert_action, extra_metadata={'action_route': 'latest_alert_root_cause'}) if alert_action else result
+    if _is_direct_k8s_resource_lookup_question(question):
+        resource_type = _detect_k8s_resource_type(question)
+        tool_name = 'query_k8s_cluster_summary' if resource_type == 'pods' else 'query_k8s_resources'
+        arguments = (
+            {'query': scoped_question, 'limit': 8}
+            if tool_name == 'query_k8s_cluster_summary'
+            else {'query': scoped_question, 'resource_type': resource_type, 'limit': 8}
+        )
+        return _direct_tool_fastpath(
+            session,
+            user_message,
+            user,
+            tool_name=tool_name,
+            arguments=arguments,
+            question=question,
+            scoped_question=scoped_question,
+            knowledge_environment=knowledge_environment,
+            analysis_scope=analysis_scope,
+            execution_mode='direct_k8s_resource_lookup',
+            provider=formatter_provider,
+            active_skills=active_skills,
+            emit=emit,
+            step_title='K8s 资源直接查询',
+            step_detail='命中明确 K8s 资源查看意图，直接查询 Kubernetes API。',
+            step_text='正在直接查询 K8s 资源',
+            selected_action=_action_registry_item_by_code('k8s.diagnose', user=user),
+        )
     if (
         selected_action
         and not _is_direct_container_question(question)
@@ -12796,7 +13753,10 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             question=question,
             collected_tool_outputs=collected_tool_outputs,
         )
-    elif _content_conflicts_with_tool_facts(final_content, collected_tool_outputs):
+    elif (
+        _content_conflicts_with_tool_facts(final_content, collected_tool_outputs)
+        or _answer_conflicts_with_pending_action(final_content, pending_action_draft)
+    ):
         final_content = _build_fallback_answer(
             sections,
             citations,
@@ -12833,6 +13793,7 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             if (
                 formatter_result.get('fell_back')
                 or _content_conflicts_with_tool_facts(final_content, collected_tool_outputs)
+                or _answer_conflicts_with_pending_action(final_content, pending_action_draft)
                 or _should_prefer_structured_alert_answer(final_content, formatter_result.get('fallback_content', ''), collected_tool_outputs)
             ):
                 final_content = formatter_result.get('fallback_content') or _build_fallback_answer(

@@ -509,7 +509,7 @@ def get_k8s_resource_snapshot(cluster, resource_type, namespaces=None):
             items = v1.list_service_for_all_namespaces().items if namespace == '_all' else v1.list_namespaced_service(namespace=namespace).items
             return [_serialize_service_item(item) for item in items]
 
-        return _collect_namespaced_resource(cluster, 'services', namespaces, DEMO_SERVICES, loader)
+        return _collect_namespaced_resource(cluster, 'services', namespaces, _get_demo_state(cluster.id, 'services', DEMO_SERVICES), loader)
 
     namespaced_resources = {
         'statefulsets': (
@@ -1142,7 +1142,7 @@ class K8sClusterViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         cluster = self.get_object()
         namespace = request.query_params.get('namespace', 'default')
         if _is_demo(cluster):
-            return Response(_filter_by_ns(DEMO_SERVICES, namespace))
+            return Response(_filter_by_ns(_get_demo_state(cluster.id, 'services', DEMO_SERVICES), namespace))
         try:
             def loader():
                 k8s = _get_k8s_client(cluster)

@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from aiops.models import AIOpsChatMessage, AIOpsChatSession, AIOpsPendingAction
-from ops.host_tasks import AnsibleControllerError
+from ops.host_tasks import AnsibleControllerError, execute_k8s_task
 from ops.models import Host, HostTask, HostTaskTemplate, K8sCluster, TaskResource, TaskResourceGroup
 from rbac.models import Role
 from rbac.services import ensure_builtin_rbac
@@ -368,6 +368,151 @@ class HostTaskApiTests(TestCase):
         payload = response.json()
         self.assertEqual(payload['executions'][0]['target_kind'], 'cluster')
         self.assertEqual(payload['executions'][0]['target_name'], cluster.name)
+
+    def test_k8s_service_patch_runs_as_generic_k8s_command(self):
+        cluster = K8sCluster.objects.create(name='demo-k8s-service-patch', kubeconfig='demo', status='connected')
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'patch-prometheus-service',
+                'target_type': HostTask.TARGET_K8S,
+                'task_type': HostTask.TASK_K8S_POD_EXEC,
+                'execution_mode': HostTask.EXECUTION_MODE_SSH,
+                'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
+                'k8s_targets': [
+                    {
+                        'cluster_id': cluster.id,
+                        'kind': 'cluster',
+                    },
+                ],
+                'payload': {
+                    'command': 'kubectl patch svc prometheus -n monitoring --type merge -p \'{"spec":{"type":"LoadBalancer"}}\'',
+                    'resource_kind': 'service',
+                    'service_name': 'prometheus',
+                    'namespace': 'monitoring',
+                    'patch': {'spec': {'type': 'LoadBalancer'}},
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['target_type'], HostTask.TARGET_K8S)
+        self.assertEqual(payload['task_type'], HostTask.TASK_K8S_POD_EXEC)
+        self.assertEqual(payload['execution_mode'], HostTask.EXECUTION_MODE_K8S_API)
+        self.assertEqual(payload['status'], HostTask.STATUS_SUCCESS)
+        self.assertEqual(payload['risk_level'], HostTask.RISK_HIGH)
+        self.assertEqual(payload['target_snapshot'][0]['cluster_name'], cluster.name)
+        self.assertEqual(payload['target_snapshot'][0]['namespace'], 'monitoring')
+        self.assertEqual(payload['target_snapshot'][0]['name'], 'prometheus')
+        self.assertEqual(payload['target_snapshot'][0]['kind'], 'service')
+        execution = payload['executions'][0]
+        self.assertEqual(execution['target_name'], 'prometheus')
+        self.assertEqual(execution['target_namespace'], 'monitoring')
+        self.assertEqual(execution['target_kind'], 'service')
+        self.assertIn('kubectl patch svc prometheus -n monitoring', execution['command'])
+        self.assertIn('K8s API', execution['output'])
+
+    def test_k8s_task_resource_target_maps_to_real_cluster_and_environment(self):
+        cluster = K8sCluster.objects.create(name='电商测试环境-k3s', kubeconfig='demo', status='connected')
+        env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        TaskResource.objects.create(
+            name='dummy-host',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.1.1.1',
+        )
+        resource = TaskResource.objects.create(
+            name='电商测试环境-k3s',
+            resource_type=TaskResource.RESOURCE_K8S,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+        )
+
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'patch-prometheus-nodeport',
+                'target_type': HostTask.TARGET_K8S,
+                'task_type': HostTask.TASK_K8S_POD_EXEC,
+                'k8s_targets': [
+                    {
+                        'cluster_id': resource.id,
+                        'resource_id': resource.id,
+                        'cluster_name': resource.name,
+                        'namespace': 'monitoring',
+                        'name': 'prometheus',
+                        'kind': 'service',
+                    },
+                ],
+                'payload': {
+                    'command': 'kubectl patch svc prometheus -n monitoring --type strategic -p \'{"spec":{"type":"NodePort","ports":[{"port":9090,"nodePort":31001}]}}\'',
+                    'resource_kind': 'service',
+                    'service_name': 'prometheus',
+                    'namespace': 'monitoring',
+                    'patch_type': 'strategic',
+                    'patch': {'spec': {'type': 'NodePort', 'ports': [{'port': 9090, 'nodePort': 31001}]}},
+                },
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload['status'], HostTask.STATUS_SUCCESS)
+        self.assertEqual(payload['environment_display'], '电商测试环境')
+        self.assertEqual(payload['source_context']['resource_environment'], '电商测试环境')
+        self.assertEqual(payload['target_snapshot'][0]['cluster_id'], cluster.id)
+        self.assertEqual(payload['target_snapshot'][0]['resource_id'], resource.id)
+        self.assertEqual(payload['target_snapshot'][0]['environment_name'], '电商测试环境')
+        self.assertEqual(payload['target_snapshot'][0]['cluster_name'], '电商测试环境-k3s')
+        self.assertEqual(payload['executions'][0]['target_name'], 'prometheus')
+        self.assertEqual(payload['executions'][0]['target_namespace'], 'monitoring')
+        self.assertIn('K8s API', payload['executions'][0]['output'])
+
+    def test_k8s_task_api_rejects_invalid_cluster_target(self):
+        response = self.client.post(
+            '/api/host-tasks/',
+            {
+                'name': 'invalid-k8s-cluster',
+                'target_type': HostTask.TARGET_K8S,
+                'task_type': HostTask.TASK_K8S_POD_EXEC,
+                'k8s_targets': [
+                    {
+                        'cluster_id': 99999,
+                        'kind': 'cluster',
+                    },
+                ],
+                'payload': {'command': 'kubectl get ns'},
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('k8s_targets', response.json())
+
+    def test_k8s_executor_marks_invalid_snapshot_target_failed(self):
+        task = HostTask.objects.create(
+            name='stale-invalid-k8s-target',
+            target_type=HostTask.TARGET_K8S,
+            task_type=HostTask.TASK_K8S_POD_EXEC,
+            payload={'command': 'kubectl get ns'},
+            execution_mode=HostTask.EXECUTION_MODE_K8S_API,
+            created_by=self.user.username,
+        )
+
+        execute_k8s_task(task, [{'cluster_id': 99999, 'cluster_name': 'Cluster 99999', 'kind': 'cluster'}])
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, HostTask.STATUS_FAILED)
+        self.assertEqual(task.lifecycle_status, HostTask.LIFECYCLE_FAILED)
+        self.assertEqual(task.failed_count, 1)
+        execution = task.executions.get()
+        self.assertEqual(execution.status, 'failed')
+        self.assertIn('未找到 K8s 集群', execution.error_message)
 
     def test_non_k8s_task_cannot_use_k8s_api_execution_mode(self):
         response = self.client.post(

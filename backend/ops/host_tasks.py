@@ -679,25 +679,92 @@ def record_task_center_event(task, action, title, summary='', request=None, acto
     )
 
 
+def _coerce_positive_int(value):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _is_placeholder_cluster_name(value):
+    return bool(re.fullmatch(r'Cluster\s+\d+', str(value or '').strip(), flags=re.IGNORECASE))
+
+
+def _find_k8s_cluster_by_name(name):
+    name = str(name or '').strip()
+    if not name or _is_placeholder_cluster_name(name):
+        return None
+    return K8sCluster.objects.filter(name=name).first() or K8sCluster.objects.filter(name__icontains=name).first()
+
+
+def normalize_k8s_execution_target(target):
+    item = dict(target or {})
+    raw_cluster_id = _coerce_positive_int(item.get('cluster_id') or item.get('cluster'))
+    resource_id = _coerce_positive_int(item.get('resource_id') or item.get('task_resource_id'))
+    cluster = K8sCluster.objects.filter(pk=raw_cluster_id).first() if raw_cluster_id else None
+    resource = None
+    if resource_id:
+        resource = TaskResource.objects.select_related('environment', 'system', 'cluster').filter(
+            pk=resource_id,
+            resource_type=TaskResource.RESOURCE_K8S,
+        ).first()
+    if not resource and raw_cluster_id and not cluster:
+        resource = TaskResource.objects.select_related('environment', 'system', 'cluster').filter(
+            pk=raw_cluster_id,
+            resource_type=TaskResource.RESOURCE_K8S,
+        ).first()
+    if resource:
+        resource_id = resource.id
+        if not cluster:
+            cluster = resource.cluster or _find_k8s_cluster_by_name(resource.name)
+        item.setdefault('resource_name', resource.name)
+        item.setdefault('environment_name', resource.environment.name if resource.environment_id else '')
+        item.setdefault('system_name', resource.system.name if resource.system_id else '')
+    if not cluster:
+        cluster = _find_k8s_cluster_by_name(item.get('cluster_name') or item.get('name'))
+
+    cluster_id = cluster.id if cluster else raw_cluster_id
+    cluster_name = cluster.name if cluster else (item.get('cluster_name') or (f'Cluster {cluster_id}' if cluster_id else ''))
+    return {
+        **item,
+        'cluster_id': cluster_id,
+        'cluster_name': cluster_name,
+        'resource_id': resource_id,
+        'task_resource_id': resource_id,
+        'resource_name': item.get('resource_name') or (resource.name if resource else ''),
+        'environment_name': item.get('environment_name') or (resource.environment.name if resource and resource.environment_id else ''),
+        'system_name': item.get('system_name') or (resource.system.name if resource and resource.system_id else ''),
+        'namespace': item.get('namespace') or '',
+        'name': item.get('name') or item.get('pod_name') or '',
+        'kind': item.get('kind') or item.get('resource_type') or '',
+        'container': item.get('container') or '',
+        'status': cluster.status if cluster else item.get('status') or 'unknown',
+    }
+
+
 def build_k8s_target_snapshot(targets):
-    cluster_ids = [item.get('cluster_id') for item in targets if item.get('cluster_id')]
-    clusters = {cluster.id: cluster for cluster in K8sCluster.objects.filter(id__in=cluster_ids)}
     snapshot = []
     for item in targets:
-        cluster_id = int(item.get('cluster_id'))
-        cluster = clusters.get(cluster_id)
-        namespace = item.get('namespace') or ''
-        name = item.get('name') or ''
-        kind = item.get('kind') or ''
+        normalized = normalize_k8s_execution_target(item)
+        cluster_id = normalized.get('cluster_id')
+        namespace = normalized.get('namespace') or ''
+        name = normalized.get('name') or ''
+        kind = normalized.get('kind') or ''
         snapshot.append({
             'id': f'k8s:{cluster_id}:{namespace}:{kind}:{name}',
             'cluster_id': cluster_id,
-            'cluster_name': cluster.name if cluster else f'Cluster {cluster_id}',
+            'cluster_name': normalized.get('cluster_name') or (f'Cluster {cluster_id}' if cluster_id else ''),
+            'resource_id': normalized.get('resource_id'),
+            'task_resource_id': normalized.get('resource_id'),
+            'resource_name': normalized.get('resource_name') or '',
+            'environment_name': normalized.get('environment_name') or '',
+            'system_name': normalized.get('system_name') or '',
             'namespace': namespace,
             'name': name,
             'kind': kind,
-            'container': item.get('container') or '',
-            'status': cluster.status if cluster else 'unknown',
+            'container': normalized.get('container') or '',
+            'status': normalized.get('status') or 'unknown',
         })
     return snapshot
 
@@ -783,16 +850,91 @@ def _run_k8s_restart_pod(task, cluster, target):
     return f'Pod {pod_name} 正在重启'
 
 
+def _format_service_ports_from_patch(patch_ports):
+    ports = []
+    for item in patch_ports or []:
+        if not isinstance(item, dict):
+            continue
+        port = item.get('port')
+        node_port = item.get('nodePort') or item.get('node_port')
+        protocol = item.get('protocol') or 'TCP'
+        if not port:
+            continue
+        ports.append(f"{port}{'->'+str(node_port) if node_port else ''}/{protocol}")
+    return ', '.join(ports)
+
+
+def _enrich_k8s_target_from_payload(task, target):
+    item = dict(target or {})
+    payload = task.payload or {}
+    if task.task_type != HostTask.TASK_K8S_POD_EXEC:
+        return item
+    resource_kind = str(payload.get('resource_kind') or '').strip().lower()
+    if not resource_kind or resource_kind == 'pod':
+        return item
+    if not item.get('kind') or item.get('kind') == 'cluster':
+        item['kind'] = resource_kind
+    if not item.get('namespace') and payload.get('namespace'):
+        item['namespace'] = payload.get('namespace')
+    if not item.get('name'):
+        item['name'] = (
+            payload.get('service_name')
+            or payload.get('workload_name')
+            or payload.get('resource_name')
+            or ''
+        )
+    return item
+
+
+def _run_k8s_service_patch(task, cluster, target):
+    from . import k8s_views
+
+    payload = task.payload or {}
+    namespace = target.get('namespace') or payload.get('namespace') or 'default'
+    service_name = target.get('name') or payload.get('service_name') or ''
+    patch = payload.get('patch') if isinstance(payload.get('patch'), dict) else {}
+    if not service_name:
+        raise RuntimeError('缺少 Service 名称')
+    if not patch:
+        raise RuntimeError('缺少 Service patch 内容')
+
+    if k8s_views._is_demo(cluster):
+        items = k8s_views._get_demo_state(cluster.id, 'services', k8s_views.DEMO_SERVICES)
+        for item in items:
+            if item.get('name') != service_name or item.get('namespace') != namespace:
+                continue
+            spec = patch.get('spec') or {}
+            if spec.get('type'):
+                item['type'] = spec['type']
+            if isinstance(spec.get('ports'), list):
+                item['ports'] = _format_service_ports_from_patch(spec['ports']) or item.get('ports', '')
+            k8s_views._set_demo_state(cluster.id, 'services', items)
+            k8s_views._invalidate_cluster_runtime_cache(cluster)
+            return f'Service {namespace}/{service_name} 已通过 K8s API 更新 [演示模式]'
+        raise RuntimeError(f'未找到 Service：{namespace}/{service_name}')
+
+    k8s = k8s_views._get_k8s_client(cluster)
+    v1 = k8s.CoreV1Api()
+    v1.patch_namespaced_service(name=service_name, namespace=namespace, body=patch)
+    k8s_views._invalidate_cluster_runtime_cache(cluster)
+    return f'Service {namespace}/{service_name} 已通过 K8s API 更新'
+
+
 def _run_k8s_pod_exec(task, cluster, target):
     from . import k8s_views
 
+    payload = task.payload or {}
+    command = payload.get('command') or 'pwd'
+    if (payload.get('resource_kind') or target.get('kind') or '').lower() == 'service' and payload.get('patch'):
+        return _run_k8s_service_patch(task, cluster, target)
+    if str(command).strip().startswith('kubectl') or (payload.get('resource_kind') or target.get('kind') or '').lower() not in ('', 'pod'):
+        return _run_k8s_cluster_command(task, cluster)
     if not (target.get('name') or '').strip():
         return _run_k8s_cluster_command(task, cluster)
 
     namespace = target.get('namespace') or 'default'
     pod_name = target.get('name') or ''
     container = target.get('container') or (task.payload or {}).get('container') or ''
-    command = (task.payload or {}).get('command') or 'pwd'
     if not pod_name:
         raise RuntimeError('缺少 Pod 名称')
     if k8s_views._is_demo(cluster):
@@ -862,8 +1004,9 @@ def _k8s_command_text(task, target):
     if task.task_type == HostTask.TASK_K8S_RESTART_POD:
         return f"kubectl delete pod {target.get('name')} -n {target.get('namespace') or 'default'}"
     if task.task_type == HostTask.TASK_K8S_POD_EXEC:
-        if not (target.get('name') or '').strip():
-            command = str(payload.get('command') or '').strip()
+        command = str(payload.get('command') or '').strip()
+        target_kind = (payload.get('resource_kind') or target.get('kind') or '').lower()
+        if not (target.get('name') or '').strip() or command.startswith('kubectl') or target_kind not in ('', 'pod'):
             if command.startswith('kubectl'):
                 return command
             return f"kubectl {command}".strip()
@@ -874,10 +1017,16 @@ def _k8s_command_text(task, target):
 
 
 def _run_single_k8s_task(task, target):
-    cluster = K8sCluster.objects.get(pk=target.get('cluster_id'))
+    target = _enrich_k8s_target_from_payload(task, target)
+    target = normalize_k8s_execution_target(target)
     started_at = timezone.now()
     command = _k8s_command_text(task, target)
     try:
+        if not target.get('cluster_id'):
+            raise RuntimeError('缺少 K8s 集群')
+        cluster = K8sCluster.objects.filter(pk=target.get('cluster_id')).first()
+        if not cluster:
+            raise RuntimeError(f"未找到 K8s 集群：{target.get('cluster_name') or target.get('cluster_id')}")
         if task.task_type == HostTask.TASK_K8S_RESTART_POD:
             output = _run_k8s_restart_pod(task, cluster, target)
         elif task.task_type == HostTask.TASK_K8S_POD_EXEC:
@@ -892,7 +1041,7 @@ def _run_single_k8s_task(task, target):
 
 
 def execute_k8s_task(task, targets):
-    targets = list(targets)
+    targets = [_enrich_k8s_target_from_payload(task, item) for item in targets]
     task.refresh_from_db()
     task.status = HostTask.STATUS_RUNNING
     task.lifecycle_status = HostTask.LIFECYCLE_RUNNING
@@ -1107,6 +1256,14 @@ def _execute_k8s_task_thread(task_id, targets):
     try:
         task = HostTask.objects.get(pk=task_id)
         execute_k8s_task(task, targets)
+    except Exception as exc:
+        HostTask.objects.filter(pk=task_id).update(
+            status=HostTask.STATUS_FAILED,
+            lifecycle_status=HostTask.LIFECYCLE_FAILED,
+            failed_count=1,
+            finished_at=timezone.now(),
+            summary=f'K8s 任务执行异常：{str(exc)[:180]}',
+        )
     finally:
         close_old_connections()
         with _TASK_THREADS_LOCK:
@@ -1136,7 +1293,7 @@ def start_host_task(task, hosts):
 
 
 def start_k8s_task(task, targets):
-    target_list = list(targets)
+    target_list = [_enrich_k8s_target_from_payload(task, item) for item in targets]
     task.target_type = HostTask.TARGET_K8S
     task.execution_mode = HostTask.EXECUTION_MODE_K8S_API
     task.target_count = len(target_list)

@@ -356,6 +356,8 @@ class HostTaskSerializer(serializers.ModelSerializer):
     risk_level_display = serializers.CharField(source='get_risk_level_display', read_only=True)
     execution_mode_display = serializers.CharField(source='get_execution_mode_display', read_only=True)
     trigger_source_display = serializers.CharField(source='get_trigger_source_display', read_only=True)
+    environment_name = serializers.SerializerMethodField()
+    environment_display = serializers.SerializerMethodField()
     success_rate = serializers.SerializerMethodField()
 
     class Meta:
@@ -371,6 +373,8 @@ class HostTaskSerializer(serializers.ModelSerializer):
             'execution_mode_display',
             'trigger_source',
             'trigger_source_display',
+            'environment_name',
+            'environment_display',
             'lifecycle_status',
             'lifecycle_status_display',
             'risk_level',
@@ -405,6 +409,57 @@ class HostTaskSerializer(serializers.ModelSerializer):
         if not obj.target_count:
             return 0
         return round((obj.success_count / obj.target_count) * 100, 1)
+
+    def _environment_values(self, obj):
+        values = []
+
+        def append(value):
+            text = str(value or '').strip()
+            if text and not text.isdigit() and text not in values:
+                values.append(text)
+
+        source_context = obj.source_context or {}
+        selection_filters = obj.selection_filters or {}
+        append(source_context.get('resource_environment'))
+        append(source_context.get('environment_name'))
+        append(source_context.get('environment'))
+        append(source_context.get('knowledge_environment'))
+        append(selection_filters.get('environment_name'))
+        append(selection_filters.get('resource_environment'))
+        append(selection_filters.get('environment'))
+        for item in obj.target_snapshot or []:
+            append(item.get('environment_name'))
+            append(item.get('environment'))
+            append(item.get('env'))
+        if obj.target_type == HostTask.TARGET_K8S and not values:
+            resource_ids = []
+            for item in obj.target_snapshot or []:
+                for key in ['resource_id', 'task_resource_id', 'cluster_id']:
+                    try:
+                        value = int(item.get(key) or 0)
+                    except (TypeError, ValueError):
+                        value = 0
+                    if value > 0 and value not in resource_ids:
+                        resource_ids.append(value)
+            if resource_ids:
+                for resource in TaskResource.objects.select_related('environment').filter(
+                    id__in=resource_ids,
+                    resource_type=TaskResource.RESOURCE_K8S,
+                ):
+                    append(resource.environment.name if resource.environment_id else '')
+        return values
+
+    def get_environment_name(self, obj):
+        values = self._environment_values(obj)
+        return values[0] if values else ''
+
+    def get_environment_display(self, obj):
+        values = self._environment_values(obj)
+        if not values:
+            return ''
+        if len(values) == 1:
+            return values[0]
+        return f'{values[0]} 等 {len(values)} 个'
 
 
 class HostTaskDetailSerializer(HostTaskSerializer):
@@ -509,22 +564,72 @@ class HostTaskSubmitSerializer(serializers.Serializer):
             targets = attrs.get('k8s_targets') or []
             if not targets:
                 raise serializers.ValidationError({'k8s_targets': '请至少选择一个 K8s 目标'})
-            normalized_targets = []
+            cluster_ids = []
+            resource_ids = []
+            normalized_source_items = []
             for item in targets:
                 cluster_id = item.get('cluster_id')
+                resource_id = item.get('resource_id') or item.get('task_resource_id')
                 name = (item.get('name') or item.get('pod_name') or '').strip()
                 namespace = (item.get('namespace') or '').strip()
                 kind = (item.get('kind') or item.get('resource_type') or '').strip()
+                try:
+                    cluster_id = int(cluster_id) if cluster_id else None
+                except (TypeError, ValueError):
+                    cluster_id = None
+                try:
+                    resource_id = int(resource_id) if resource_id else None
+                except (TypeError, ValueError):
+                    resource_id = None
                 if not cluster_id:
                     raise serializers.ValidationError({'k8s_targets': '请选择 K8s 集群'})
+                cluster_ids.append(cluster_id)
+                if resource_id:
+                    resource_ids.append(resource_id)
+                normalized_source_items.append((item, cluster_id, resource_id, namespace, name, kind))
+            cluster_map = {item.id: item for item in K8sCluster.objects.filter(id__in=cluster_ids)}
+            resource_map = {
+                item.id: item
+                for item in TaskResource.objects.select_related('environment', 'system', 'cluster').filter(
+                    id__in=set(resource_ids + [cluster_id for _item, cluster_id, _resource_id, _namespace, _name, _kind in normalized_source_items]),
+                    resource_type=TaskResource.RESOURCE_K8S,
+                )
+            }
+            normalized_targets = []
+            for item, cluster_id, resource_id, namespace, name, kind in normalized_source_items:
+                resource = resource_map.get(resource_id) or (resource_map.get(cluster_id) if cluster_id not in cluster_map else None)
+                cluster = cluster_map.get(cluster_id) or (resource.cluster if resource else None)
+                if not cluster and resource:
+                    cluster = K8sCluster.objects.filter(name=resource.name).first()
+                if not cluster:
+                    cluster_name = (item.get('cluster_name') or item.get('name') or '').strip()
+                    if cluster_name and not re.fullmatch(r'Cluster\s+\d+', cluster_name, flags=re.IGNORECASE):
+                        cluster = K8sCluster.objects.filter(name=cluster_name).first() or K8sCluster.objects.filter(name__icontains=cluster_name).first()
+                if not cluster:
+                    raise serializers.ValidationError({'k8s_targets': '请选择有效的 K8s 集群'})
                 if task_type == HostTask.TASK_K8S_RESTART_POD and not name:
                     raise serializers.ValidationError({'k8s_targets': '请填写 Pod 名称'})
                 if task_type == HostTask.TASK_K8S_SCALE_WORKLOAD and not name:
                     raise serializers.ValidationError({'k8s_targets': '请填写工作负载名称'})
                 if task_type in [HostTask.TASK_K8S_RESTART_POD, HostTask.TASK_K8S_SCALE_WORKLOAD]:
                     namespace = namespace or 'default'
+                if task_type == HostTask.TASK_K8S_POD_EXEC:
+                    payload = attrs.get('payload') or {}
+                    payload_kind = (payload.get('resource_kind') or '').strip()
+                    if payload_kind and payload_kind != 'pod':
+                        kind = kind if kind and kind != 'cluster' else payload_kind
+                        namespace = namespace or (payload.get('namespace') or '').strip()
+                        name = name or (payload.get('service_name') or payload.get('workload_name') or payload.get('resource_name') or '').strip()
+                resource_environment = resource.environment.name if resource and resource.environment_id else (item.get('environment_name') or item.get('environment') or '')
+                resource_system = resource.system.name if resource and resource.system_id else (item.get('system_name') or item.get('system') or '')
                 normalized_targets.append({
-                    'cluster_id': int(cluster_id),
+                    'cluster_id': cluster.id,
+                    'cluster_name': cluster.name,
+                    'resource_id': resource.id if resource else resource_id,
+                    'task_resource_id': resource.id if resource else resource_id,
+                    'resource_name': resource.name if resource else (item.get('resource_name') or ''),
+                    'environment_name': resource_environment,
+                    'system_name': resource_system,
                     'namespace': namespace,
                     'name': name,
                     'kind': kind or ('cluster' if task_type == HostTask.TASK_K8S_POD_EXEC and not name else ''),

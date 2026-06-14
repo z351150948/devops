@@ -85,7 +85,7 @@
             <el-form-item :label="ui.taskDesc">
               <el-input v-model="taskForm.description" :placeholder="ui.taskDescPlaceholder" />
             </el-form-item>
-            <div v-if="taskForm.target_type === 'k8s'" class="template-payload-stack">
+            <div v-if="taskForm.task_type === 'k8s_pod_exec'" class="template-payload-stack">
               <el-form-item :label="ui.command">
                 <el-input v-model="taskForm.payload.command" type="textarea" :rows="5" placeholder="例如：kubectl get deployment -A" />
               </el-form-item>
@@ -637,8 +637,8 @@
               <div class="detail-section-title">{{ detailTask.target_type === 'k8s' ? ui.targetResources : ui.targetHosts }}</div>
               <div v-if="detailTask.target_snapshot?.length" class="target-list">
                 <div v-for="host in detailTask.target_snapshot" :key="`${detailTask.id}-${host.id || host.hostname}`" class="target-list-item">
-                  <strong>{{ host.hostname || host.name || '-' }}</strong>
-                  <span>{{ host.ip_address || host.cluster_name || '-' }}</span>
+                  <strong>{{ targetSnapshotPrimaryName(host, detailTask.target_type) }}</strong>
+                  <span>{{ targetSnapshotMeta(host, detailTask.target_type) }}</span>
                   <span v-if="host.namespace">{{ host.namespace }}</span>
                 </div>
               </div>
@@ -689,7 +689,7 @@
   </div>
 </template>
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, Collection, Promotion, Search, VideoPlay } from '@element-plus/icons-vue'
@@ -795,10 +795,11 @@ const ui = {
   sshMode: 'SSH \u76f4\u8fde\u6267\u884c\uff0c\u9002\u5408\u70b9\u72b6\u8bca\u65ad\u4e0e\u63a7\u5236\u7aef\u672a\u5b89\u88c5 Ansible \u7684\u573a\u666f\u3002',
   ansibleMode: 'Ansible \u7edf\u4e00\u5206\u53d1\uff0c\u9002\u5408\u6279\u91cf\u547d\u4ee4\u548c\u6279\u91cf\u5de1\u68c0\uff1b\u63a7\u5236\u7aef\u4e0d\u53ef\u7528\u65f6\u4f1a\u6309\u914d\u7f6e\u56de\u9000 SSH\u3002',
   playbookOnlyAnsible: 'Playbook \u4efb\u52a1\u4ec5\u652f\u6301 Ansible \u6267\u884c\uff0c\u4f1a\u81ea\u52a8\u9501\u5b9a\u4e3a Ansible \u5206\u53d1\u3002',
+  k8sApiMode: '通过 Kubernetes API 执行，不需要主机脚本，适合 Pod 诊断、工作负载伸缩和 Service 变更。',
   continueOnError: '\u5931\u8d25\u7ee7\u7eed',
   stopOnError: '\u5931\u8d25\u5373\u505c',
   selectTargets: '选择执行资源',
-  k8sTip: 'K8s 任务会通过集群 API 执行，适合 Pod 重启、Pod 内诊断命令和工作负载伸缩。',
+  k8sTip: 'K8s 任务会通过集群 API 执行，适合 Pod 重启、集群级 kubectl 命令和工作负载伸缩。',
   searchHostPlaceholder: '搜索资源名称 / IP',
   searchK8sPlaceholder: '搜索集群名称 / 描述',
   businessLine: '系统',
@@ -904,7 +905,7 @@ const executionTypeOptions = [
   { label: 'Shell 脚本', value: 'shell', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '在主机资源上执行 Shell 命令或脚本片段。' },
   { label: 'Python 脚本', value: 'python', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '通过 Python 解释器执行诊断、巡检或自动化脚本。' },
   { label: 'Ansible Playbook', value: 'playbook', targetType: 'host', taskType: 'run_playbook', executionMode: 'ansible', desc: '执行结构化 Playbook，适合固化编排流程。' },
-  { label: 'K8s API', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群执行 kubectl 命令。' },
+  { label: 'K8s 命令', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群执行 kubectl 命令，适合 Service、Deployment 等资源变更。' },
 ]
 const targetTypeOptions = [
   { label: ui.hostResource, value: 'host' },
@@ -1024,6 +1025,15 @@ const templateDraftTypeLabel = computed(() => executionKindLabel(templateExecuti
 const selectedResourceIds = computed(() => selectedRows.value.map(item => item.id))
 const selectedHostIds = selectedResourceIds
 const selectedK8sClusterIds = computed(() => selectedK8sRows.value.map(item => item.cluster || item.cluster_id || item.id).filter(Boolean))
+const selectedK8sSubmitRows = computed(() => selectedK8sRows.value.map(item => ({
+  cluster_id: item.cluster || item.cluster_id || item.id,
+  resource_id: item.id,
+  task_resource_id: item.id,
+  cluster_name: item.cluster_name || item.name || '',
+  resource_name: item.name || '',
+  environment_name: item.environment_name || item.environment_display || '',
+  system_name: item.system_name || item.business_line || '',
+})).filter(item => item.cluster_id))
 const effectiveHostTargetRefs = computed(() => {
   if (selectedRows.value.length) {
     return selectedRows.value.map(item => ({ source: 'task_resource', id: item.id }))
@@ -1056,7 +1066,19 @@ const sourceCards = computed(() => {
     { key: 'schedule', label: '\u8ba1\u5212\u4efb\u52a1', source: 'schedule', value: bySource.schedule || 0, desc: '\u5b9a\u65f6\u7f16\u6392\u89e6\u53d1', cardClass: 'task-source-card--warning' },
   ]
 })
-function defaultPayload() { return { command: '', script_kind: 'shell', service_name: '', playbook_name: '', playbook_content: '', workload_type: 'deployment', replicas: 1 } }
+function defaultPayload() {
+  return {
+    command: '',
+    script_kind: 'shell',
+    service_name: '',
+    namespace: 'default',
+    patch: {},
+    playbook_name: '',
+    playbook_content: '',
+    workload_type: 'deployment',
+    replicas: 1,
+  }
+}
 function defaultTaskForm() { return { name: '', target_type: 'host', task_type: 'run_command', description: '', execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, payload: buildPayloadByExecutionKind('shell') } }
 function defaultTemplateDraft() { return { name: '', target_type: 'host', task_type: 'run_command', description: '', execution_mode: 'ansible', execution_strategy: 'continue', timeout_seconds: 30, payload: buildPayloadByExecutionKind('shell') } }
 function buildPresetPayload(taskType) {
@@ -1089,7 +1111,11 @@ function handleK8sSelectionChange(rows) { selectedK8sRows.value = rows }
 function handleTaskHistorySelectionChange(rows) { selectedTaskRows.value = rows }
 function executionStrategyLabel(strategy) { return strategy === 'stop_on_error' ? ui.stopOnError : ui.continueOnError }
 function executionModeLabel(mode, display) { return display || executionModeOptions.find(item => item.value === mode)?.label || mode || '-' }
-function executionModeHint(mode, taskType) { if (taskType === 'run_playbook') return ui.playbookOnlyAnsible; return mode === 'ansible' ? ui.ansibleMode : ui.sshMode }
+function executionModeHint(mode, taskType) {
+  if (mode === 'k8s_api' || String(taskType || '').startsWith('k8s_')) return ui.k8sApiMode
+  if (taskType === 'run_playbook') return ui.playbookOnlyAnsible
+  return mode === 'ansible' ? ui.ansibleMode : ui.sshMode
+}
 function detectExecutionKind(source = {}) {
   const taskType = source.task_type || ''
   if (taskType.startsWith('k8s_') || source.target_type === 'k8s') return 'k8s_command'
@@ -1103,13 +1129,47 @@ function executionKindLabel(kind) {
 function templateExecutionKindLabel(template) {
   return executionKindLabel(detectExecutionKind(template))
 }
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+function buildEditablePayload(payload = {}, executionKindValue = 'shell') {
+  const patch = isPlainObject(payload.patch) ? payload.patch : {}
+  return {
+    ...defaultPayload(),
+    ...(payload || {}),
+    script_kind: payload?.script_kind || (executionKindValue === 'python' ? 'python' : 'shell'),
+    namespace: payload?.namespace || 'default',
+    patch,
+  }
+}
+function sanitizePayload(payload = {}) {
+  return payload
+}
 function normalizePayloadByType(taskType, source = {}) {
   if (taskType === 'run_command') return { command: (source.command || '').trim(), script_kind: source.script_kind === 'python' ? 'python' : 'shell' }
   if (taskType === 'run_playbook') return { playbook_name: (source.playbook_name || '').trim(), playbook_content: (source.playbook_content || '').trim() }
   if (taskType === 'service_status') return { service_name: (source.service_name || '').trim() }
-  if (taskType === 'k8s_pod_exec') return { command: (source.command || '').trim() }
+  if (taskType === 'k8s_pod_exec') {
+    const payload = { command: (source.command || '').trim() }
+    ;['resource_kind', 'service_name', 'namespace', 'patch_type'].forEach((key) => {
+      if (source[key]) payload[key] = source[key]
+    })
+    if (isPlainObject(source.patch)) payload.patch = source.patch
+    return payload
+  }
   if (taskType === 'k8s_scale_workload') return { workload_type: source.workload_type || 'deployment', replicas: Number(source.replicas || 0) }
   return {}
+}
+function buildK8sSubmitTargets(payload = {}) {
+  const kind = payload.resource_kind || payload.workload_type || (payload.service_name ? 'service' : 'cluster')
+  const name = payload.service_name || payload.workload_name || payload.pod_name || ''
+  const namespace = payload.namespace || (name ? 'default' : '')
+  return selectedK8sSubmitRows.value.map(item => ({
+    ...item,
+    kind,
+    namespace,
+    name,
+  }))
 }
 function validatePayloadByType(taskType, payload) {
   if (taskType === 'run_command' && !payload.command) return ElMessage.warning(ui.commandRequired), false
@@ -1124,6 +1184,7 @@ function templatePayloadPreview(template) {
   if (template.task_type === 'run_command') return template.payload?.command || ''
   if (template.task_type === 'run_playbook') return template.payload?.playbook_name || template.payload?.playbook_content || ''
   if (template.task_type === 'service_status') return template.payload?.service_name || ''
+  if (template.task_type === 'k8s_pod_exec') return template.payload?.command || ''
   return ''
 }
 function templatePreviewLabel(template) {
@@ -1151,9 +1212,9 @@ function appendEnvironmentItems(list, items) {
   if (!Array.isArray(items)) return
   items.forEach(item => {
     appendEnvironmentValue(list, item?.environment_name)
+    appendEnvironmentValue(list, item?.environment_display)
     appendEnvironmentValue(list, item?.environment)
     appendEnvironmentValue(list, item?.env)
-    appendEnvironmentValue(list, item?.namespace)
   })
 }
 function formatEnvironmentValues(values) {
@@ -1167,14 +1228,29 @@ function taskEnvironmentDisplay(task = {}) {
   const selectionFilters = task.selection_filters || {}
   const sourceContext = task.source_context || {}
   appendEnvironmentValue(values, task.environment_name)
+  appendEnvironmentValue(values, task.environment_display)
   appendEnvironmentValue(values, task.environment)
   appendEnvironmentValue(values, selectionFilters.environment_name)
+  appendEnvironmentValue(values, selectionFilters.resource_environment)
   appendEnvironmentValue(values, selectionFilters.environment)
   appendEnvironmentValue(values, sourceContext.environment_name)
   appendEnvironmentValue(values, sourceContext.environment)
   appendEnvironmentValue(values, sourceContext.resource_environment)
+  appendEnvironmentValue(values, sourceContext.knowledge_environment)
   appendEnvironmentItems(values, task.target_snapshot)
   return formatEnvironmentValues(values)
+}
+function targetSnapshotPrimaryName(item = {}, targetType = 'host') {
+  if (targetType === 'k8s') {
+    if (item.kind && item.namespace && item.name) return `${item.kind}/${item.namespace}/${item.name}`
+    if (item.namespace && item.name) return `${item.namespace}/${item.name}`
+    return item.name || item.resource_name || item.cluster_name || '-'
+  }
+  return item.hostname || item.name || item.resource_name || '-'
+}
+function targetSnapshotMeta(item = {}, targetType = 'host') {
+  if (targetType === 'k8s') return item.cluster_name || item.resource_name || '-'
+  return item.ip_address || item.cluster_name || '-'
 }
 function buildTemplateDraft(source = {}) {
   const taskType = source.task_type || 'run_command'
@@ -1187,20 +1263,12 @@ function buildTemplateDraft(source = {}) {
     execution_mode: source.execution_mode || (targetType === 'k8s' ? 'k8s_api' : (['run_command', 'run_playbook'].includes(taskType) ? 'ansible' : 'ssh')),
     execution_strategy: source.execution_strategy || 'continue',
     timeout_seconds: source.timeout_seconds || 15,
-    payload: {
-      ...defaultPayload(),
-      command: source.payload?.command || '',
-      script_kind: source.payload?.script_kind || 'shell',
-      service_name: source.payload?.service_name || '',
-      playbook_name: source.payload?.playbook_name || '',
-      playbook_content: source.payload?.playbook_content || '',
-      workload_type: source.payload?.workload_type || 'deployment',
-      replicas: source.payload?.replicas ?? 1,
-    },
+    payload: buildEditablePayload(source.payload || {}, detectExecutionKind(source)),
   }
 }
 function applyTemplate(template) {
   executionKind.value = detectExecutionKind(template)
+  const detectedExecutionKind = detectExecutionKind(template)
   taskForm.value = {
     name: template.name,
     target_type: template.target_type || (template.task_type?.startsWith('k8s_') ? 'k8s' : 'host'),
@@ -1209,16 +1277,7 @@ function applyTemplate(template) {
     execution_mode: template.execution_mode || (template.task_type?.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(template.task_type) ? 'ansible' : 'ssh')),
     execution_strategy: template.execution_strategy,
     timeout_seconds: template.timeout_seconds,
-    payload: {
-      ...defaultPayload(),
-      command: template.payload?.command || '',
-      script_kind: template.payload?.script_kind || detectExecutionKind(template),
-      service_name: template.payload?.service_name || '',
-      playbook_name: template.payload?.playbook_name || '',
-      playbook_content: template.payload?.playbook_content || '',
-      workload_type: template.payload?.workload_type || 'deployment',
-      replicas: template.payload?.replicas ?? 1,
-    },
+    payload: buildEditablePayload(template.payload || {}, detectedExecutionKind),
   }
   clearSelection()
   fetchTargets()
@@ -1241,7 +1300,7 @@ async function applyExecutionKind(kind) {
   taskForm.value.name = option.label
   taskForm.value.description = option.desc
   taskForm.value.timeout_seconds = option.value === 'playbook' ? 60 : 30
-  taskForm.value.execution_strategy = option.value === 'shell' || option.value === 'python' || option.value === 'playbook' ? 'stop_on_error' : 'continue'
+  taskForm.value.execution_strategy = option.value === 'k8s_command' ? 'continue' : 'stop_on_error'
   taskForm.value.payload = buildPayloadByExecutionKind(option.value)
   if (previousTargetType !== option.targetType) clearSelection()
   await fetchTargets()
@@ -1288,7 +1347,7 @@ function openTemplateEditDialog(template) {
   templateCreateVisible.value = true
 }
 function openTemplateDetail(template) {
-  currentTemplate.value = { ...template, payload: { ...defaultPayload(), ...(template.payload || {}) } }
+  currentTemplate.value = { ...template, payload: buildEditablePayload(template.payload || {}, detectExecutionKind(template)) }
   templateDetailVisible.value = true
 }
 function resetTemplateFilters() { templateFilters.value = { search: '', execution_kind: '' } }
@@ -1456,11 +1515,12 @@ function buildPrefillDraftFromTask(task = {}) {
 async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
   if (!taskDraft?.task_type) return
   const normalizedTaskName = normalizeTaskDraftTitle(taskDraft)
+  const detectedExecutionKind = detectExecutionKind(taskDraft)
   hostTableRef.value?.clearSelection()
   k8sTargetTableRef.value?.clearSelection()
   selectedRows.value = []
   selectedK8sRows.value = []
-  executionKind.value = detectExecutionKind(taskDraft)
+  executionKind.value = detectedExecutionKind
   taskForm.value = {
     name: normalizedTaskName || taskDraft.name || '',
     target_type: taskDraft.target_type || (taskDraft.task_type?.startsWith('k8s_') ? 'k8s' : 'host'),
@@ -1469,11 +1529,7 @@ async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
     execution_mode: taskDraft.execution_mode || (taskDraft.task_type?.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(taskDraft.task_type) ? 'ansible' : 'ssh')),
     execution_strategy: taskDraft.execution_strategy || 'continue',
     timeout_seconds: taskDraft.timeout_seconds || 30,
-    payload: {
-      ...defaultPayload(),
-      ...(taskDraft.payload || {}),
-      script_kind: taskDraft.payload?.script_kind || (detectExecutionKind(taskDraft) === 'python' ? 'python' : 'shell'),
-    },
+    payload: buildEditablePayload(taskDraft.payload || {}, detectedExecutionKind),
   }
   prefillDraftTargetRefs.value = Array.isArray(taskDraft.target_refs) ? taskDraft.target_refs : []
   prefillDraftTargets.value = Array.isArray(taskDraft.target_hosts) ? taskDraft.target_hosts : []
@@ -1482,7 +1538,10 @@ async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
   await fetchTargets()
   if (taskDraft.target_type === 'k8s' && Array.isArray(taskDraft.k8s_targets) && taskDraft.k8s_targets.length) {
     const clusterIds = new Set(taskDraft.k8s_targets.map(item => item.cluster_id))
-    selectedK8sRows.value = availableK8sTargets.value.filter(item => clusterIds.has(item.cluster || item.cluster_id || item.id))
+    const resourceIds = new Set(taskDraft.k8s_targets.map(item => item.resource_id || item.task_resource_id).filter(Boolean))
+    selectedK8sRows.value = availableK8sTargets.value.filter(item => clusterIds.has(item.cluster || item.cluster_id || item.id) || resourceIds.has(item.id))
+    await nextTick()
+    selectedK8sRows.value.forEach(row => k8sTargetTableRef.value?.toggleRowSelection(row, true))
   }
   ElMessage.success(`已载入${sourceLabel}，可继续编辑、执行或保存到模板库`)
 }
@@ -1512,7 +1571,7 @@ async function submitTemplateDraft() {
     target_type: templateDraft.value.target_type,
     task_type: templateDraft.value.task_type,
     description: templateDraft.value.description,
-    payload,
+    payload: sanitizePayload(payload),
     execution_mode: templateDraft.value.execution_mode,
     execution_strategy: templateDraft.value.execution_strategy,
     timeout_seconds: templateDraft.value.timeout_seconds,
@@ -1576,6 +1635,7 @@ async function copyTaskToDraft(task) {
 async function saveTaskAsTemplate(task) {
   const sourceTask = task?.executions ? task : await getHostTask(task.id)
   const payload = normalizePayloadByType(sourceTask.task_type, sourceTask.payload || {})
+  if (!validatePayloadByType(sourceTask.task_type, payload)) return
   let templateName = sourceTask.name || ''
   try {
     const { value } = await ElMessageBox.prompt(ui.saveTemplatePrompt, ui.saveTemplateTitle, {
@@ -1595,7 +1655,7 @@ async function saveTaskAsTemplate(task) {
       target_type: sourceTask.target_type || (sourceTask.task_type?.startsWith('k8s_') ? 'k8s' : 'host'),
       task_type: sourceTask.task_type,
       description: sourceTask.description || '',
-      payload,
+      payload: sanitizePayload(payload),
       execution_mode: sourceTask.execution_mode,
       execution_strategy: sourceTask.execution_strategy,
       timeout_seconds: sourceTask.timeout_seconds,
@@ -1620,7 +1680,7 @@ async function saveCurrentAsTemplate() {
   } catch (error) { return }
   savingTemplate.value = true
   try {
-    const created = await createHostTaskTemplate({ name: templateName, target_type: taskForm.value.target_type, task_type: taskForm.value.task_type, description: taskForm.value.description, payload, execution_mode: taskForm.value.execution_mode, execution_strategy: taskForm.value.execution_strategy, timeout_seconds: taskForm.value.timeout_seconds })
+    const created = await createHostTaskTemplate({ name: templateName, target_type: taskForm.value.target_type, task_type: taskForm.value.task_type, description: taskForm.value.description, payload: sanitizePayload(payload), execution_mode: taskForm.value.execution_mode, execution_strategy: taskForm.value.execution_strategy, timeout_seconds: taskForm.value.timeout_seconds })
     ElMessage.success(ui.saveTemplateSuccess)
     await fetchTemplates()
     currentTemplate.value = created
@@ -1690,15 +1750,12 @@ async function submitTask() {
           source_task_id: prefillSourceContext.value?.source_task_id || undefined,
         } : {}),
       },
-      payload,
+      payload: sanitizePayload(payload),
       trigger_source: prefillSourceContext.value?.source === 'aiops' ? 'aiops' : 'manual',
       source_context: hasPrefillDraft.value ? { ...prefillSourceContext.value } : { source: 'manual' },
     }
     if (taskForm.value.target_type === 'k8s') {
-      submitPayload.k8s_targets = selectedK8sClusterIds.value.map(clusterId => ({
-        cluster_id: clusterId,
-        kind: 'cluster',
-      }))
+      submitPayload.k8s_targets = buildK8sSubmitTargets(payload)
     } else {
       submitPayload.resource_ids = selectedRows.value.length ? selectedHostIds.value : draftResourceIds
       submitPayload.host_ids = selectedRows.value.length ? [] : draftHostIds

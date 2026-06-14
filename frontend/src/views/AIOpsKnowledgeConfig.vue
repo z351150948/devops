@@ -169,11 +169,11 @@
             </el-select>
           </el-form-item>
           <div v-if="selectedK8sClusters.length" class="namespace-config">
-            <div class="namespace-config-title">K8s 命名空间范围</div>
+            <div class="namespace-config-title">图谱展示命名空间</div>
             <div v-for="cluster in selectedK8sClusters" :key="cluster.id" class="namespace-row">
               <div class="namespace-cluster">
                 <strong>{{ cluster.name }}</strong>
-                <span>不选则读取该集群全部命名空间</span>
+                <span>展示在图谱拓扑图上的命名空间，不限制智能助手查询</span>
               </div>
               <el-select
                 v-model="form.k8s_namespaces[String(cluster.id)]"
@@ -182,7 +182,7 @@
                 allow-create
                 default-first-option
                 clearable
-                placeholder="选择业务服务所在命名空间"
+                placeholder="选择展示在图谱拓扑图上的命名空间"
               >
                 <el-option v-for="namespace in namespaceOptionsForCluster(cluster)" :key="namespace" :label="namespace" :value="namespace" />
               </el-select>
@@ -424,7 +424,7 @@ function infrastructureNames(row) {
   return [
     ...(row.k8s_cluster_ids || []).map((id) => {
       const namespaces = row.k8s_namespaces?.[String(id)] || []
-      const suffix = namespaces.length ? ` / ${namespaces.join(', ')}` : ''
+      const suffix = namespaces.length ? ` / 图谱展示: ${namespaces.join(', ')}` : ''
       return `${k8sMap.get(Number(id)) || `K8s ID ${id}`}${suffix}`
     }),
     ...(row.docker_host_ids || []).map(id => dockerMap.get(Number(id)) || `Docker ID ${id}`),

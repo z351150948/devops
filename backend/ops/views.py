@@ -21,7 +21,7 @@ from .host_task_schedules import (
     resolve_schedule_hosts,
     trigger_schedule,
 )
-from .host_tasks import build_host_target_queryset, record_task_center_event, resolve_host_source_refs, start_host_task, start_k8s_task
+from .host_tasks import build_host_target_queryset, build_k8s_target_snapshot, record_task_center_event, resolve_host_source_refs, start_host_task, start_k8s_task
 from .models import (
     Alert,
     AlertAction,
@@ -580,13 +580,22 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             target_label = f'{len(hosts)} 台主机'
 
         risk_level = self._infer_risk_level(validated, hosts, k8s_targets)
+        selection_filters = dict(validated.get('selection_filters') or {})
+        if target_type == HostTask.TARGET_K8S:
+            k8s_snapshot = build_k8s_target_snapshot(k8s_targets)
+            k8s_environment = self._first_k8s_environment(k8s_targets, k8s_snapshot)
+            if k8s_environment:
+                source_context.setdefault('resource_environment', k8s_environment)
+                source_context.setdefault('environment_name', k8s_environment)
+                selection_filters.setdefault('resource_environment', k8s_environment)
+                selection_filters.setdefault('environment_name', k8s_environment)
         task = HostTask.objects.create(
             name=validated['name'],
             target_type=target_type,
             task_type=validated['task_type'],
             description=validated.get('description', ''),
             payload=validated.get('payload') or {},
-            selection_filters=validated.get('selection_filters') or {},
+            selection_filters=selection_filters,
             execution_mode=validated.get('execution_mode', HostTask.EXECUTION_MODE_SSH),
             execution_strategy=validated.get('execution_strategy', HostTask.STRATEGY_CONTINUE),
             timeout_seconds=validated.get('timeout_seconds', 15),
@@ -613,6 +622,13 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         self._sync_aiops_pending_action_task(task, request.user)
         data = HostTaskDetailSerializer(self.get_queryset().get(pk=task.pk)).data
         return Response(data, status=status.HTTP_201_CREATED)
+
+    def _first_k8s_environment(self, targets, snapshot):
+        for item in list(targets or []) + list(snapshot or []):
+            environment = item.get('environment_name') or item.get('environment') or item.get('env')
+            if environment:
+                return environment
+        return ''
 
     def _sync_aiops_pending_action_task(self, task, user):
         source_context = task.source_context or {}
@@ -655,6 +671,8 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         if task_type == HostTask.TASK_K8S_SCALE_WORKLOAD:
             return HostTask.RISK_HIGH
         if task_type in [HostTask.TASK_K8S_RESTART_POD, HostTask.TASK_K8S_POD_EXEC]:
+            if any(keyword in command for keyword in ['kubectl patch', 'kubectl apply', 'kubectl delete', 'kubectl scale', 'kubectl rollout restart', 'kubectl replace']):
+                return HostTask.RISK_HIGH
             if any((target.get('namespace') or '') in ['prod', 'production'] for target in k8s_targets):
                 return HostTask.RISK_HIGH
             return HostTask.RISK_MEDIUM
@@ -738,6 +756,12 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
         return [
             {
                 'cluster_id': item.get('cluster_id'),
+                'cluster_name': item.get('cluster_name') or '',
+                'resource_id': item.get('resource_id') or item.get('task_resource_id'),
+                'task_resource_id': item.get('task_resource_id') or item.get('resource_id'),
+                'resource_name': item.get('resource_name') or '',
+                'environment_name': item.get('environment_name') or item.get('environment') or '',
+                'system_name': item.get('system_name') or '',
                 'namespace': item.get('namespace') or '',
                 'name': item.get('name') or '',
                 'kind': item.get('kind') or '',
