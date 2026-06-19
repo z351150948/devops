@@ -5,6 +5,7 @@
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="hero-icon"><el-icon><Aim /></el-icon></span>
           <h2>系统态势</h2>
+          <p class="page-inline-desc">按环境与系统聚合健康态势，结果导向定义系统 SLO，划清故障边界，快速定位异常节点、关键依赖与风险范围。</p>
         </div>
       </div>
       <div class="hero-actions">
@@ -14,6 +15,8 @@
         </el-button>
       </div>
     </section>
+
+    <ObservabilityRouteTabs v-if="!embedded" group="boards" />
 
     <div
       class="overview-shell"
@@ -618,6 +621,7 @@ import {
   RefreshRight,
 } from '@element-plus/icons-vue'
 import echarts from '@/lib/echarts'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 import {
   createSystemPostureEnvironment,
   createSystemPostureSystem,
@@ -1805,7 +1809,7 @@ onUnmounted(() => {
   color: var(--fm-text);
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   letter-spacing: 0;
 }
 
@@ -1819,10 +1823,13 @@ onUnmounted(() => {
 
 .hero {
   align-items: center;
-  background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   min-height: 64px;
+  padding: 14px 16px;
 }
 
 .release-hero-title-row {
@@ -1833,6 +1840,15 @@ onUnmounted(() => {
 
 .release-hero-title-inline {
   flex-wrap: wrap;
+}
+
+.page-inline-desc {
+  color: #475569;
+  flex: 0 1 auto;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  transform: translateY(1px);
 }
 
 .hero h2 {
@@ -1847,13 +1863,18 @@ onUnmounted(() => {
   align-items: center;
   background: linear-gradient(135deg, #edf4ff 0%, #f4fbff 100%);
   border: 1px solid #d9e6ff;
-  border-radius: 8px;
+  border-radius: 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   color: #245bdb;
   display: inline-flex;
-  height: 38px;
+  font-size: 20px;
+  height: 42px;
   justify-content: center;
-  width: 38px;
+  width: 42px;
+}
+
+.hero.panel {
+  border-radius: 20px;
 }
 
 .hero-actions {

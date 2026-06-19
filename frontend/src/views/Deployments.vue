@@ -562,7 +562,7 @@ const pageTitle = computed(() => isFlowMode.value ? '审批流' : '应用发布'
 const pageSubtitle = computed(() => (
   isFlowMode.value
     ? '统一配置应用发布、SQL 审计与事务工单可复用的审批流程。'
-    : '面向公司自研应用发布，支持 Docker / K8s 环境，支持灰度与批次发布、审批流配置、回滚等。并实时同步 CMDB。'
+    : '面向公司自研应用发布，支持 Docker / K8s 环境，支持灰度与批次发布、审批流配置、回滚等。'
 ))
 const flowSummary = computed(() => ({
   total: flows.value.length,

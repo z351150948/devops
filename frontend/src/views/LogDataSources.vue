@@ -1,43 +1,50 @@
 ﻿<template>
-  <div class="fade-in log-datasource-page">
+  <div class="fade-in log-datasource-page workbench-page-shell">
     <section class="hero panel">
       <div class="release-hero-copy">
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="log-header-icon"><el-icon><DataBoard /></el-icon></span>
-          <h2>日志中心</h2>
-          <p class="page-desc inline-subtitle">{{ activeLogTab.description }}</p>
+          <h2>日志数据源</h2>
+          <p class="page-inline-desc inline-subtitle">统一管理 Loki、ELK 和阿里云 SLS 的连接配置，查询页可以直接复用已保存的数据源。</p>
         </div>
+      </div>
+      <div class="hero-actions">
+        <el-button size="small" @click="fetchDataSources" :loading="loading">
+          <el-icon><RefreshRight /></el-icon>
+          刷新数据源
+        </el-button>
       </div>
     </section>
 
-    <div class="neo-tabs theme-blue log-center-tabs">
-      <button
-        v-for="tab in logTabs"
-        :key="tab.path"
-        class="neo-tab-btn"
-        :class="{ active: route.path === tab.path }"
-        @click="switchLogTab(tab.path)"
-      >
-        <el-icon style="margin-right:4px;"><component :is="tab.icon" /></el-icon>
-        {{ tab.label }}
-      </button>
-    </div>
+    <ObservabilityRouteTabs group="datasources" />
 
-    <div class="table-card">
-      <div class="table-head">
-        <div class="filter-bar">
-          <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
+    <div class="workbench-card log-datasource-card">
+      <div class="section-toolbar">
+        <div class="toolbar-head">
+          <span class="toolbar-title">日志数据源</span>
+          <span class="toolbar-desc">维护日志查询可复用的数据源连接和默认入口。</span>
+        </div>
+        <div class="workbench-card-actions">
+          <el-button v-if="canManageLogDataSources" type="primary" @click="openDialog()">
+            <el-icon><Plus /></el-icon>
+            新增数据源
+          </el-button>
+        </div>
+      </div>
+
+      <div class="workbench-toolbar workbench-toolbar--history datasource-filter-bar">
+        <div class="workbench-toolbar-left">
+          <el-input v-model="keyword" size="small" placeholder="搜索名称或描述" clearable style="width: 260px">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
-          <el-select v-model="providerFilter" clearable placeholder="全部类型" style="width: 180px">
+          <el-select v-model="providerFilter" size="small" clearable placeholder="全部类型" style="width: 160px">
             <el-option v-for="provider in providers" :key="provider.id" :label="providerLabel(provider.id)" :value="provider.id" />
           </el-select>
           <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
         </div>
-        <el-button v-if="canManageLogDataSources" type="primary" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增数据源
-        </el-button>
+        <div class="workbench-toolbar-right">
+          <span class="toolbar-count">共 {{ filteredItems.length }} 个数据源</span>
+        </div>
       </div>
 
       <el-table :data="filteredItems" v-loading="loading" stripe style="width: 100%">
@@ -180,8 +187,8 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { DataBoard, Plus, RefreshRight, Search } from '@element-plus/icons-vue'
 import {
   createLogDataSource,
   deleteLogDataSource,
@@ -191,25 +198,9 @@ import {
   updateLogDataSource,
 } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 
-const route = useRoute()
-const router = useRouter()
 const authStore = useAuthStore()
-const logTabs = [
-  {
-    path: '/logs/query',
-    label: '日志查询',
-    icon: 'Search',
-    description: '支持 ELK、Loki、阿里云 SLS 日志查询，可在页面内新增多个查询标签页并快速切换条件。',
-  },
-  {
-    path: '/logs/datasources',
-    label: '日志数据源',
-    icon: 'DataBoard',
-    description: '统一管理 Loki、ELK 和阿里云 SLS 的连接配置，查询页可以直接复用已保存的数据源。',
-  },
-]
-const activeLogTab = computed(() => logTabs.find((item) => item.path === route.path) || logTabs[0])
 const loading = ref(false)
 const saving = ref(false)
 const testingId = ref(null)
@@ -402,10 +393,6 @@ async function handleTest(row) {
   }
 }
 
-function switchLogTab(path) {
-  if (route.path !== path) router.push(path)
-}
-
 onMounted(async () => {
   await fetchProviders()
   await fetchDataSources()
@@ -416,108 +403,87 @@ onMounted(async () => {
 .log-datasource-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
-.panel {
-  background: linear-gradient(135deg, rgba(239,246,255,.96) 0%, rgba(236,254,255,.94) 52%, rgba(248,250,252,.98) 100%);
-  border: 1px solid rgba(96,165,250,.18);
-  border-radius: 24px;
-  box-shadow: 0 16px 36px rgba(14,165,233,.08);
-  padding: 12px 14px;
-}
-
-.hero {
-  display: flex;
+.hero.panel {
   align-items: center;
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border: 1px solid rgba(36, 91, 219, 0.09);
+  border-radius: 20px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  display: flex;
+  gap: 16px;
   justify-content: space-between;
-  gap: 10px;
-}
-
-.log-center-tabs {
-  margin-bottom: 0;
-  padding: 6px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,250,252,.9));
-  border: 1px solid rgba(148,163,184,.16);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+  padding: 14px 16px;
 }
 
 .release-hero-title-row {
+  align-items: center;
   display: flex;
-  align-items: baseline;
   gap: 12px;
-}
-
-.release-hero-title-inline {
-  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .hero h2 {
-  margin: 0;
   color: #0f172a;
   font-size: 23px;
   line-height: 1.1;
+  margin: 0;
 }
-
 
 .log-header-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 16px;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: #245bdb;
+  display: inline-flex;
+  flex: 0 0 42px;
   font-size: 20px;
-  color: #fff;
-  background: linear-gradient(135deg, #0ea5e9, #2563eb);
-  box-shadow: 0 10px 20px rgba(37,99,235,.2);
+  height: 42px;
+  justify-content: center;
+  width: 42px;
 }
 
-.page-desc {
-  margin: 0;
+.page-inline-desc {
   color: #475569;
+  flex: 0 1 auto;
   font-size: 13px;
   line-height: 1.45;
+  margin: 0;
+  transform: translateY(1px);
 }
 
 .inline-subtitle {
   max-width: none;
 }
 
-.log-center-tabs .neo-tab-btn {
-  padding: 10px 24px;
-  border-radius: 8px;
-}
-
-.log-center-tabs.theme-blue .neo-tab-btn.active {
-  color: #245bdb !important;
-  background: rgba(51, 112, 255, 0.1) !important;
-  box-shadow: inset 0 0 0 1px rgba(51, 112, 255, 0.08) !important;
-}
-
-.table-head {
-  display: flex;
+.hero-actions {
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  display: flex;
+  gap: 8px;
+}
+
+.hero-actions :deep(.el-button) {
+  border-radius: 10px;
+  font-weight: 500;
+  min-height: 32px;
+  padding: 0 14px;
+}
+
+.log-datasource-card {
+  padding: 14px;
+}
+
+.datasource-filter-bar {
   margin-bottom: 8px;
 }
 
-.filter-bar {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 0;
-}
-
-.table-card {
-  border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.92));
-  box-shadow: 0 18px 36px rgba(15,23,42,.06);
+.toolbar-count {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .name-cell {

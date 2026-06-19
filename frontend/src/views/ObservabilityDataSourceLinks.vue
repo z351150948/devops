@@ -1,17 +1,41 @@
 <template>
-  <div class="fade-in datasource-link-page">
-    <div class="table-card">
-      <div class="table-head">
-        <div class="filter-bar">
+  <div class="fade-in datasource-link-page workbench-page-shell">
+    <section class="hero panel">
+      <div class="release-hero-copy">
+        <div class="release-hero-title-row release-hero-title-inline">
+          <span class="log-header-icon"><el-icon><Share /></el-icon></span>
+          <h2>关联配置</h2>
+          <p class="page-inline-desc inline-subtitle">维护日志、链路追踪与仪表盘之间的跳转关联映射。</p>
+        </div>
+      </div>
+    </section>
+
+    <ObservabilityRouteTabs group="datasources" />
+
+    <div class="workbench-card datasource-link-card">
+      <div class="section-toolbar">
+        <div class="toolbar-head">
+          <span class="toolbar-title">关联配置</span>
+          <span class="toolbar-desc">维护日志、链路追踪与仪表盘之间的跳转关联映射。</span>
+        </div>
+        <div class="workbench-card-actions">
+          <el-button v-if="canManageLinks" type="primary" @click="openDialog()">
+            <el-icon><Plus /></el-icon>
+            新增关联
+          </el-button>
+        </div>
+      </div>
+
+      <div class="workbench-toolbar workbench-toolbar--history datasource-link-filter-bar">
+        <div class="workbench-toolbar-left">
           <el-input v-model="keyword" placeholder="搜索关联名称或数据源" clearable style="width: 280px">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
           <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
         </div>
-        <el-button v-if="canManageLinks" type="primary" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增关联
-        </el-button>
+        <div class="workbench-toolbar-right">
+          <span class="toolbar-count">共 {{ filteredItems.length }} 个关联</span>
+        </div>
       </div>
 
       <el-table :data="filteredItems" v-loading="loading" stripe style="width: 100%">
@@ -281,6 +305,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Plus, Search, Share } from '@element-plus/icons-vue'
 import {
   createObservabilityDataSourceLink,
   deleteObservabilityDataSourceLink,
@@ -291,6 +316,7 @@ import {
   updateObservabilityDataSourceLink,
 } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 
 const authStore = useAuthStore()
 const loading = ref(false)
@@ -479,19 +505,70 @@ onMounted(fetchAll)
 .datasource-link-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
-.table-card {
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 12px;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
-  padding: 12px 14px;
+.hero.panel {
+  align-items: center;
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
+  border-radius: 20px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px 16px;
 }
 
-.table-head,
-.filter-bar,
+.release-hero-title-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.release-hero-title-inline {
+  flex-wrap: wrap;
+}
+
+.hero h2 {
+  color: #0f172a;
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #475569;
+  flex: 0 1 auto;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  transform: translateY(1px);
+}
+
+.log-header-icon {
+  align-items: center;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: #245bdb;
+  display: inline-flex;
+  flex: 0 0 42px;
+  font-size: 20px;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.datasource-link-card {
+  padding: 14px;
+}
+
+.datasource-link-filter-bar {
+  margin-bottom: 8px;
+}
+
 .name-cell,
 .mapping-row {
   align-items: center;
@@ -499,9 +576,9 @@ onMounted(fetchAll)
   gap: 8px;
 }
 
-.table-head {
-  justify-content: space-between;
-  margin-bottom: 10px;
+.toolbar-count {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .name-text,

@@ -1970,7 +1970,7 @@ onBeforeUnmount(() => {
 .aiops-fab-label strong{font-size:13px;color:#0f172a}
 .aiops-fab-label small{margin-top:2px;font-size:10px;color:#64748b}
 .aiops-fab-dot{position:absolute;top:9px;right:10px;width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(255,255,255,.96),0 0 0 5px rgba(34,197,94,.1)}
-.aiops-panel{--aiops-session-width:260px;--aiops-chat-base-width:836px;position:absolute;right:24px;bottom:84px;width:1096px;max-width:calc(100vw - 32px);height:min(800px,calc(100vh - 104px));display:flex;flex-direction:column;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid #dbe4f0;border-radius:24px;box-shadow:0 26px 56px rgba(15,23,42,.18);overflow:hidden}
+.aiops-panel{--aiops-session-width:260px;--aiops-chat-base-width:836px;position:absolute;right:24px;bottom:84px;width:min(1096px,calc(100vw - var(--sidebar-width,188px) - 40px));max-width:calc(100vw - var(--sidebar-width,188px) - 40px);height:min(800px,calc(100vh - 104px));display:flex;flex-direction:column;background:linear-gradient(180deg,#fff 0%,#f8fbff 100%);border:1px solid #dbe4f0;border-radius:24px;box-shadow:0 26px 56px rgba(15,23,42,.18);overflow:hidden}
 .aiops-panel.embedded{--aiops-session-width:280px;position:relative;right:auto;bottom:auto;width:100%;max-width:none;height:100%;min-height:0;border-radius:20px;box-shadow:0 14px 32px rgba(15,23,42,.06)}
 .aiops-panel-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid #e2e8f0;background:linear-gradient(135deg,#fff7ed 0%,#f0f9ff 100%)}
 .header-copy{min-width:0;flex:1}
@@ -2232,7 +2232,7 @@ onBeforeUnmount(() => {
   .aiops-fab{min-width:118px;height:52px;padding:6px 10px 6px 6px}
   .aiops-fab-core{width:38px;height:38px;border-radius:18px}
   .aiops-fab-avatar{width:26px;height:26px}
-  .aiops-panel{right:12px;bottom:80px;width:min(100vw - 16px,720px);height:min(86vh,calc(100vh - 100px))}
+  .aiops-panel{right:12px;bottom:80px;width:min(720px,calc(100vw - var(--sidebar-width,188px) - 24px));max-width:calc(100vw - var(--sidebar-width,188px) - 24px);height:min(86vh,calc(100vh - 100px))}
   .aiops-panel.embedded{width:100%;height:100%;min-height:0}
   .aiops-panel-body{grid-template-columns:1fr}
   .aiops-session-list{display:none}
@@ -2251,6 +2251,9 @@ onBeforeUnmount(() => {
   .composer-actions{flex-direction:column;align-items:stretch;gap:6px}
   .composer-meta{justify-content:space-between;gap:8px}
   .composer-action-group{justify-content:flex-end}
+}
+@media (max-width: 760px){
+  .aiops-panel{right:8px;width:calc(100vw - var(--sidebar-collapsed-width,68px) - 16px);max-width:calc(100vw - var(--sidebar-collapsed-width,68px) - 16px)}
 }
 </style>
 

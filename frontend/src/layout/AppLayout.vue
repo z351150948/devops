@@ -198,11 +198,12 @@ const notificationItems = ref([])
 const notificationCount = ref(0)
 const moduleVisibility = ref({})
 const MODULE_SETTINGS_EVENT = 'sxdevops-module-settings-updated'
+const TASK_SCHEDULES_VISIBLE = false
 const defaultOpenMenuKeys = ['aiops', 'observability', 'events']
 let notificationTimer = null
 
 const menuItems = [
-  { moduleKey: 'dashboard', path: '/dashboard', title: '仪表盘', icon: 'Odometer', permission: 'ops.dashboard.view' },
+  { moduleKey: 'dashboard', path: '/dashboard', title: '系统态势', icon: 'Odometer', permission: 'ops.dashboard.view' },
   {
     moduleKey: 'aiops',
     title: 'AIOps',
@@ -219,11 +220,9 @@ const menuItems = [
     title: '可观测性',
     icon: 'DataLine',
     children: [
-      { path: '/observability/overview', title: '平台总览', icon: 'DataLine', anyPermissions: ['ops.observability.system_posture.view', 'ops.metric.query', 'ops.metric.datasource.view', 'ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.alert.config.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view', 'ops.grafana.view'] },
-      { path: '/observability/grafana', title: '仪表盘', icon: 'Histogram', permission: 'ops.grafana.view' },
-      { path: '/observability/metrics', title: '指标查询', icon: 'DataAnalysis', anyPermissions: ['ops.metric.query', 'ops.metric.datasource.view'] },
-      { path: '/logs', title: '日志中心', icon: 'Search', anyPermissions: ['ops.log.query', 'ops.log.datasource.view'] },
-      { path: '/observability/tracing', title: '链路追踪', icon: 'Connection', anyPermissions: ['ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view'] },
+      { path: '/observability/boards', title: '可视化', icon: 'DataLine', anyPermissions: ['ops.grafana.view', 'ops.observability.system_posture.view'] },
+      { path: '/observability/query', title: '数据查询', icon: 'Search', anyPermissions: ['ops.metric.query', 'ops.log.query', 'ops.trace.view'] },
+      { path: '/observability/datasources', title: '数据源', icon: 'DataBoard', anyPermissions: ['ops.metric.datasource.view', 'ops.log.datasource.view', 'ops.trace.datasource.view', 'ops.observability.link.view'] },
       { path: '/alerts', title: '告警中心', icon: 'Bell', anyPermissions: ['ops.alert.view', 'ops.alert.config.view'] },
     ],
   },
@@ -241,9 +240,9 @@ const menuItems = [
     title: '任务中心',
     icon: 'Operation',
     children: [
-      { path: '/tasks/resources', title: '资源底座', icon: 'Monitor', anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage'] },
       { path: '/tasks/workbench', title: '任务工作台', icon: 'Operation', anyPermissions: ['ops.task.execute', 'ops.host.execute'] },
-      { path: '/tasks/schedules', title: '计划任务', icon: 'Timer', anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'] },
+      { path: '/tasks/schedules', title: '计划任务', icon: 'Timer', hidden: !TASK_SCHEDULES_VISIBLE, anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'] },
+      { path: '/tasks/resources', title: '资源底座', icon: 'Monitor', anyPermissions: ['ops.task.resource.view', 'ops.task.resource.manage'] },
     ],
   },
   {
@@ -278,6 +277,26 @@ const menuItems = [
   },
 ]
 
+const observabilityBoardPaths = new Set([
+  '/observability/boards',
+  '/observability/grafana',
+  '/observability/system-posture',
+  '/observability/posture-history',
+])
+const observabilityQueryPaths = new Set([
+  '/observability/query',
+  '/observability/metrics',
+  '/logs/query',
+  '/observability/tracing',
+])
+const observabilityDatasourcePaths = new Set([
+  '/observability/datasources',
+  '/observability/metrics/datasources',
+  '/logs/datasources',
+  '/observability/tracing/datasources',
+  '/observability/datasource-links',
+])
+
 
 function canAccess(item) {
   if (item.permission) return authStore.hasPermission(item.permission)
@@ -286,18 +305,30 @@ function canAccess(item) {
 }
 
 function isModuleVisible(item) {
-  if (!item.moduleKey) return true
-  return moduleVisibility.value[item.moduleKey] !== false
+  const visibilityKey = item.visibilityKey || item.moduleKey
+  if (!visibilityKey) return true
+  return moduleVisibility.value[visibilityKey] !== false
+}
+
+function visibleChildren(items = []) {
+  return items
+    .filter(child => !child.hidden)
+    .map((child) => {
+      if (!child.children) return child
+      const children = visibleChildren(child.children)
+      return { ...child, children }
+    })
+    .filter((child) => child.children ? child.children.length > 0 : canAccess(child))
 }
 
 const visibleMenuItems = computed(() => menuItems
   .filter(isModuleVisible)
   .map((item) => {
     if (!item.children) return item
-    const children = item.children.filter(canAccess)
+    const children = visibleChildren(item.children)
     return { ...item, children }
   })
-  .filter((item) => item.children ? item.children.length > 0 : canAccess(item))
+  .filter((item) => item.children ? item.children.length > 0 : !item.hidden && canAccess(item))
 )
 
 const normalizedMenuPath = computed(() => {
@@ -307,8 +338,14 @@ const normalizedMenuPath = computed(() => {
   if (route.path.startsWith('/events/')) {
     return route.path
   }
-  if (route.path.startsWith('/logs/')) {
-    return '/logs'
+  if (observabilityBoardPaths.has(route.path)) {
+    return '/observability/boards'
+  }
+  if (observabilityQueryPaths.has(route.path) && route.query.tab !== 'datasources') {
+    return '/observability/query'
+  }
+  if (observabilityDatasourcePaths.has(route.path) || (route.path === '/observability/metrics' && route.query.tab === 'datasources') || (route.path === '/observability/tracing' && route.query.tab === 'datasources')) {
+    return '/observability/datasources'
   }
   return route.path
 })
@@ -931,6 +968,7 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
 </style>
 
 

@@ -15,15 +15,18 @@
         <div class="immersive-toolbar__actions">
           <el-button size="small" v-if="canViewTracing" type="success" plain @click="openTraceFromDashboard(selectedDashboard)">查链路</el-button>
           <el-button size="small" v-if="canQueryLogs" type="warning" plain @click="openLogsFromDashboard(selectedDashboard)">查日志</el-button>
-          <el-button size="small" @click="openExternal(selectedDashboardUrl)">外部打开</el-button>
+          <el-button size="small" @click="openExternal(selectedDashboardUrl)">全屏打开</el-button>
           <el-button size="small" type="primary" @click="closeFullscreen">退出看板</el-button>
         </div>
       </div>
       <div class="immersive-stage">
         <iframe
+          ref="immersiveFrameRef"
           class="immersive-frame"
           :src="selectedDashboardUrl"
+          :style="{ height: `${immersiveFrameHeight}px` }"
           :title="`${selectedDashboard.title}-immersive`"
+          @load="handleGrafanaFrameLoad"
         />
       </div>
     </section>
@@ -47,22 +50,7 @@
         </div>
       </section>
 
-      <section class="context-strip panel">
-        <div class="context-strip__meta">
-          <span class="context-pill">目录 {{ folderCount }}</span>
-          <span class="context-pill">看板 {{ filteredDashboards.length }}</span>
-          <span class="context-pill">标签 {{ tagOptions.length }}</span>
-          <span v-if="selectedFolderPath" class="context-strip__text">当前目录 {{ selectedFolderPath }}</span>
-          <span v-else class="context-strip__text">按目录浏览并打开 Grafana 看板</span>
-        </div>
-        <div class="context-strip__actions">
-          <el-button v-if="hasActiveFilters" size="small" link @click="resetFilters">清空筛选</el-button>
-          <el-button size="small" plain @click="embedHelpVisible = true">
-            <el-icon><QuestionFilled /></el-icon>
-            Grafana 嵌入帮助
-          </el-button>
-        </div>
-      </section>
+      <ObservabilityRouteTabs group="boards" />
 
       <section class="panel">
         <div class="section-head section-head--list">
@@ -74,6 +62,10 @@
           <div class="list-head-actions">
             <el-button size="small" plain @click="collapseAllFolders">全部折叠</el-button>
             <el-button v-if="canManageGrafana" size="small" type="primary" plain @click="openFolderDialog()">新增目录</el-button>
+            <el-button size="small" plain @click="embedHelpVisible = true">
+              <el-icon><QuestionFilled /></el-icon>
+              Grafana 嵌入帮助
+            </el-button>
           </div>
         </div>
 
@@ -228,7 +220,10 @@
           <div class="dialog-field__content">{{ folderDialog.parentPath }}</div>
         </div>
         <div class="dialog-field">
-          <label>目录名称</label>
+          <label class="dialog-field-label">
+            <span>目录名称</span>
+            <small>用“/”划分层级</small>
+          </label>
           <el-input v-model.trim="folderDialog.name" placeholder="例如：基础设施 / 应用服务 / 节点" />
         </div>
         <div class="dialog-field">
@@ -388,13 +383,14 @@ org_role = Viewer</pre>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, ArrowRight, Delete, EditPen, Folder, FolderAdd, FolderOpened, Histogram, Link, MoreFilled, Plus, QuestionFilled, RefreshRight } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getGrafanaConfig, getObservabilityOverview, resolveGrafanaToLogs, resolveGrafanaToTrace, updateGrafanaConfig } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 import { openRouteInNewTab } from '@/utils/router'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -405,6 +401,8 @@ const configSaving = ref(false)
 const overviewLoaded = ref(false)
 const fullscreenVisible = ref(false)
 const embedHelpVisible = ref(false)
+const immersiveFrameRef = ref(null)
+const immersiveFrameHeight = ref(fallbackGrafanaFrameHeight())
 const overview = ref({ modules: {}, summary: {}, tips: [] })
 const selectedKey = ref('')
 const selectedFolderPath = ref('')
@@ -433,6 +431,9 @@ const dashboardDrawer = reactive({
   appendKioskParams: true,
 })
 const dashboardDraft = reactive(createEmptyDashboard())
+let grafanaFrameMeasureTimer = null
+let grafanaFrameMeasureInterval = null
+let grafanaFrameResizeObserver = null
 
 const grafana = computed(() => overview.value.modules?.grafana || {})
 const dashboards = computed(() => grafana.value.dashboards || [])
@@ -1576,6 +1577,81 @@ function collapseAllFolders() {
   })
 }
 
+function fallbackGrafanaFrameHeight() {
+  if (typeof window === 'undefined') return 2600
+  const isMobile = window.innerWidth <= 760
+  const ratio = isMobile ? 3.6 : 3.4
+  return Math.max(isMobile ? 2200 : 2600, Math.round(window.innerHeight * ratio))
+}
+
+function clearGrafanaFrameMeasure() {
+  if (grafanaFrameMeasureTimer) {
+    window.clearTimeout(grafanaFrameMeasureTimer)
+    grafanaFrameMeasureTimer = null
+  }
+  if (grafanaFrameMeasureInterval) {
+    window.clearInterval(grafanaFrameMeasureInterval)
+    grafanaFrameMeasureInterval = null
+  }
+  if (grafanaFrameResizeObserver) {
+    grafanaFrameResizeObserver.disconnect()
+    grafanaFrameResizeObserver = null
+  }
+}
+
+function measureGrafanaFrameHeight() {
+  const frame = immersiveFrameRef.value
+  if (!frame) return false
+  try {
+    const doc = frame.contentDocument || frame.contentWindow?.document
+    if (!doc) return false
+    const body = doc.body
+    const root = doc.documentElement
+    const measuredHeight = Math.max(
+      body?.scrollHeight || 0,
+      body?.offsetHeight || 0,
+      root?.clientHeight || 0,
+      root?.scrollHeight || 0,
+      root?.offsetHeight || 0
+    )
+    if (measuredHeight > 0) {
+      immersiveFrameHeight.value = Math.max(measuredHeight + 24, fallbackGrafanaFrameHeight())
+    }
+    return true
+  } catch {
+    immersiveFrameHeight.value = fallbackGrafanaFrameHeight()
+    return false
+  }
+}
+
+function scheduleGrafanaFrameMeasure() {
+  clearGrafanaFrameMeasure()
+  immersiveFrameHeight.value = fallbackGrafanaFrameHeight()
+  if (!fullscreenVisible.value || !selectedDashboardUrl.value) return
+  grafanaFrameMeasureTimer = window.setTimeout(() => {
+    const canReadFrame = measureGrafanaFrameHeight()
+    if (!canReadFrame) return
+    const frame = immersiveFrameRef.value
+    const doc = frame?.contentDocument || frame?.contentWindow?.document
+    const resizeTarget = doc?.body || doc?.documentElement
+    if (resizeTarget && typeof ResizeObserver !== 'undefined') {
+      grafanaFrameResizeObserver = new ResizeObserver(() => measureGrafanaFrameHeight())
+      grafanaFrameResizeObserver.observe(resizeTarget)
+    }
+    grafanaFrameMeasureInterval = window.setInterval(measureGrafanaFrameHeight, 1000)
+    window.setTimeout(() => {
+      if (grafanaFrameMeasureInterval) {
+        window.clearInterval(grafanaFrameMeasureInterval)
+        grafanaFrameMeasureInterval = null
+      }
+    }, 12000)
+  }, 300)
+}
+
+function handleGrafanaFrameLoad() {
+  scheduleGrafanaFrameMeasure()
+}
+
 function openFullscreen(item) {
   if (item?.key) {
     selectedKey.value = item.key
@@ -1584,10 +1660,12 @@ function openFullscreen(item) {
     return
   }
   fullscreenVisible.value = true
+  nextTick(scheduleGrafanaFrameMeasure)
 }
 
 function closeFullscreen() {
   fullscreenVisible.value = false
+  clearGrafanaFrameMeasure()
 }
 
 function handleKeydown(event) {
@@ -1663,13 +1741,21 @@ watch(
   syncRouteQuery
 )
 
+watch(
+  () => [fullscreenVisible.value ? '1' : '0', selectedDashboardUrl.value].join('|'),
+  () => nextTick(scheduleGrafanaFrameMeasure)
+)
+
 onMounted(() => {
   window.addEventListener('keydown', handleKeydown)
+  window.addEventListener('resize', scheduleGrafanaFrameMeasure)
   loadOverview()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeydown)
+  window.removeEventListener('resize', scheduleGrafanaFrameMeasure)
+  clearGrafanaFrameMeasure()
 })
 </script>
 
@@ -1677,12 +1763,12 @@ onBeforeUnmount(() => {
 .observability-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .observability-page.is-immersive {
   gap: 0;
-  min-height: calc(100vh - 84px);
+  min-height: auto;
 }
 
 .panel {
@@ -1757,41 +1843,11 @@ onBeforeUnmount(() => {
   width: 42px;
 }
 
-.context-strip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 9px;
-  padding-bottom: 9px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(250, 251, 252, 0.96));
-}
-
-.context-strip__meta,
-.context-strip__actions,
 .section-title-main {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.context-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  background: rgba(248, 250, 252, 0.98);
-  border: 1px solid rgba(226, 232, 240, 0.92);
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.context-strip__text {
-  color: #94a3b8;
-  font-size: 12px;
 }
 
 .section-head {
@@ -2336,6 +2392,18 @@ onBeforeUnmount(() => {
   font-weight: 600;
 }
 
+.dialog-field-label {
+  align-items: baseline;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.dialog-field-label small {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .dialog-field__content {
   padding: 10px 12px;
   border-radius: 10px;
@@ -2374,10 +2442,9 @@ onBeforeUnmount(() => {
 
 .immersive-shell {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 4px;
-  min-height: calc(100vh - 84px);
+  min-height: auto;
   padding: 2px;
   border: 0;
   box-shadow: none;
@@ -2452,17 +2519,17 @@ onBeforeUnmount(() => {
 }
 
 .immersive-stage {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow: visible;
   border-radius: 8px;
   border: 0;
   background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
 }
 
 .immersive-frame {
-  flex: 1;
   width: 100%;
+  height: max(1800px, 220vh);
   min-height: calc(100vh - 148px);
   display: block;
   border: 0;
@@ -2487,7 +2554,6 @@ onBeforeUnmount(() => {
   }
 
   .hero,
-  .context-strip,
   .section-head,
   .immersive-toolbar,
   .dialog-field--inline,
@@ -2523,12 +2589,8 @@ onBeforeUnmount(() => {
     justify-content: flex-start;
   }
 
-  .observability-page.is-immersive,
-  .immersive-shell {
-    min-height: calc(100vh - 116px);
-  }
-
   .immersive-frame {
+    height: max(1400px, 240vh);
     min-height: calc(100vh - 204px);
   }
 }

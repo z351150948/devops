@@ -4,8 +4,8 @@
       <div class="release-hero-copy">
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="log-header-icon"><el-icon><Search /></el-icon></span>
-          <h2>日志中心</h2>
-          <p class="page-desc inline-subtitle">{{ activeLogTab.description }}</p>
+          <h2>日志查询</h2>
+          <p class="page-desc inline-subtitle">支持 ELK、Loki、阿里云 SLS 日志查询。</p>
         </div>
       </div>
       <div class="hero-actions">
@@ -16,25 +16,14 @@
       </div>
     </section>
 
-    <div class="neo-tabs theme-blue log-center-tabs">
-      <button
-        v-for="tab in logTabs"
-        :key="tab.path"
-        class="neo-tab-btn"
-        :class="{ active: route.path === tab.path }"
-        @click="switchLogTab(tab.path)"
-      >
-        <el-icon style="margin-right:4px;"><component :is="tab.icon" /></el-icon>
-        {{ tab.label }}
-      </button>
-    </div>
+    <ObservabilityRouteTabs group="query" />
 
     <el-empty v-if="!dataSources.length && !loadingSources" description="还没有日志数据源，请先新增后再查询。">
       <el-button type="primary" @click="goToDatasources">去新增数据源</el-button>
     </el-empty>
 
     <template v-else>
-      <section class="tabs-panel tabs-panel--session">
+      <section v-if="showQuerySessionTabs" class="tabs-panel tabs-panel--session">
         <div class="tabs-session-bar">
           <el-tabs v-model="activeTabName" type="card" class="session-tabs" @tab-remove="removeQueryTab">
             <el-tab-pane
@@ -363,6 +352,7 @@ import { ElMessage } from 'element-plus'
 import { getLogDataSources, getLogProviderCatalog, queryLogs, resolveLogToGrafana, resolveLogToTrace } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 import { openRouteInNewTab } from '@/utils/router'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -372,21 +362,6 @@ const QUERY_HISTORY_KEY = 'logs:query-history'
 const QUERY_FAVORITES_KEY = 'logs:query-favorites'
 const DEFAULT_DATASOURCE_NAME = 'SLS 演示（上海）'
 const MAX_HISTORY_ITEMS = 12
-const logTabs = [
-  {
-    path: '/logs/query',
-    label: '日志查询',
-    icon: 'Search',
-    description: '支持 ELK、Loki、阿里云 SLS 日志查询，可在页面内新增多个查询标签页并快速切换条件。',
-  },
-  {
-    path: '/logs/datasources',
-    label: '日志数据源',
-    icon: 'DataBoard',
-    description: '统一管理 Loki、ELK 和阿里云 SLS 的连接配置，查询页可以直接复用已保存的数据源。',
-  },
-]
-const activeLogTab = computed(() => logTabs.find((item) => item.path === route.path) || logTabs[0])
 const MAX_FAVORITE_ITEMS = 8
 const SYNTAX_HELP_DOCS = {
   loki: {
@@ -454,6 +429,7 @@ const loadingSources = ref(false)
 const dataSources = ref([])
 const queryTabs = ref([])
 const activeTabName = ref('')
+const showQuerySessionTabs = ref(false)
 const historyItems = ref([])
 const favoriteItems = ref([])
 const savedTab = ref('favorites')
@@ -659,10 +635,6 @@ function providerTagType(provider) {
 
 function goToDatasources() {
   router.push('/logs/datasources')
-}
-
-function switchLogTab(path) {
-  if (route.path !== path) router.push(path)
 }
 
 function openSyntaxHelp(provider) {
@@ -1840,7 +1812,7 @@ onUnmounted(() => {
 .logs-query-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .hero {
@@ -1855,7 +1827,7 @@ onUnmounted(() => {
   border: 1px solid rgba(96,165,250,.18);
   border-radius: 20px;
   box-shadow: 0 16px 36px rgba(14,165,233,.08);
-  padding: 10px 14px;
+  padding: 14px 16px;
 }
 
 .release-hero-title-row {

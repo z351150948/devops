@@ -4,6 +4,8 @@ import AppLayout from '@/layout/AppLayout.vue'
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 
+const TASK_SCHEDULES_VISIBLE = false
+
 const routes = [
   {
     path: '/login',
@@ -32,7 +34,7 @@ const routes = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '仪表盘', icon: 'Odometer', permission: 'ops.dashboard.view' },
+        meta: { title: '系统态势', icon: 'Odometer', permission: 'ops.dashboard.view' },
       },
       {
         path: 'hosts',
@@ -46,7 +48,7 @@ const routes = [
       },
       {
         path: 'hosts/schedules',
-        redirect: '/tasks/schedules',
+        redirect: TASK_SCHEDULES_VISIBLE ? '/tasks/schedules' : '/tasks/workbench',
         meta: { hidden: true, title: '定时任务', icon: 'Timer', anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'] },
       },
       {
@@ -69,9 +71,6 @@ const routes = [
             'ops.host.view',
             'ops.host.manage',
             'ops.host.terminal',
-            'ops.host.schedule.view',
-            'ops.host.schedule.manage',
-            'ops.host.schedule.execute',
           ],
         },
       },
@@ -97,9 +96,11 @@ const routes = [
       },
       {
         path: 'tasks/schedules',
-        name: 'TaskSchedules',
-        component: () => import('@/views/TaskSchedules.vue'),
+        ...(TASK_SCHEDULES_VISIBLE
+          ? { name: 'TaskSchedules', component: () => import('@/views/TaskSchedules.vue') }
+          : { redirect: '/tasks/workbench' }),
         meta: {
+          hidden: !TASK_SCHEDULES_VISIBLE,
           title: '计划任务',
           icon: 'Timer',
           anyPermissions: ['ops.host.schedule.view', 'ops.host.schedule.manage', 'ops.host.schedule.execute'],
@@ -226,12 +227,45 @@ const routes = [
         path: 'observability',
         redirect: () => {
           const authStore = useAuthStore(pinia)
-          if (authStore.hasAnyPermission(['ops.observability.system_posture.view', 'ops.metric.query', 'ops.metric.datasource.view', 'ops.log.query', 'ops.log.datasource.view', 'ops.alert.view', 'ops.alert.config.view', 'ops.trace.view', 'ops.trace.datasource.view', 'ops.observability.link.view', 'ops.grafana.view'])) {
-            return '/observability/overview'
-          }
+          if (authStore.hasAnyPermission(['ops.grafana.view', 'ops.observability.system_posture.view'])) return '/observability/boards'
+          if (authStore.hasAnyPermission(['ops.metric.query', 'ops.log.query', 'ops.trace.view'])) return '/observability/query'
+          if (authStore.hasAnyPermission(['ops.metric.datasource.view', 'ops.log.datasource.view', 'ops.trace.datasource.view', 'ops.observability.link.view'])) return '/observability/datasources'
           return '/403'
         },
         meta: { hidden: true },
+      },
+      {
+        path: 'observability/boards',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasPermission('ops.grafana.view')) return '/observability/grafana'
+          if (authStore.hasPermission('ops.observability.system_posture.view')) return '/observability/system-posture'
+          return '/403'
+        },
+        meta: { hidden: true, anyPermissions: ['ops.grafana.view', 'ops.observability.system_posture.view'] },
+      },
+      {
+        path: 'observability/query',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasPermission('ops.metric.query')) return '/observability/metrics'
+          if (authStore.hasPermission('ops.log.query')) return '/logs/query'
+          if (authStore.hasPermission('ops.trace.view')) return '/observability/tracing'
+          return '/403'
+        },
+        meta: { hidden: true, anyPermissions: ['ops.metric.query', 'ops.log.query', 'ops.trace.view'] },
+      },
+      {
+        path: 'observability/datasources',
+        redirect: () => {
+          const authStore = useAuthStore(pinia)
+          if (authStore.hasPermission('ops.metric.datasource.view')) return { path: '/observability/metrics', query: { tab: 'datasources' } }
+          if (authStore.hasPermission('ops.log.datasource.view')) return '/logs/datasources'
+          if (authStore.hasPermission('ops.trace.datasource.view')) return '/observability/tracing/datasources'
+          if (authStore.hasPermission('ops.observability.link.view')) return '/observability/datasource-links'
+          return '/403'
+        },
+        meta: { hidden: true, anyPermissions: ['ops.metric.datasource.view', 'ops.log.datasource.view', 'ops.trace.datasource.view', 'ops.observability.link.view'] },
       },
       {
         path: 'observability/system-posture',
@@ -254,6 +288,17 @@ const routes = [
         name: 'MetricsQuery',
         component: () => import('@/views/MetricsQuery.vue'),
         meta: { title: '指标查询', icon: 'DataAnalysis', anyPermissions: ['ops.metric.query', 'ops.metric.datasource.view'] },
+      },
+      {
+        path: 'observability/metrics/datasources',
+        redirect: { path: '/observability/metrics', query: { tab: 'datasources' } },
+        meta: { hidden: true, permission: 'ops.metric.datasource.view' },
+      },
+      {
+        path: 'observability/posture-history',
+        name: 'ObservabilityPostureHistory',
+        component: () => import('@/views/ObservabilityPostureHistory.vue'),
+        meta: { title: '态势历史', icon: 'TrendCharts', permission: 'ops.observability.system_posture.view' },
       },
       {
         path: 'observability/grafana',
@@ -279,8 +324,9 @@ const routes = [
       },
       {
         path: 'observability/datasource-links',
-        redirect: { path: '/observability/overview' },
-        meta: { hidden: true, permission: 'ops.observability.link.view' },
+        name: 'ObservabilityDataSourceLinks',
+        component: () => import('@/views/ObservabilityDataSourceLinks.vue'),
+        meta: { title: '关联配置', icon: 'Share', permission: 'ops.observability.link.view' },
       },
       {
         path: 'events',

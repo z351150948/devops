@@ -1472,8 +1472,16 @@ class AIOpsApiTests(TestCase):
         self.assertTrue(knowledge_env.child_node_snapshot.get('children'))
 
     @mock.patch('aiops.knowledge_graph._k8s_cluster_nodes')
-    def test_knowledge_graph_hides_represented_task_resource_environment(self, mocked_k8s_nodes):
+    def test_knowledge_graph_syncs_task_resource_base_nodes(self, mocked_k8s_nodes):
         cluster, resource_env, _ = self.ensure_ecommerce_knowledge_environment()
+        represented_resource = TaskResource.objects.get(environment=resource_env, name='tf-k3s-single-node')
+        standalone_resource = TaskResource.objects.create(
+            name='title-check-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=resource_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.99.0.1',
+        )
         mocked_k8s_nodes.return_value = [{
             'name': 'tf-k3s-single-node',
             'status': 'Ready',
@@ -1491,6 +1499,12 @@ class AIOpsApiTests(TestCase):
         self.assertIn(f'infrastructure:k8s_host:{cluster.id}:tf-k3s-single-node', node_ids)
         self.assertIn('tf-k3s-single-node', node_labels)
         self.assertNotIn(f'infrastructure:task_resource_env:{resource_env.id}', node_ids)
+        self.assertNotIn(f'infrastructure:task_resource:{represented_resource.id}', node_ids)
+        self.assertIn(f'infrastructure:task_resource:{standalone_resource.id}', node_ids)
+        standalone_node = next(node for node in response.data['nodes'] if node['id'] == f'infrastructure:task_resource:{standalone_resource.id}')
+        self.assertEqual(standalone_node['label'], 'title-check-node')
+        self.assertEqual(standalone_node['infra_type'], 'task_resource_host')
+        self.assertEqual(standalone_node['source_environment'], resource_env.name)
 
     def test_knowledge_environment_observability_link_scope_overrides_datasource_autolink(self):
         log_source = LogDataSource.objects.create(name='scope-loki', provider='loki', config={'url': 'http://loki'}, is_enabled=True)

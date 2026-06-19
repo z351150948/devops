@@ -6,41 +6,30 @@
           <span class="hero-icon">
             <el-icon><Connection /></el-icon>
           </span>
-          <h2>{{ topologyOnly ? 'Trace 调用拓扑' : '链路追踪' }}</h2>
-          <p class="page-inline-desc">{{ topologyOnly ? '基于链路 Span 采样聚合服务间与服务到中间件 / DB 的调用关系' : '支持接入 SkyWalking 与 OpenTelemetry 生态下的 Zipkin、Jaeger、Tempo 等链路数据' }}</p>
+          <h2>{{ tracePageTitle }}</h2>
+          <p class="page-inline-desc">{{ tracePageDescription }}</p>
         </div>
       </div>
       <div class="hero-actions">
-        <el-button size="small" @click="refreshAll" :loading="loading.catalog || loading.search">
-          <el-icon><RefreshRight /></el-icon>
-          刷新
-        </el-button>
-        <el-button size="small" v-if="hasNativeTracingUi" type="primary" @click="openTracingUi">
-          外部打开
-        </el-button>
+        <template v-if="activeTraceTab === 'datasources' && !topologyOnly">
+          <el-button size="small" @click="refreshTracingDataSourcePage" :loading="loading.datasources">
+            <el-icon><RefreshRight /></el-icon>
+            刷新数据源
+          </el-button>
+        </template>
+        <template v-else>
+          <el-button size="small" @click="loadTracingDataSources" :loading="loading.datasources">
+            <el-icon><RefreshRight /></el-icon>
+            刷新数据源
+          </el-button>
+          <el-button size="small" v-if="hasNativeTracingUi" type="primary" @click="openTracingUi">
+            外部打开
+          </el-button>
+        </template>
       </div>
     </section>
 
-    <div v-if="!topologyOnly" class="neo-tabs theme-blue log-center-tabs trace-center-tabs">
-      <button
-        v-if="canViewTrace"
-        class="neo-tab-btn"
-        :class="{ active: activeTraceTab === 'traces' }"
-        @click="changeTraceTab('traces')"
-      >
-        <el-icon style="margin-right:4px;"><Search /></el-icon>
-        Trace 查询
-      </button>
-      <button
-        v-if="canViewTraceDataSources"
-        class="neo-tab-btn"
-        :class="{ active: activeTraceTab === 'datasources' }"
-        @click="changeTraceTab('datasources')"
-      >
-        <el-icon style="margin-right:4px;"><Document /></el-icon>
-        链路数据源
-      </button>
-    </div>
+    <ObservabilityRouteTabs v-if="!topologyOnly" :group="activeTraceTab === 'datasources' ? 'datasources' : 'query'" />
 
     <template v-if="activeTraceTab === 'traces' && canViewTrace">
     <div v-if="!topologyOnly" class="trace-query-layout">
@@ -594,7 +583,7 @@
     </template>
 
     <template v-else-if="activeTraceTab === 'datasources' && canViewTraceDataSources">
-      <TracingDataSources embedded />
+      <TracingDataSources ref="tracingDataSourcesPanelRef" embedded />
     </template>
 
   </div>
@@ -603,11 +592,12 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Connection, Document, RefreshRight, Search } from '@element-plus/icons-vue'
+import { Connection, RefreshRight } from '@element-plus/icons-vue'
 import echarts from '@/lib/echarts'
 import { getObservabilityOverview, getTraceDetail, getTracingCatalog, getTracingDataSources, resolveTraceToGrafana, resolveTraceToLogs, searchTracing } from '@/api/modules/ops'
 import { useAuthStore } from '@/stores/auth'
 import { openRouteInNewTab } from '@/utils/router'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 import TracingDataSources from './TracingDataSources.vue'
 
 const router = useRouter()
@@ -615,6 +605,7 @@ const route = useRoute()
 const authStore = useAuthStore()
 const loading = reactive({
   catalog: false,
+  datasources: false,
   search: false,
   detail: false,
 })
@@ -623,6 +614,7 @@ const overview = ref({ modules: {}, summary: {}, tips: [] })
 const tracing = ref({})
 const providers = ref([])
 const tracingDataSources = ref([])
+const tracingDataSourcesPanelRef = ref(null)
 const services = ref([])
 const traces = ref([])
 const traceDetail = ref(null)
@@ -644,6 +636,16 @@ const DEFAULT_DURATION_MINUTES = 30
 const TRACE_LIST_PAGE_SIZE = 15
 const TOPOLOGY_LIST_PAGE_SIZE = 6
 const topologyOnly = computed(() => route.query.topology === '1')
+const tracePageTitle = computed(() => {
+  if (topologyOnly.value) return 'Trace 调用拓扑'
+  if (activeTraceTab.value === 'datasources') return '链路追踪数据源'
+  return '链路追踪'
+})
+const tracePageDescription = computed(() => {
+  if (topologyOnly.value) return '基于链路 Span 采样聚合服务间与服务到中间件 / DB 的调用关系'
+  if (activeTraceTab.value === 'datasources') return '统一维护 SkyWalking、Tempo、Jaeger、Zipkin 等链路数据源配置'
+  return '支持接入 SkyWalking 与 OpenTelemetry 生态下的 Zipkin、Jaeger、Tempo 等链路数据'
+})
 
 function buildRelativeTimeRange(minutes = DEFAULT_DURATION_MINUTES) {
   const safeMinutes = Math.max(5, Number(minutes || DEFAULT_DURATION_MINUTES))
@@ -1371,8 +1373,23 @@ async function loadTracingDataSources() {
     tracingDataSources.value = []
     return
   }
-  const response = await getTracingDataSources({ is_enabled: 'true' })
-  tracingDataSources.value = Array.isArray(response) ? response : response.results || []
+  loading.datasources = true
+  try {
+    const response = await getTracingDataSources({ is_enabled: 'true' })
+    tracingDataSources.value = Array.isArray(response) ? response : response.results || []
+  } finally {
+    loading.datasources = false
+  }
+}
+
+async function refreshTracingDataSourcePage() {
+  loading.datasources = true
+  try {
+    await tracingDataSourcesPanelRef.value?.fetchDataSources?.()
+    await loadTracingDataSources()
+  } finally {
+    loading.datasources = false
+  }
 }
 
 function applyDefaultTracingDataSource() {
@@ -1536,17 +1553,6 @@ async function refreshAll() {
 function openTracingUi() {
   const url = selectedProviderMeta.value?.ui_url || selectedProviderMeta.value?.query_url || selectedProviderMeta.value?.oap_url
   if (url) window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function changeTraceTab(tabName) {
-  const tab = String(tabName || 'traces')
-  router.replace({
-    path: route.path,
-    query: {
-      ...route.query,
-      tab: tab === 'datasources' ? tab : undefined,
-    },
-  })
 }
 
 async function changeProvider(provider) {
@@ -2102,7 +2108,7 @@ onUnmounted(() => {
 .observability-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .panel {
@@ -2111,6 +2117,14 @@ onUnmounted(() => {
   border-radius: 12px;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
   padding: 12px 14px;
+}
+
+.hero.panel {
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
+  border-radius: 20px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+  padding: 14px 16px;
 }
 
 .hero,
@@ -2175,10 +2189,13 @@ onUnmounted(() => {
 
 .hero-icon {
   align-items: center;
-  background: linear-gradient(135deg, #0f766e, #0ea5e9);
-  border-radius: 16px;
-  color: #fff;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: #245bdb;
   display: inline-flex;
+  flex: 0 0 42px;
   height: 42px;
   justify-content: center;
   width: 42px;

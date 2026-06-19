@@ -1,27 +1,42 @@
 ﻿<template>
   <div class="posture-history-page">
-    <main v-loading="loading" class="status-wrap">
-      <header class="status-topbar">
-        <div class="brand">
-          <strong>系统态势历史</strong>
+    <section v-if="!props.embedded" class="hero panel history-hero">
+      <div class="hero-copy">
+        <div class="hero-title-row">
+          <span class="hero-icon"><el-icon><TrendCharts /></el-icon></span>
+          <h2>系统态势历史</h2>
+          <p class="page-inline-desc">以系统态势数据生成 Statuspage 风格历史视图，集中查看近期运行状态、组件可用性和影响事件。</p>
         </div>
-        <div class="topbar-actions">
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            size="small"
-            unlink-panels
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            :shortcuts="dateShortcuts"
-            class="history-date-picker"
-            @change="handleDateRangeChange"
-          />
-          <button type="button" @click="loadHistory()">刷新</button>
-          <button type="button" @click="loadHistory(true)">重算今日</button>
-        </div>
-      </header>
+      </div>
+    </section>
+
+    <div v-if="!props.embedded" class="history-route-tabs">
+      <ObservabilityRouteTabs group="boards" />
+    </div>
+
+    <div class="status-stage">
+      <main v-loading="loading" class="status-wrap">
+        <header class="status-topbar">
+          <div class="brand">
+            <strong>系统态势历史</strong>
+          </div>
+          <div class="topbar-actions">
+            <el-date-picker
+              v-model="dateRange"
+              type="daterange"
+              size="small"
+              unlink-panels
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              :shortcuts="dateShortcuts"
+              class="history-date-picker"
+              @change="handleDateRangeChange"
+            />
+            <button type="button" @click="loadHistory()">刷新</button>
+            <button type="button" @click="loadHistory(true)">重算今日</button>
+          </div>
+        </header>
 
       <section class="overall">
         <div class="overall-main">
@@ -153,15 +168,17 @@
 
         <el-empty v-if="!systemRows.length && !loading" description="暂无 SLA 历史数据" :image-size="72" />
       </section>
-    </main>
+      </main>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { CircleCheck, QuestionFilled, WarningFilled } from '@element-plus/icons-vue'
+import { CircleCheck, QuestionFilled, TrendCharts, WarningFilled } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { getObservabilitySystemPostureHistory } from '@/api/modules/ops'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 
 const props = defineProps({
   embedded: {
@@ -474,12 +491,90 @@ onMounted(() => {
   --border: #e6e8eb;
   --panel-subtle: #f6f8fb;
   --panel-tint: #f4f7fb;
-  background: #f7f8f9;
+  background: transparent;
   color: var(--text);
   display: flex;
-  justify-content: center;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 6px;
   min-height: 100%;
-  padding: 24px 12px 42px;
+  padding: 0;
+}
+
+.history-hero,
+.history-route-tabs {
+  width: 100%;
+}
+
+.panel {
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.hero.panel {
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
+  border-radius: 20px;
+  padding: 14px 16px;
+}
+
+.hero,
+.hero-copy,
+.hero-title-row {
+  align-items: center;
+  display: flex;
+}
+
+.hero {
+  justify-content: space-between;
+}
+
+.hero-title-row {
+  gap: 12px;
+  min-width: 0;
+}
+
+.hero h2 {
+  color: #0f172a;
+  font-size: 23px;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.page-inline-desc {
+  color: #475569;
+  flex: 0 1 auto;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  transform: translateY(1px);
+}
+
+.hero-icon {
+  align-items: center;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  color: #245bdb;
+  display: inline-flex;
+  flex: 0 0 42px;
+  font-size: 20px;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.status-stage {
+  align-items: flex-start;
+  background: #f7f8f9;
+  display: flex;
+  justify-content: center;
+  margin-top: 0;
+  padding: 10px 12px 42px;
+  width: 100%;
 }
 
 .status-wrap {
@@ -938,7 +1033,17 @@ onMounted(() => {
 
 @media (max-width: 720px) {
   .posture-history-page {
-    padding: 12px 0 24px;
+    padding: 0;
+  }
+
+  .hero-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .status-stage {
+    padding: 24px 0;
   }
 
   .status-wrap {

@@ -4,8 +4,8 @@
       <div class="release-hero-copy">
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="release-header-icon"><el-icon><DataAnalysis /></el-icon></span>
-          <h2>指标查询</h2>
-          <p class="page-desc inline-subtitle">Prometheus 兼容数据源、PromQL 区间查询与指标检索入口</p>
+          <h2>{{ activeTab === 'datasources' ? '指标数据源' : '指标查询' }}</h2>
+          <p class="page-inline-desc inline-subtitle">{{ activeTab === 'datasources' ? '统一维护 Prometheus 兼容指标数据源配置' : 'PromQL 区间查询与指标检索入口' }}</p>
         </div>
       </div>
       <div class="hero-actions">
@@ -16,16 +16,7 @@
       </div>
     </section>
 
-    <div class="neo-tabs theme-blue metrics-tabs">
-      <button class="neo-tab-btn" :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">
-        <el-icon><Search /></el-icon>
-        PromQL 查询
-      </button>
-      <button class="neo-tab-btn" :class="{ active: activeTab === 'datasources' }" @click="activeTab = 'datasources'">
-        <el-icon><DataBoard /></el-icon>
-        数据源
-      </button>
-    </div>
+    <ObservabilityRouteTabs :group="activeTab === 'datasources' ? 'datasources' : 'query'" />
 
     <section v-if="activeTab === 'query'" class="metric-query-workbench">
       <div class="query-console">
@@ -117,20 +108,20 @@
                       :key="item.id"
                       type="button"
                       class="promql-suggest-item"
-                      :class="[{ active: index === promqlSuggestIndex }, `is-${item.type}`]"
+                      :class="[{ active: promqlSuggestIndex >= 0 && index === promqlSuggestIndex }, `is-${item.type}`]"
                       @mouseenter="promqlSuggestIndex = index"
                       @mousedown.prevent="applyPromqlSuggestion(item)"
                     >
-                      <span class="promql-suggest-icon">{{ suggestionSymbol(item.type) }}</span>
+                      <span class="promql-suggest-badge">{{ item.badge }}</span>
                       <span class="promql-suggest-main">
+                        <span v-if="item.detail" class="promql-suggest-detail">{{ item.detail }}</span>
                         <strong>
                           <template v-for="(part, partIndex) in highlightedSuggestionLabel(item.label)" :key="`${item.id}-${partIndex}`">
                             <span :class="{ 'is-match': part.hit }">{{ part.text }}</span>
                           </template>
                         </strong>
-                        <small>{{ item.detail }}</small>
                       </span>
-                      <code>{{ item.preview }}</code>
+                      <code class="promql-suggest-example">{{ item.preview }}</code>
                     </button>
                   </div>
                 </div>
@@ -160,19 +151,19 @@
                   :key="`inline-${item.id}`"
                   type="button"
                   class="promql-inline-suggest-item"
-                  :class="{ active: index === promqlSuggestIndex }"
+                  :class="{ active: promqlSuggestIndex >= 0 && index === promqlSuggestIndex }"
                   @mousedown.prevent="applyInlinePromqlSuggestion(item)"
                 >
-                  <span class="promql-suggest-icon">{{ suggestionSymbol(item.type) }}</span>
+                  <span class="promql-suggest-badge">{{ item.badge }}</span>
                   <span class="promql-suggest-main">
+                    <span v-if="item.detail" class="promql-suggest-detail">{{ item.detail }}</span>
                     <strong>
                       <template v-for="(part, partIndex) in highlightedSuggestionLabel(item.label, promqlInlineContext)" :key="`${item.id}-inline-${partIndex}`">
                         <span :class="{ 'is-match': part.hit }">{{ part.text }}</span>
                       </template>
                     </strong>
-                    <small>{{ item.detail }}</small>
                   </span>
-                  <code>{{ item.preview }}</code>
+                  <code class="promql-suggest-example">{{ item.preview }}</code>
                 </button>
               </div>
             </div>
@@ -287,13 +278,9 @@
       <div class="section-toolbar">
         <div class="toolbar-head">
           <span class="toolbar-title">指标数据源</span>
-          <span class="toolbar-desc">支持 Prometheus HTTP API，兼容夜莺 prometheus.addr / headers / basic 配置语义。</span>
+          <span class="toolbar-desc">统一维护 Prometheus 兼容指标数据源配置，供查询页直接复用。</span>
         </div>
         <div class="workbench-card-actions">
-          <el-button @click="loadDataSources" :loading="loadingSources">
-            <el-icon><RefreshRight /></el-icon>
-            刷新
-          </el-button>
           <el-button v-if="canManageDatasource" type="primary" @click="openDatasourceDialog()">
             <el-icon><Plus /></el-icon>
             新增数据源
@@ -303,7 +290,7 @@
 
       <div class="workbench-toolbar workbench-toolbar--history">
         <div class="workbench-toolbar-left">
-          <el-input v-model.trim="filters.keyword" class="search-control" size="small" clearable placeholder="搜索名称 / 环境 / 地址" style="width: 260px" />
+          <el-input v-model.trim="filters.keyword" class="search-control" size="small" clearable placeholder="搜索名称 / 地址" style="width: 260px" />
           <el-select v-model="filters.enabled" class="search-control" size="small" clearable placeholder="状态" style="width: 110px">
             <el-option label="启用" value="true" />
             <el-option label="停用" value="false" />
@@ -321,10 +308,6 @@
             <div class="source-desc">{{ row.description || endpointOf(row) || '-' }}</div>
           </template>
         </el-table-column>
-        <el-table-column prop="environment" label="环境" width="120">
-          <template #default="{ row }">{{ row.environment || '全局' }}</template>
-        </el-table-column>
-        <el-table-column prop="cluster_name" label="集群" min-width="140" show-overflow-tooltip />
         <el-table-column label="类型" width="130">
           <template #default="{ row }">{{ row.provider_display || row.provider }}</template>
         </el-table-column>
@@ -349,17 +332,8 @@
         <el-form-item label="名称" prop="name">
           <el-input v-model.trim="sourceForm.name" placeholder="例如：电商测试 Prometheus" />
         </el-form-item>
-        <el-form-item label="环境">
-          <el-input v-model.trim="sourceForm.environment" placeholder="例如：电商测试环境；留空表示全局" />
-        </el-form-item>
         <el-form-item label="查询地址" prop="query_url">
           <el-input v-model.trim="sourceForm.query_url" placeholder="http://prometheus:9090" />
-        </el-form-item>
-        <el-form-item label="集群 / TSDB">
-          <div class="inline-fields">
-            <el-input v-model.trim="sourceForm.cluster_name" placeholder="cluster_name" />
-            <el-input v-model.trim="sourceForm.tsdb_type" placeholder="prometheus" />
-          </div>
         </el-form-item>
         <el-form-item label="认证方式">
           <el-select v-model="sourceForm.auth_type" style="width: 180px">
@@ -377,12 +351,8 @@
         <el-form-item v-if="sourceForm.auth_type === 'bearer'" label="Bearer Token">
           <el-input v-model="sourceForm.bearer_token" type="password" show-password placeholder="已配置可保留 configured" />
         </el-form-item>
-        <el-form-item label="Headers JSON">
-          <el-input v-model="sourceForm.headersText" type="textarea" :rows="3" placeholder='{"X-Scope-OrgID":"team-a"}' />
-        </el-form-item>
-        <el-form-item label="连接参数">
+        <el-form-item label="连接设置">
           <div class="inline-fields inline-fields--small">
-            <el-input-number v-model="sourceForm.timeout" :min="1" :max="60" controls-position="right" />
             <el-checkbox v-model="sourceForm.tls_skip_verify">跳过 TLS 校验</el-checkbox>
             <el-checkbox v-model="sourceForm.is_default">设为默认</el-checkbox>
             <el-switch v-model="sourceForm.is_enabled" inline-prompt active-text="启用" inactive-text="停用" />
@@ -402,9 +372,11 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CaretRight, CollectionTag, CopyDocument, DataAnalysis, DataBoard, Plus, RefreshRight, Search } from '@element-plus/icons-vue'
 import echarts from '@/lib/echarts'
+import ObservabilityRouteTabs from '@/components/observability/ObservabilityRouteTabs.vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   createMetricDataSource,
@@ -416,10 +388,11 @@ import {
   updateMetricDataSource,
 } from '@/api/modules/ops'
 
+const route = useRoute()
 const authStore = useAuthStore()
 const canQuery = computed(() => authStore.hasPermission('ops.metric.query'))
 const canManageDatasource = computed(() => authStore.hasPermission('ops.metric.datasource.manage'))
-const activeTab = ref('query')
+const activeTab = ref(route.query.tab === 'datasources' ? 'datasources' : 'query')
 const loadingSources = ref(false)
 const queryLoading = ref(false)
 const savingSource = ref(false)
@@ -436,7 +409,7 @@ const selectedMetricSeriesId = ref('')
 const promqlInputRef = ref(null)
 const metricChartRef = ref(null)
 const promqlSuggestVisible = ref(false)
-const promqlSuggestIndex = ref(0)
+const promqlSuggestIndex = ref(-1)
 const promqlSuggestContext = ref(createPromqlContext())
 const promqlRemoteMetrics = ref([])
 const promqlMetricLoading = ref(false)
@@ -484,17 +457,13 @@ const sourceForm = reactive({
   name: '',
   provider: 'prometheus',
   description: '',
-  environment: '',
-  cluster_name: '',
-  tsdb_type: 'prometheus',
   query_url: '',
   auth_type: 'none',
   username: '',
   password: '',
   bearer_token: '',
-  headersText: '',
   timeout: 6,
-  tls_skip_verify: false,
+  tls_skip_verify: true,
   is_enabled: true,
   is_default: false,
 })
@@ -1154,20 +1123,6 @@ function createPromqlSuggestion(item) {
   }
 }
 
-function suggestionSymbol(type) {
-  const symbols = {
-    metric: 'M',
-    function: 'fn',
-    aggregation: 'ag',
-    operator: 'op',
-    'label-key': 'L',
-    'label-value': 'V',
-    'label-list': 'D',
-    duration: 'T',
-  }
-  return symbols[type] || 'S'
-}
-
 function buildPromqlSuggestions(context, limit = 14) {
   const query = normalizeSearchText(context.query)
   let suggestions = []
@@ -1289,7 +1244,7 @@ function labelDetail(label) {
 }
 
 function metricDetail(metric) {
-  if (promqlRemoteMetricSet.value.has(metric)) return '来自当前 Prometheus 数据源'
+  if (promqlRemoteMetricSet.value.has(metric)) return ''
   const template = quickTemplates.find(item => item.expression.includes(metric))
   if (template) return `${quickCategoryLabel(template.category)} / ${template.kind}`
   if (metric.endsWith('_total')) return 'Counter 指标'
@@ -1502,7 +1457,9 @@ function refreshPromqlSuggestions(options = {}) {
   const end = textarea?.selectionEnd ?? start
   promqlSuggestContext.value = analyzePromqlContext(queryForm.promql, start, end)
   if (!options.skipLookup) scheduleMetricNameLookup(promqlSuggestContext.value)
-  promqlSuggestIndex.value = Math.min(promqlSuggestIndex.value, Math.max(visiblePromqlSuggestions.value.length - 1, 0))
+  promqlSuggestIndex.value = visiblePromqlSuggestions.value.length
+    ? Math.min(promqlSuggestIndex.value, visiblePromqlSuggestions.value.length - 1)
+    : -1
   promqlSuggestVisible.value = Boolean(
     options.forceOpen
     || visiblePromqlSuggestions.value.length
@@ -1527,7 +1484,7 @@ function scheduleClosePromqlSuggestions() {
 
 function handlePromqlInput() {
   selectedQuickId.value = ''
-  promqlSuggestIndex.value = 0
+  promqlSuggestIndex.value = -1
   refreshPromqlSuggestions()
 }
 
@@ -1539,18 +1496,23 @@ function handlePromqlKeyup(event) {
 function handlePromqlKeydown(event) {
   if ((event.ctrlKey || event.metaKey) && event.code === 'Space') {
     event.preventDefault()
-    promqlSuggestIndex.value = 0
+    promqlSuggestIndex.value = -1
     refreshPromqlSuggestions()
     return
   }
   if (!promqlSuggestVisible.value || !visiblePromqlSuggestions.value.length) return
   if (event.key === 'ArrowDown') {
     event.preventDefault()
-    promqlSuggestIndex.value = (promqlSuggestIndex.value + 1) % visiblePromqlSuggestions.value.length
+    promqlSuggestIndex.value = promqlSuggestIndex.value < 0
+      ? 0
+      : (promqlSuggestIndex.value + 1) % visiblePromqlSuggestions.value.length
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
-    promqlSuggestIndex.value = (promqlSuggestIndex.value - 1 + visiblePromqlSuggestions.value.length) % visiblePromqlSuggestions.value.length
+    promqlSuggestIndex.value = promqlSuggestIndex.value < 0
+      ? visiblePromqlSuggestions.value.length - 1
+      : (promqlSuggestIndex.value - 1 + visiblePromqlSuggestions.value.length) % visiblePromqlSuggestions.value.length
   } else if (event.key === 'Enter' || event.key === 'Tab') {
+    if (promqlSuggestIndex.value < 0) return
     event.preventDefault()
     applyPromqlSuggestion(visiblePromqlSuggestions.value[promqlSuggestIndex.value])
   } else if (event.key === 'Escape') {
@@ -1616,36 +1578,26 @@ function resetSourceForm(row = null) {
   sourceForm.name = row?.name || ''
   sourceForm.provider = row?.provider || 'prometheus'
   sourceForm.description = row?.description || ''
-  sourceForm.environment = row?.environment || ''
-  sourceForm.cluster_name = row?.cluster_name || ''
-  sourceForm.tsdb_type = row?.tsdb_type || 'prometheus'
   sourceForm.query_url = config.query_url || config['prometheus.addr'] || ''
   sourceForm.auth_type = config.auth_type || 'none'
   sourceForm.username = config.username || config['prometheus.basic']?.['prometheus.user'] || ''
   sourceForm.password = config.password || config['prometheus.basic']?.['prometheus.password'] || ''
   sourceForm.bearer_token = config.bearer_token || ''
-  sourceForm.headersText = JSON.stringify(config.headers || config['prometheus.headers'] || {}, null, 2)
   sourceForm.timeout = Number(config.timeout || config['prometheus.timeout'] || 6)
-  sourceForm.tls_skip_verify = Boolean(config.tls_skip_verify)
+  sourceForm.tls_skip_verify = row ? Boolean(config.tls_skip_verify ?? true) : true
   sourceForm.is_enabled = row?.is_enabled ?? true
   sourceForm.is_default = row?.is_default ?? false
 }
 
 function buildSourcePayload() {
-  let headers = {}
-  if (sourceForm.headersText.trim()) {
-    headers = JSON.parse(sourceForm.headersText)
-    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
-      throw new Error('Headers JSON 必须是对象')
-    }
-  }
+  const headers = {}
   return {
     name: sourceForm.name,
     provider: sourceForm.provider,
     description: sourceForm.description,
-    environment: sourceForm.environment,
-    cluster_name: sourceForm.cluster_name,
-    tsdb_type: sourceForm.tsdb_type || 'prometheus',
+    environment: '',
+    cluster_name: '',
+    tsdb_type: 'prometheus',
     is_enabled: sourceForm.is_enabled,
     is_default: sourceForm.is_default,
     config: {
@@ -1732,12 +1684,6 @@ async function submitDatasource() {
     ElMessage.success('指标数据源已保存')
     dialog.visible = false
     await loadDataSources()
-  } catch (error) {
-    if (error instanceof SyntaxError || error.message?.includes('Headers JSON')) {
-      ElMessage.error(error.message || 'Headers JSON 格式不正确')
-    } else {
-      throw error
-    }
   } finally {
     savingSource.value = false
   }
@@ -1811,6 +1757,14 @@ watch(
   }
 )
 
+watch(
+  () => route.query.tab,
+  (tabName) => {
+    activeTab.value = tabName === 'datasources' ? 'datasources' : 'query'
+  },
+  { immediate: true }
+)
+
 onMounted(async () => {
   await loadDataSources()
   await nextTick()
@@ -1835,7 +1789,7 @@ onBeforeUnmount(() => {
   --promql-suggest-visible-rows: 8;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .panel,
@@ -1853,9 +1807,9 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 14px 16px;
   border-radius: 20px;
-  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
-  border-color: rgba(96, 165, 250, 0.18);
-  box-shadow: 0 16px 36px rgba(14, 165, 233, 0.08);
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
 .release-hero-title-row,
@@ -1875,13 +1829,14 @@ onBeforeUnmount(() => {
 .release-header-icon {
   width: 42px;
   height: 42px;
-  border-radius: 16px;
+  border-radius: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(135deg, #0ea5e9, #2563eb);
-  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2);
+  color: #245bdb;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .hero-actions {
@@ -2081,7 +2036,7 @@ onBeforeUnmount(() => {
 
 .metric-filter-grid {
   align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
   display: grid;
   grid-template-columns: minmax(360px, 1fr);
   width: 100%;
@@ -2089,7 +2044,7 @@ onBeforeUnmount(() => {
 
 .metric-inline-filter {
   align-items: center;
-  column-gap: 8px;
+  column-gap: 6px;
   display: grid;
   grid-template-columns: auto minmax(300px, 1fr) auto;
   min-width: 0;
@@ -2368,10 +2323,10 @@ onBeforeUnmount(() => {
   z-index: 35;
   max-height: min(360px, calc(100vh - 220px));
   overflow: hidden;
-  border: 1px solid rgba(191, 219, 254, 0.92);
+  border: 1px solid rgba(226, 232, 240, 0.96);
   border-radius: 10px;
   background: #ffffff;
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.1);
 }
 
 .promql-suggest-list {
@@ -2421,12 +2376,12 @@ onBeforeUnmount(() => {
 
 .promql-suggest-item {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) minmax(150px, 0.62fr);
+  grid-template-columns: 48px minmax(0, 1fr) minmax(150px, 0.46fr);
   align-items: center;
-  gap: 9px;
+  column-gap: 8px;
   width: 100%;
   min-height: 36px;
-  padding: 4px 9px;
+  padding: 5px 10px;
   border: 0;
   border-bottom: 1px solid rgba(226, 232, 240, 0.72);
   color: #334155;
@@ -2444,46 +2399,31 @@ onBeforeUnmount(() => {
   background: #eff6ff;
 }
 
-.promql-suggest-icon {
+.promql-suggest-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid rgba(37, 99, 235, 0.22);
-  border-radius: 7px;
-  color: #245bdb;
-  background: rgba(219, 234, 254, 0.82);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1;
-  text-transform: uppercase;
+  width: 42px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .promql-suggest-main {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
-.promql-suggest-main strong {
-  overflow: hidden;
-  color: #0f172a;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.promql-suggest-main strong .is-match {
-  color: #2563eb;
-}
-
-.promql-suggest-main small {
+.promql-suggest-detail {
+  flex: 0 1 auto;
   overflow: hidden;
   color: #64748b;
   font-size: 11px;
@@ -2492,7 +2432,19 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.promql-suggest-item code {
+.promql-suggest-main strong {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: #334155;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.promql-suggest-example {
   overflow: hidden;
   color: #475569;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -2501,6 +2453,11 @@ onBeforeUnmount(() => {
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.promql-suggest-main strong .is-match {
+  color: #2563eb;
+  font-weight: 600;
 }
 
 .promql-inline-suggest-panel {
@@ -2512,10 +2469,10 @@ onBeforeUnmount(() => {
   max-height: calc(var(--promql-suggest-head-height) + var(--promql-suggest-item-height) * var(--promql-suggest-visible-rows) + 10px);
   overflow: hidden;
   margin-top: 8px;
-  border: 1px solid rgba(191, 219, 254, 0.92);
+  border: 1px solid rgba(226, 232, 240, 0.96);
   border-radius: 10px;
   background: #ffffff;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
 }
 
 .promql-inline-suggest-list {
@@ -2568,9 +2525,9 @@ onBeforeUnmount(() => {
 
 .promql-inline-suggest-item {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) minmax(130px, 0.58fr);
+  grid-template-columns: 48px minmax(0, 1fr) minmax(170px, 0.46fr);
   align-items: center;
-  gap: 9px;
+  column-gap: 8px;
   width: 100%;
   height: var(--promql-suggest-item-height);
   min-height: var(--promql-suggest-item-height);
@@ -2590,17 +2547,6 @@ onBeforeUnmount(() => {
 .promql-inline-suggest-item:hover,
 .promql-inline-suggest-item.active {
   background: #eff6ff;
-}
-
-.promql-inline-suggest-item code {
-  overflow: hidden;
-  color: #475569;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  line-height: 1.4;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .quick-promql-panel {

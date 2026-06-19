@@ -331,6 +331,8 @@ let chart = null
 
 const graphNodes = computed(() => (graph.value.nodes || []).filter(node => {
   if (hiddenNodeKinds.has(node.kind)) return false
+  if (node.infra_type === 'task_resource_environment') return false
+  if (String(node.id || '').startsWith('infrastructure:task_resource_env:')) return false
   return !String(node.id || '').startsWith('capability:')
 }))
 const graphNodeById = computed(() => new Map((graph.value.nodes || []).map(node => [node.id, node])))
@@ -668,6 +670,15 @@ function nodeLaneKind(node) {
   return lane?.kind || node.kind
 }
 
+function datasourceBadgeType(node) {
+  const id = String(node.id || '')
+  const category = String(node.category || '')
+  if (id.startsWith('metric_ds:') || category.includes('指标')) return 'metrics'
+  if (id.startsWith('log_ds:') || category.includes('日志')) return 'logs'
+  if (id.startsWith('trace_ds:') || category.includes('链路')) return 'tracing'
+  return ''
+}
+
 function nodeTypeBadge(node) {
   if (!['datasource', 'dashboard', 'logs', 'tracing', 'posture', 'infrastructure', 'runtime_component'].includes(node.kind)) return ''
   const category = String(node.category || '')
@@ -675,20 +686,41 @@ function nodeTypeBadge(node) {
   if (node.kind === 'infrastructure') {
     if (node.infra_type === 'k8s') return 'K8s'
     if (node.infra_type === 'k8s_host') return '主机'
+    if (node.infra_type === 'docker') return 'Docker'
+    if (node.infra_type === 'task_resource_host') return '主机'
+    if (node.infra_type === 'task_resource_k8s') return 'K8s'
+    if (node.infra_type === 'task_resource_environment') return ''
     return '主机'
   }
   if (node.kind === 'runtime_component') return node.runtime_type || '组件'
   if (node.kind === 'dashboard') return '看板'
   if (node.kind === 'logs' || category.includes('日志')) return '日志'
   if (node.kind === 'tracing' || category.includes('链路')) return '链路'
+  const datasourceType = datasourceBadgeType(node)
+  if (datasourceType === 'metrics') return '指标'
+  if (datasourceType === 'logs') return '日志'
+  if (datasourceType === 'tracing') return '链路'
   return '数据源'
 }
 
 function laneNodeSortWeight(node) {
+  if (node.kind === 'datasource') {
+    const datasourceType = datasourceBadgeType(node)
+    if (datasourceType === 'metrics') return 10
+    if (datasourceType === 'logs') return 20
+    if (datasourceType === 'tracing') return 30
+    return 40
+  }
+  if (node.kind === 'dashboard') return 50
+  if (node.kind === 'posture') return 60
+  if (node.kind === 'logs') return 70
+  if (node.kind === 'tracing') return 80
   if (node.kind !== 'infrastructure') return 100
   if (node.infra_type === 'k8s') return 1
   if (node.infra_type === 'k8s_host') return 2
   if (node.infra_type === 'docker') return 3
+  if (node.infra_type === 'task_resource_k8s') return 4
+  if (node.infra_type === 'task_resource_host') return 5
   return 9
 }
 

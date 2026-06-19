@@ -1,20 +1,32 @@
 ﻿<template>
   <div class="fade-in tracing-datasource-page" :class="{ 'is-embedded': props.embedded }">
-    <div class="table-card">
-      <div class="table-head">
-        <div class="filter-bar">
-          <el-input v-model="keyword" placeholder="搜索名称或描述" clearable style="width: 260px">
+    <div class="workbench-card tracing-datasource-card">
+      <div class="section-toolbar">
+        <div class="toolbar-head">
+          <span class="toolbar-title">链路追踪数据源</span>
+          <span class="toolbar-desc">维护 SkyWalking、Tempo、Jaeger、Zipkin 等追踪查询入口。</span>
+        </div>
+        <div class="workbench-card-actions">
+          <el-button v-if="canManageTracingDataSources" type="primary" @click="openDialog()">
+            <el-icon><Plus /></el-icon>
+            新增数据源
+          </el-button>
+        </div>
+      </div>
+
+      <div class="workbench-toolbar workbench-toolbar--history datasource-filter-bar">
+        <div class="workbench-toolbar-left">
+          <el-input v-model="keyword" size="small" placeholder="搜索名称或描述" clearable style="width: 260px">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
-          <el-select v-model="providerFilter" clearable placeholder="全部 Provider" style="width: 220px">
+          <el-select v-model="providerFilter" size="small" clearable placeholder="全部 Provider" style="width: 180px">
             <el-option v-for="provider in providers" :key="provider.id" :label="provider.name" :value="provider.id" />
           </el-select>
           <el-switch v-model="enabledOnly" active-text="仅看启用" inactive-text="全部状态" />
         </div>
-        <el-button v-if="canManageTracingDataSources" type="primary" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增数据源
-        </el-button>
+        <div class="workbench-toolbar-right">
+          <span class="toolbar-count">共 {{ filteredItems.length }} 个数据源</span>
+        </div>
       </div>
 
       <el-table :data="filteredItems" v-loading="loading" stripe style="width: 100%">
@@ -369,74 +381,85 @@ onMounted(async () => {
   await fetchProviders()
   await fetchDataSources()
 })
+
+defineExpose({
+  fetchDataSources,
+})
 </script>
 
 <style scoped>
 .tracing-datasource-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tracing-datasource-page.is-embedded {
-  gap: 8px;
+  gap: 6px;
 }
 
-.panel,
-.table-card {
-  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
-  padding: 12px 14px;
+.tracing-datasource-card {
+  padding: 14px;
 }
 
-.hero,
-.table-head,
-.filter-bar,
+.section-toolbar,
+.toolbar-head,
+.workbench-card-actions,
+.workbench-toolbar,
+.workbench-toolbar-left,
+.workbench-toolbar-right,
 .switch-row,
 .name-cell {
+  align-items: center;
   display: flex;
+}
+
+.section-toolbar {
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.toolbar-head {
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.toolbar-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.toolbar-desc,
+.toolbar-count {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workbench-card-actions,
+.workbench-toolbar-left,
+.workbench-toolbar-right {
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.hero {
-  align-items: center;
-  justify-content: space-between;
-}
-
-.embedded-datasource-head {
-  align-items: center;
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  border: 1px solid rgba(148, 163, 184, 0.16);
+.workbench-toolbar {
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 12px;
-  display: flex;
-  gap: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  gap: 8px;
   justify-content: space-between;
-  padding: 10px 12px;
+  margin: 6px 0 8px;
+  padding: 6px 8px;
 }
 
-.embedded-datasource-head h3 {
-  color: #0f172a;
-  font-size: 14px;
-  margin: 0 0 3px;
-}
-
-.embedded-datasource-head span {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.trace-header-icon {
-  align-items: center;
-  background: linear-gradient(135deg, #0f766e, #2563eb);
-  border-radius: 16px;
-  color: #fff;
-  display: inline-flex;
-  height: 42px;
-  justify-content: center;
-  width: 42px;
+.datasource-filter-bar {
+  margin-bottom: 8px;
 }
 
 .sub-text,
@@ -445,18 +468,9 @@ onMounted(async () => {
   font-size: 12px;
 }
 
-.filter-bar {
-  flex: 1 1 auto;
-}
-
-.table-head {
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
 .switch-row {
-  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .switch-row--form {

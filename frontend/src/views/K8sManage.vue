@@ -5,7 +5,7 @@
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="release-header-icon k8s-header-icon"><el-icon><Monitor /></el-icon></span>
           <h2>K8s 集群管理</h2>
-          <p class="subtitle inline-subtitle k8s-hero-desc">统一查看集群、工作负载、网络与存储，延续工单系统的极简工作台布局。</p>
+          <p class="subtitle inline-subtitle k8s-hero-desc">统一查看集群、工作负载、网络与存储。</p>
         </div>
       </div>
     </section>
@@ -2201,20 +2201,34 @@ onBeforeUnmount(() => { disposeExecTerminal() })
 }
 
 .k8s-summary-card {
-  justify-content: center;
+  justify-content: space-between;
+  height: 68px;
   min-height: 68px;
   padding: 14px 16px;
+  overflow: hidden;
 }
 
 .k8s-summary-card .stat-label {
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.2;
   color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .k8s-summary-card .stat-value {
-  font-size: 24px;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: clamp(18px, 2.8vw, 24px);
+  line-height: 1;
   color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .k8s-summary-card.audit-card--warning {

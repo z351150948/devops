@@ -1,55 +1,22 @@
 <template>
-  <div class="knowledge-config-page">
+  <div class="knowledge-config-page workbench-page-shell">
     <section v-if="!embedded" class="hero panel">
       <div class="hero-copy">
         <div class="hero-title-row">
           <span class="hero-icon"><el-icon><Setting /></el-icon></span>
           <h2>图谱配置</h2>
+          <p class="page-inline-desc">把可观测性、事件中心和基础设施线索绑定成 AIOps 可识别的知识图谱环境</p>
         </div>
-      </div>
-      <div class="hero-actions">
-        <el-button size="small" :loading="loading" @click="loadData">
-          <el-icon><RefreshRight /></el-icon>
-          刷新
-        </el-button>
-        <el-button v-if="canManage" type="primary" size="small" @click="openDialog()">
-          <el-icon><Plus /></el-icon>
-          新增关联
-        </el-button>
       </div>
     </section>
 
-    <div class="release-stats">
-      <div class="release-stat-card">
-        <div class="stat-value">{{ environments.length }}</div>
-        <div class="stat-label">图谱环境</div>
-      </div>
-      <div class="release-stat-card success-card">
-        <div class="stat-value">{{ enabledCount }}</div>
-        <div class="stat-label">启用中</div>
-      </div>
-      <div class="release-stat-card warning-card">
-        <div class="stat-value">{{ totalBindingCount }}</div>
-        <div class="stat-label">关联来源</div>
-      </div>
-      <div class="release-stat-card">
-        <div class="stat-value">{{ catalog.posture_environments.length }}</div>
-        <div class="stat-label">系统态势环境</div>
-      </div>
-    </div>
-
-    <div class="runtime-strip">
-      <el-icon><InfoFilled /></el-icon>
-      <span>知识图谱环境名和别名会作为 AIOps 分析入口；分析优先取告警中心和系统态势，事件中心只作为辅助定位证据。</span>
-    </div>
-
-    <section class="panel">
-      <div class="config-actionbar">
-        <div>
-          <div class="actionbar-title">环境关联配置</div>
-          <div class="actionbar-desc">把告警、系统态势、监控看板、日志、链路、事件和容器来源绑定成一个知识图谱环境。</div>
+    <section class="workbench-card">
+      <div class="section-toolbar">
+        <div class="toolbar-head">
+          <div class="toolbar-title">环境关联配置</div>
+          <div class="toolbar-desc">环境名和别名会作为 AIOps 分析入口，关联来源用于生成图谱节点和辅助定位证据。<strong>信息越多根因分析越准</strong></div>
         </div>
-        <div class="actionbar-actions">
+        <div class="toolbar-actions">
           <el-button size="small" :loading="loading" @click="loadData">
             <el-icon><RefreshRight /></el-icon>
             刷新
@@ -67,7 +34,7 @@
             <div v-if="row.description" class="env-desc">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="环境别名" min-width="150">
+        <el-table-column label="环境别名" min-width="110">
           <template #default="{ row }"><TagList :items="row.aliases" /></template>
         </el-table-column>
         <el-table-column label="事件中心环境" min-width="170">
@@ -93,7 +60,7 @@
       </el-table>
     </section>
 
-    <el-dialog v-model="dialog.visible" :title="dialog.editingId ? '编辑图谱环境' : '新增图谱环境'" width="720px" destroy-on-close>
+    <el-dialog v-model="dialog.visible" :title="dialog.editingId ? '编辑图谱环境' : '新增图谱环境'" width="860px" append-to-body destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="128px">
         <el-form-item label="环境名" prop="name">
           <el-input v-model.trim="form.name" placeholder="例如：交易生产 / 核心测试" />
@@ -122,26 +89,6 @@
             <strong>可观测性关联配置</strong>
             <span>告警、系统态势、日志、链路、看板和跳转关联统一作为分析证据。</span>
           </div>
-          <el-form-item label="告警中心环境">
-            <el-select v-model="form.alert_environments" multiple filterable clearable placeholder="选择一个或多个告警中心环境">
-              <el-option v-for="item in catalog.alert_environments" :key="item" :label="item" :value="item" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="系统态势环境">
-            <el-select v-model="form.posture_environments" multiple filterable clearable placeholder="选择一个或多个系统态势环境">
-              <el-option v-for="item in catalog.posture_environments" :key="item.key" :label="postureEnvironmentLabel(item)" :value="item.key" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="关联配置">
-            <el-select v-model="form.observability_link_ids" multiple filterable clearable placeholder="选择日志 / 链路 / 看板之间的关联配置">
-              <el-option v-for="item in catalog.observability_links" :key="item.id" :label="observabilityLinkLabel(item)" :value="item.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="监控看板目录">
-            <el-select v-model="form.grafana_folder_keys" multiple filterable clearable placeholder="选择一个或多个监控看板目录">
-              <el-option v-for="item in catalog.grafana_folders" :key="item.key" :label="folderLabel(item)" :value="item.key" />
-            </el-select>
-          </el-form-item>
           <el-form-item label="指标数据源">
             <el-select v-model="form.metric_datasource_ids" multiple filterable clearable placeholder="选择一个或多个 Prometheus 兼容指标数据源">
               <el-option v-for="item in catalog.metric_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
@@ -157,10 +104,30 @@
               <el-option v-for="item in catalog.tracing_datasources" :key="item.id" :label="datasourceLabel(item)" :value="item.id" />
             </el-select>
           </el-form-item>
+          <el-form-item label="告警中心环境">
+            <el-select v-model="form.alert_environments" multiple filterable clearable placeholder="选择一个或多个告警中心环境">
+              <el-option v-for="item in catalog.alert_environments" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="仪表盘目录">
+            <el-select v-model="form.grafana_folder_keys" multiple filterable clearable placeholder="选择一个或多个仪表盘目录">
+              <el-option v-for="item in catalog.grafana_folders" :key="item.key" :label="folderLabel(item)" :value="item.key" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联配置">
+            <el-select v-model="form.observability_link_ids" multiple filterable clearable placeholder="选择日志 / 链路 / 看板之间的关联配置">
+              <el-option v-for="item in catalog.observability_links" :key="item.id" :label="observabilityLinkLabel(item)" :value="item.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="系统态势环境">
+            <el-select v-model="form.posture_environments" multiple filterable clearable placeholder="选择一个或多个系统态势环境">
+              <el-option v-for="item in catalog.posture_environments" :key="item.key" :label="postureEnvironmentLabel(item)" :value="item.key" />
+            </el-select>
+          </el-form-item>
         </div>
         <div class="form-group-card">
           <div class="form-group-card__head">
-            <strong>容器与资源底座环境</strong>
+            <strong>运行与任务中心资源底座</strong>
             <span>运行环境用于选择服务所在载体，K8s 集群和 Docker 环境按实际部署形态选择一种即可。</span>
           </div>
           <el-form-item label="K8s 集群">
@@ -193,9 +160,9 @@
               <el-option v-for="item in catalog.docker_hosts" :key="item.id" :label="dockerHostLabel(item)" :value="item.id" />
             </el-select>
           </el-form-item>
-          <div class="field-hint">资源底座环境用于 AIOps 生成巡检、脚本执行等任务时确定可选目标资源范围。</div>
-          <el-form-item label="资源底座环境">
-            <el-select v-model="form.task_resource_environment_ids" multiple filterable clearable placeholder="选择任务中心资源底座环境">
+          <div class="field-hint">任务中心资源底座环境用于 AIOps 生成巡检、脚本执行等任务时确定可选目标资源范围。</div>
+          <el-form-item label="任务中心资源底座">
+            <el-select v-model="form.task_resource_environment_ids" multiple filterable clearable placeholder="选择任务中心资源底座">
               <el-option v-for="item in catalog.task_resource_environments" :key="item.id" :label="taskResourceEnvironmentLabel(item)" :value="item.id" />
             </el-select>
           </el-form-item>
@@ -215,7 +182,7 @@
 <script setup>
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElTag } from 'element-plus'
-import { InfoFilled, Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
+import { Plus, RefreshRight, Setting } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import {
   createAIOpsKnowledgeEnvironment,
@@ -287,20 +254,6 @@ const form = reactive({
 const rules = {
   name: [{ required: true, message: '请填写知识图谱环境名', trigger: 'blur' }],
 }
-
-const enabledCount = computed(() => environments.value.filter(item => item.is_enabled).length)
-const totalBindingCount = computed(() => environments.value.reduce((total, item) => total
-  + (item.event_environments?.length || 0)
-  + (item.grafana_folder_keys?.length || 0)
-  + (item.metric_datasource_ids?.length || 0)
-  + (item.log_datasource_ids?.length || 0)
-  + (item.tracing_datasource_ids?.length || 0)
-  + (item.observability_link_ids?.length || 0)
-  + (item.alert_environments?.length || 0)
-  + (item.posture_environments?.length || 0)
-  + (item.k8s_cluster_ids?.length || 0)
-  + (item.docker_host_ids?.length || 0)
-  + (item.task_resource_environment_ids?.length || 0), 0))
 
 const selectedK8sClusters = computed(() => {
   const selected = new Set((form.k8s_cluster_ids || []).map(id => Number(id)))
@@ -420,7 +373,7 @@ function observabilityNames(row) {
 function infrastructureNames(row) {
   const k8sMap = new Map(catalog.k8s_clusters.map(item => [Number(item.id), `K8s: ${item.name}`]))
   const dockerMap = new Map(catalog.docker_hosts.map(item => [Number(item.id), `Docker: ${item.name}`]))
-  const resourceEnvMap = new Map(catalog.task_resource_environments.map(item => [Number(item.id), `资源底座环境: ${item.name}`]))
+  const resourceEnvMap = new Map(catalog.task_resource_environments.map(item => [Number(item.id), `任务中心资源底座: ${item.name}`]))
   return [
     ...(row.k8s_cluster_ids || []).map((id) => {
       const namespaces = row.k8s_namespaces?.[String(id)] || []
@@ -428,7 +381,7 @@ function infrastructureNames(row) {
       return `${k8sMap.get(Number(id)) || `K8s ID ${id}`}${suffix}`
     }),
     ...(row.docker_host_ids || []).map(id => dockerMap.get(Number(id)) || `Docker ID ${id}`),
-    ...(row.task_resource_environment_ids || []).map(id => resourceEnvMap.get(Number(id)) || `资源底座环境 ID ${id}`),
+    ...(row.task_resource_environment_ids || []).map(id => resourceEnvMap.get(Number(id)) || `任务中心资源底座 ID ${id}`),
   ]
 }
 
@@ -466,7 +419,7 @@ function openDialog(row = null) {
 async function submitForm() {
   await formRef.value?.validate()
   if (!hasAnyBinding()) {
-    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群、Docker 环境或资源底座环境来源')
+    ElMessage.warning('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群、Docker 环境或任务中心资源底座来源')
     return
   }
   saving.value = true
@@ -531,90 +484,140 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
 .knowledge-config-page {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .panel {
-  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 12px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-  padding: 12px 14px;
-}
-
-.hero,
-.hero-title-row,
-.hero-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(36, 91, 219, 0.09);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
 }
 
 .hero {
-  justify-content: space-between;
+  min-height: 70px;
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+}
+
+.hero,
+.hero-copy,
+.hero-title-row,
+.section-toolbar,
+.toolbar-head,
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .hero-title-row h2 {
   margin: 0;
-  font-size: 23px;
   color: #0f172a;
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.page-inline-desc {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .hero-icon {
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
-  background: linear-gradient(135deg, #0f766e, #2563eb);
+  color: #245bdb;
+  background: rgba(36, 91, 219, 0.09);
 }
 
-.release-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.release-stat-card {
-  min-height: 72px;
-  padding: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.success-card {
-  background: linear-gradient(180deg, #ecfdf5 0%, #fff 100%);
-}
-
-.warning-card {
-  background: linear-gradient(180deg, #fff7ed 0%, #fff 100%);
-}
-
-.stat-value {
-  color: #0f172a;
-  font-size: 24px;
-  font-weight: 800;
-}
-
-.stat-label,
 .env-desc,
 .muted {
   color: #64748b;
   font-size: 13px;
 }
 
-.runtime-strip {
+.workbench-card {
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.04);
+}
+
+.section-toolbar {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.toolbar-title {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.toolbar-desc {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.toolbar-desc strong {
+  margin-left: 4px;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.toolbar-actions {
+  justify-content: flex-end;
+}
+
+.env-name {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.tag-list {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid rgba(14, 165, 233, 0.18);
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.form-group-card {
+  margin: 0 0 14px;
+  padding: 12px 14px 2px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 12px;
-  background: linear-gradient(90deg, #eff6ff, #f0fdfa);
-  color: #0f766e;
+  background: #f8fafc;
+}
+
+.form-group-card__head {
+  margin: 0 0 10px 128px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.form-group-card__head strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.form-group-card__head span,
+.field-hint {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.field-hint {
+  margin: -2px 0 10px 128px;
 }
 
 .namespace-config {
@@ -656,108 +659,33 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   font-size: 12px;
 }
 
-.form-group-card {
-  margin: 0 0 16px;
-  padding: 12px 12px 2px;
-  border: 1px solid rgba(14, 165, 233, 0.18);
-  border-radius: 12px;
-  background: linear-gradient(180deg, #f0f9ff 0%, #ffffff 100%);
-}
-
-.form-group-card__head {
-  margin: 0 0 10px 128px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.form-group-card__head strong {
-  color: #0f172a;
-  font-size: 13px;
-}
-
-.form-group-card__head span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.field-hint {
-  margin: -2px 0 10px 128px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.env-name {
-  color: #0f172a;
-  font-weight: 700;
-}
-
-.config-actionbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.actionbar-title {
-  color: #0f172a;
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.actionbar-desc {
-  margin-top: 2px;
-  color: #64748b;
-  font-size: 13px;
-}
-
-.actionbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tag-list {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
 :deep(.el-select) {
   width: 100%;
 }
 
-@media (max-width: 900px) {
-  .release-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.hero.panel {
+  border-radius: 20px;
+}
 
-  .hero {
+@media (max-width: 900px) {
+  .hero,
+  .section-toolbar {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .namespace-config {
-    margin-left: 0;
+  .toolbar-actions {
+    justify-content: flex-start;
   }
 
-  .form-group-card__head {
-    margin-left: 0;
-  }
-
+  .namespace-config,
+  .form-group-card__head,
   .field-hint {
     margin-left: 0;
   }
 
   .namespace-row {
     grid-template-columns: 1fr;
-  }
-
-  .config-actionbar {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 </style>

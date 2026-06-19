@@ -98,7 +98,7 @@
 
         <el-table v-if="eventMode === 'list'" :data="alerts" stripe size="small" v-loading="loading" class="data-table" @selection-change="handleSelectionChange">
           <el-table-column type="selection" width="42" />
-          <el-table-column prop="id" label="告警ID" width="86">
+          <el-table-column prop="id" label="告警ID" width="70">
             <template #default="{ row }">
               <span class="alert-id-cell">{{ row.id }}</span>
             </template>

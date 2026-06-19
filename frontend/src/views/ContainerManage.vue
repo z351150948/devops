@@ -5,7 +5,7 @@
         <div class="release-hero-title-row release-hero-title-inline">
           <span class="release-header-icon docker-header-icon"><el-icon><Platform /></el-icon></span>
           <h2>Docker 环境</h2>
-          <p class="subtitle inline-subtitle docker-hero-desc">统一管理 Docker 主机、容器与镜像资源，延续 K8s 集群页的工作台式布局。</p>
+          <p class="subtitle inline-subtitle docker-hero-desc">统一管理 Docker 主机、容器与镜像资源。</p>
         </div>
       </div>
     </section>

@@ -4,9 +4,10 @@ import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, wait
 from collections import Counter, defaultdict
+from urllib.parse import urlparse
 
 from django.core.cache import cache
-from django.db.models import Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 
 from eventwall.models import EventRecord, EventSource
@@ -89,6 +90,17 @@ def _repair_text(value):
 def _clean(value, fallback=''):
     text = _repair_text(value)
     return text or fallback
+
+
+def _url_hostname(value=''):
+    text = _clean(value)
+    if not text:
+        return ''
+    try:
+        parsed = urlparse(text if '://' in text else f'//{text}')
+        return _clean(parsed.hostname)
+    except Exception:
+        return ''
 
 
 def _is_demoish_text(*values):
@@ -330,16 +342,22 @@ def _graph_cache_key(params):
         .values_list('updated_at', flat=True)
         .first()
     )
+    task_resource_version = TaskResource.objects.aggregate(latest=Max('updated_at'), count=Count('id'))
+    task_resource_group_version = TaskResourceGroup.objects.aggregate(latest=Max('updated_at'), count=Count('id'))
     raw = json.dumps(
         {
             'query': query_items,
             'latest_config': latest_config.isoformat() if latest_config else '',
+            'task_resource_count': task_resource_version.get('count') or 0,
+            'latest_task_resource': task_resource_version.get('latest').isoformat() if task_resource_version.get('latest') else '',
+            'task_resource_group_count': task_resource_group_version.get('count') or 0,
+            'latest_task_resource_group': task_resource_group_version.get('latest').isoformat() if task_resource_group_version.get('latest') else '',
         },
         ensure_ascii=False,
         sort_keys=True,
         default=str,
     )
-    return f"aiops:knowledge_graph:v5:{hashlib.md5(raw.encode('utf-8')).hexdigest()}"
+    return f"aiops:knowledge_graph:v6:{hashlib.md5(raw.encode('utf-8')).hexdigest()}"
 
 
 def _empty_graph(filters=None):
@@ -2084,25 +2102,24 @@ def build_knowledge_graph(params=None):
     infrastructure_node_ids = []
     k8s_member_node_ids = {}
 
-    def task_resource_env_is_represented(resource_env, resources, environment, concrete_names, concrete_ips, concrete_cluster_ids):
-        if _clean(resource_env.name) != _clean(environment):
+    def task_resource_is_represented(resource, concrete_names, concrete_ips, concrete_cluster_ids):
+        if not (concrete_names or concrete_ips or concrete_cluster_ids):
             return False
-        if not resources or not (concrete_names or concrete_ips or concrete_cluster_ids):
-            return False
+        name = _clean(resource.name)
+        ip_address = _clean(resource.ip_address)
+        if name and name in concrete_names:
+            return True
+        if ip_address and ip_address in concrete_ips:
+            return True
+        if resource.resource_type == TaskResource.RESOURCE_K8S and getattr(resource, 'cluster_id', None) in concrete_cluster_ids:
+            return True
+        return False
 
-        def resource_is_represented(resource):
-            name = _clean(resource.name)
-            ip_address = _clean(resource.ip_address)
-            if name and name in concrete_names:
-                return True
-            if ip_address and ip_address in concrete_ips:
-                return True
-            if resource.resource_type == TaskResource.RESOURCE_K8S and getattr(resource, 'cluster_id', None) in concrete_cluster_ids:
-                return True
-            return False
+    def task_resource_category(resource):
+        return '任务中心 K8s' if resource.resource_type == TaskResource.RESOURCE_K8S else '任务中心主机'
 
-        represented = [resource_is_represented(resource) for resource in resources]
-        return bool(represented) and all(represented)
+    def task_resource_infra_type(resource):
+        return 'task_resource_k8s' if resource.resource_type == TaskResource.RESOURCE_K8S else 'task_resource_host'
 
     for config in selected_knowledge_configs:
         environment = config.name
@@ -2140,6 +2157,9 @@ def build_knowledge_graph(params=None):
             node_id = _node_key('infrastructure', 'k8s', cluster.id)
             concrete_cluster_ids.add(cluster.id)
             concrete_infra_names.add(_clean(cluster.name))
+            api_host = _url_hostname(cluster.api_server)
+            if api_host:
+                concrete_infra_ips.add(api_host)
             add_node(
                 node_id,
                 cluster.name,
@@ -2209,37 +2229,59 @@ def build_knowledge_graph(params=None):
             infrastructure_node_ids.append(node_id)
 
         for resource_env in task_resource_env_groups:
-            resources = list(TaskResource.objects.filter(environment=resource_env).only('id', 'name', 'resource_type', 'ip_address', 'cluster'))
-            resource_count = len(resources)
-            if task_resource_env_is_represented(
-                resource_env,
-                resources,
-                environment,
-                concrete_infra_names,
-                concrete_infra_ips,
-                concrete_cluster_ids,
-            ):
-                continue
-            node_id = _node_key('infrastructure', 'task_resource_env', resource_env.id)
-            add_node(
-                node_id,
-                resource_env.name,
-                'infrastructure',
-                '资源底座环境',
-                route='/tasks/resources',
-                status='active',
-                metric=resource_count,
-                description=resource_env.description or f'任务中心资源底座环境，资源 {resource_count} 个',
-                environment=environment,
-                infra_type='task_resource_environment',
-                details=[
-                    {'label': '类型', 'value': '任务资源底座环境'},
-                    {'label': '编码', 'value': resource_env.code or '-'},
-                    {'label': '资源数', 'value': resource_count},
-                ],
+            resources = list(
+                TaskResource.objects
+                .select_related('system', 'cluster')
+                .filter(environment=resource_env)
+                .only(
+                    'id',
+                    'name',
+                    'resource_type',
+                    'status',
+                    'ip_address',
+                    'namespace',
+                    'description',
+                    'system__name',
+                    'cluster__name',
+                    'cluster_id',
+                )
+                .order_by('resource_type', 'name', 'id')
             )
-            add_edge(env_id, node_id, '关联资源底座', 'environment_resource_base', max(resource_count, 1))
-            infrastructure_node_ids.append(node_id)
+            for resource in resources:
+                if task_resource_is_represented(resource, concrete_infra_names, concrete_infra_ips, concrete_cluster_ids):
+                    continue
+                node_id = _node_key('infrastructure', 'task_resource', resource.id)
+                details = [
+                    {'label': '来源', 'value': '任务中心资源底座'},
+                    {'label': '资源类型', 'value': 'K8s' if resource.resource_type == TaskResource.RESOURCE_K8S else '主机'},
+                    {'label': '资源环境', 'value': resource_env.name},
+                    {'label': '系统', 'value': resource.system.name if resource.system_id else '-'},
+                    {'label': '状态', 'value': resource.get_status_display() if hasattr(resource, 'get_status_display') else resource.status},
+                ]
+                if resource.ip_address:
+                    details.append({'label': 'IP 地址', 'value': str(resource.ip_address)})
+                if resource.resource_type == TaskResource.RESOURCE_K8S:
+                    details.extend([
+                        {'label': 'K8s 集群', 'value': resource.cluster.name if resource.cluster_id else '-'},
+                        {'label': '命名空间', 'value': resource.namespace or '-'},
+                    ])
+                add_node(
+                    node_id,
+                    resource.name,
+                    'infrastructure',
+                    task_resource_category(resource),
+                    route='/tasks/resources',
+                    status=resource.status,
+                    metric=1,
+                    description=resource.description or f'任务中心资源底座资源：{resource.name}',
+                    environment=environment,
+                    source_environment=resource_env.name,
+                    system_name=resource.system.name if resource.system_id else '',
+                    infra_type=task_resource_infra_type(resource),
+                    details=details,
+                )
+                add_edge(env_id, node_id, '关联资源底座', 'environment_resource_base', 1)
+                infrastructure_node_ids.append(node_id)
 
     def ensure_runtime_component_node(component):
         component_id = component.get('id') or _node_key('runtime_component', component.get('name'))
