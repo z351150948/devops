@@ -2349,6 +2349,264 @@ class AIOpsApiTests(TestCase):
         self.assertLessEqual(len([title for title in section_titles if '指标查询' in title]), 2)
         self.assertTrue(any('无数据' in item for section in result['sections'] for item in section['items']))
 
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_alert_metrics_selects_by_fingerprint_and_latest(self, mocked_promql):
+        self.ensure_prod_knowledge_environment()
+        older = Alert.objects.create(
+            title='prod older alert',
+            level='warning',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='older warning',
+            environment='prod',
+            service='catalog',
+            metric_name='http_requests_total',
+            labels={'service': 'catalog'},
+            fingerprint='metric-fingerprint-old',
+            starts_at=timezone.now() - timedelta(hours=1),
+            last_received_at=timezone.now() - timedelta(hours=1),
+        )
+        latest = Alert.objects.create(
+            title='prod latest checkout alert',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='latest 5xx high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            fingerprint='metric-fingerprint-latest',
+            starts_at=timezone.now() - timedelta(minutes=10),
+            last_received_at=timezone.now(),
+        )
+        mocked_promql.return_value = {
+            'query': 'mock',
+            'range': True,
+            'source': 'metric_datasource',
+            'series_count': 1,
+            'result': [{'metric': {'service': 'checkout'}, 'values': [[1710000000, '1'], [1710000060, '3']]}],
+            'sample': [],
+        }
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-metrics-selector')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content='prod 最新告警指标')
+
+        by_fingerprint = query_alert_metrics(
+            session,
+            user_message,
+            self.user,
+            query='prod 指纹 metric-fingerprint-old 的指标',
+            fingerprint=older.fingerprint,
+        )
+        by_latest = query_alert_metrics(
+            session,
+            user_message,
+            self.user,
+            query='prod 最新告警指标',
+            latest=True,
+        )
+
+        self.assertEqual(by_fingerprint['summary']['alert_id'], older.id)
+        self.assertEqual(by_latest['summary']['alert_id'], latest.id)
+        self.assertGreaterEqual(mocked_promql.call_count, 2)
+
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_alert_metrics_explicit_datasource_overrides_environment_default(self, mocked_promql):
+        default_source = MetricDataSource.objects.create(
+            name='prod-default-prometheus',
+            environment='prod',
+            is_default=True,
+            config={'query_url': 'http://prometheus.default.local:9090'},
+        )
+        explicit_source = MetricDataSource.objects.create(
+            name='prod-explicit-prometheus',
+            environment='prod',
+            is_default=False,
+            config={'query_url': 'http://prometheus.explicit.local:9090'},
+        )
+        self.ensure_prod_knowledge_environment()
+        alert = Alert.objects.create(
+            title='prod checkout explicit datasource',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout error rate high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            starts_at=timezone.now() - timedelta(minutes=10),
+        )
+        mocked_promql.return_value = {
+            'query': 'mock',
+            'range': True,
+            'source': 'metric_datasource',
+            'metric_datasource': {'id': explicit_source.id, 'name': explicit_source.name},
+            'series_count': 1,
+            'result': [{'metric': {'service': 'checkout'}, 'values': [[1710000000, '1'], [1710000060, '2']]}],
+            'sample': [],
+        }
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-metrics-datasource')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {alert.id} 的指标')
+
+        result = query_alert_metrics(
+            session,
+            user_message,
+            self.user,
+            query=f'prod 分析告警ID {alert.id} 的指标',
+            alert_id=alert.id,
+            metric_datasource_id=explicit_source.id,
+        )
+
+        self.assertNotEqual(default_source.id, explicit_source.id)
+        self.assertEqual(str(result['summary']['metric_datasource_id']), str(explicit_source.id))
+        self.assertEqual(str(mocked_promql.call_args.kwargs['metric_datasource_id']), str(explicit_source.id))
+
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_alert_metrics_uses_environment_datasource_when_knowledge_has_none(self, mocked_promql):
+        env_source = MetricDataSource.objects.create(
+            name='prod-env-prometheus',
+            environment='prod',
+            is_default=True,
+            config={'query_url': 'http://prometheus.env.local:9090'},
+        )
+        AIOpsKnowledgeEnvironment.objects.create(
+            name='prod',
+            aliases=['生产'],
+            alert_environments=['prod'],
+            is_enabled=True,
+        )
+        alert = Alert.objects.create(
+            title='prod checkout env datasource',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout error rate high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            starts_at=timezone.now() - timedelta(minutes=10),
+        )
+        mocked_promql.return_value = {
+            'query': 'mock',
+            'range': True,
+            'source': 'metric_datasource',
+            'metric_datasource': {'id': env_source.id, 'name': env_source.name},
+            'series_count': 1,
+            'result': [{'metric': {'service': 'checkout'}, 'values': [[1710000000, '1'], [1710000060, '2']]}],
+            'sample': [],
+        }
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-metrics-env-datasource')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {alert.id} 的指标')
+
+        result = query_alert_metrics(session, user_message, self.user, query=f'prod 分析告警ID {alert.id} 的指标', alert_id=alert.id)
+
+        self.assertEqual(result['summary']['metric_datasource_id'], env_source.id)
+        self.assertEqual(mocked_promql.call_args.kwargs['metric_datasource_id'], env_source.id)
+
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_query_alert_metrics_promql_failure_is_reported_as_status(self, mocked_promql):
+        self.ensure_prod_knowledge_environment()
+        alert = Alert.objects.create(
+            title='prod checkout metrics failure',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout error rate high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            starts_at=timezone.now() - timedelta(minutes=10),
+        )
+        mocked_promql.side_effect = RuntimeError('Prometheus HTTP 502')
+        session = AIOpsChatSession.objects.create(user=self.user, title='alert-metrics-failure')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {alert.id} 的指标')
+
+        result = query_alert_metrics(session, user_message, self.user, query=f'prod 分析告警ID {alert.id} 的指标', alert_id=alert.id, budget=2)
+
+        self.assertEqual(result['summary']['failed_count'], result['summary']['executed_count'])
+        self.assertEqual(result['summary']['missing_count'], 0)
+        self.assertTrue(all(item['status'] == 'failed' for item in result['evidence']))
+        self.assertTrue(any(section['title'] == '指标查询状态' for section in result['sections']))
+        self.assertTrue(any('Prometheus HTTP 502' in item for section in result['sections'] for item in section['items']))
+
+    @mock.patch('aiops.services.query_logs')
+    @mock.patch('aiops.services.query_events')
+    @mock.patch('aiops.services.query_system_posture')
+    @mock.patch('aiops.services.query_alert_metrics')
+    def test_query_alert_root_cause_survives_missing_metric_permission(self, mocked_metrics, mocked_posture, mocked_events, mocked_logs):
+        self.ensure_prod_knowledge_environment()
+        alert = Alert.objects.create(
+            title='prod checkout no metric permission',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout error rate high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            starts_at=timezone.now() - timedelta(minutes=10),
+        )
+        limited_user = User.objects.create_user(username='alert_only_user', password='Passw0rd!123')
+        alert_only_role = Role.objects.create(code='alert-only', name='Alert Only', description='告警只读')
+        alert_perm = Role.objects.get(code='platform-admin').permissions.get(code='ops.alert.view')
+        alert_only_role.permissions.add(alert_perm)
+        limited_user.rbac_roles.add(alert_only_role)
+        mocked_metrics.return_value = {'summary': {'error': '当前账号无权查询指标。'}, 'sections': [], 'citations': []}
+        mocked_posture.return_value = {'summary': {'count': 0, 'critical': 0, 'warning': 0}, 'sections': [], 'citations': [], 'systems': []}
+        mocked_events.return_value = {'summary': {'count': 0}, 'sections': [], 'citations': [], 'events': []}
+        mocked_logs.return_value = {'summary': {'count': 0}, 'sections': [], 'citations': [], 'logs': []}
+        session = AIOpsChatSession.objects.create(user=limited_user, title='alert-rca-no-metric-permission')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {alert.id} 的原因')
+
+        result = query_alert_root_cause(session, user_message, limited_user, query=f'prod 分析告警ID {alert.id} 的原因')
+
+        self.assertEqual(result['summary']['alert_id'], alert.id)
+        self.assertEqual(result['metrics']['summary']['error'], '当前账号无权查询指标。')
+        self.assertIn('指标查询未完成', '\n'.join(result['analysis']['pending']))
+        mocked_metrics.assert_called_once()
+
+    @mock.patch('aiops.services.execute_promql_query')
+    def test_run_tool_call_dispatches_query_alert_metrics(self, mocked_promql):
+        self.ensure_prod_knowledge_environment()
+        alert = Alert.objects.create(
+            title='prod checkout dispatch metrics',
+            level='critical',
+            status=Alert.STATUS_ACTIVE,
+            source='prometheus',
+            message='checkout error rate high',
+            environment='prod',
+            service='checkout',
+            metric_name='http_requests_total',
+            labels={'service': 'checkout'},
+            starts_at=timezone.now() - timedelta(minutes=10),
+        )
+        mocked_promql.return_value = {
+            'query': 'mock',
+            'range': True,
+            'source': 'metric_datasource',
+            'series_count': 1,
+            'result': [{'metric': {'service': 'checkout'}, 'values': [[1710000000, '1'], [1710000060, '3']]}],
+            'sample': [],
+        }
+        session = AIOpsChatSession.objects.create(user=self.user, title='tool-call-alert-metrics')
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=f'分析告警ID {alert.id} 的指标')
+
+        result = _run_tool_call(
+            session,
+            user_message,
+            self.user,
+            'query_alert_metrics',
+            {'query': f'prod 分析告警ID {alert.id} 的指标', 'alert_id': alert.id, 'budget': 2},
+        )
+
+        self.assertEqual(result['message_type'], AIOpsChatMessage.TYPE_ANALYSIS)
+        self.assertEqual(result['tool_output']['summary']['alert_id'], alert.id)
+        self.assertIn('指标查询结果', {section['title'] for section in result['sections']})
+
     def test_knowledge_graph_filters_k8s_services_by_configured_namespaces(self):
         cluster = K8sCluster.objects.create(
             name='retail-namespace-k8s',
