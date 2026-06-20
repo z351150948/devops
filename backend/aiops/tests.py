@@ -6554,6 +6554,12 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(response.data['task_draft']['trigger_source'], HostTask.TRIGGER_SOURCE_AIOPS)
         self.assertFalse(HostTask.objects.filter(trigger_source=HostTask.TRIGGER_SOURCE_AIOPS).exists())
 
+        repeat_response = self.client.post(f'/api/aiops/actions/{action.id}/confirm/', {}, format='json')
+
+        self.assertEqual(repeat_response.status_code, 200)
+        self.assertEqual(repeat_response.data['task_draft']['name'], draft['name'])
+        self.assertFalse(HostTask.objects.filter(trigger_source=HostTask.TRIGGER_SOURCE_AIOPS).exists())
+
     @mock.patch('aiops.services._request_model_completion')
     def test_send_message_returns_error_when_model_does_not_call_tools(self, mocked_completion):
         provider = AIOpsModelProvider.objects.create(

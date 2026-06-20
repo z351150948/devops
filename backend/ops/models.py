@@ -408,7 +408,12 @@ class HostTaskScheduleExecution(models.Model):
 
 
 class HostTaskExecution(models.Model):
+    STATUS_RUNNING = 'running'
+    STATUS_SUCCESS = 'success'
+    STATUS_FAILED = 'failed'
+    STATUS_SKIPPED = 'skipped'
     STATUS_CHOICES = [
+        (STATUS_RUNNING, '执行中'),
         ('success', '成功'),
         ('failed', '失败'),
         ('skipped', '跳过'),

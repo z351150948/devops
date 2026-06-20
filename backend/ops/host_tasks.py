@@ -346,6 +346,37 @@ def _create_failed_execution(task, host, command_text, message):
     )
 
 
+def _create_running_host_execution(task, host, command_text):
+    return HostTaskExecution.objects.create(
+        task=task,
+        host=_execution_host_fk(host),
+        host_name=host.hostname,
+        host_ip=host.ip_address,
+        **_execution_target_fields(host),
+        status='running',
+        command=command_text,
+        output='',
+        error_message='',
+        started_at=timezone.now(),
+    )
+
+
+def _finish_execution(execution, status, output='', error_message='', started_at=None, monotonic_started=None):
+    finished_at = timezone.now()
+    if started_at:
+        execution.started_at = started_at
+    execution.finished_at = finished_at
+    if monotonic_started is not None:
+        execution.duration_ms = int((time.monotonic() - monotonic_started) * 1000)
+    elif execution.started_at:
+        execution.duration_ms = max(int((finished_at - execution.started_at).total_seconds() * 1000), 0)
+    execution.status = status
+    execution.output = (output or '')[:8000]
+    execution.error_message = (error_message or '')[:4000]
+    execution.save(update_fields=['status', 'output', 'error_message', 'duration_ms', 'started_at', 'finished_at'])
+    return execution
+
+
 def _build_ansible_extra_vars(host):
     extra_vars = {
         'ansible_connection': 'ssh',
@@ -499,6 +530,7 @@ def _run_single_task_with_ssh(task, host):
     started_at = timezone.now()
     monotonic_started = time.monotonic()
     command_text = _build_command_text(task)
+    execution = _create_running_host_execution(task, host, command_text)
     output = ''
     error_message = ''
     status = 'success'
@@ -536,26 +568,21 @@ def _run_single_task_with_ssh(task, host):
 
     finished_at = timezone.now()
     duration_ms = int((time.monotonic() - monotonic_started) * 1000)
-    return HostTaskExecution.objects.create(
-        task=task,
-        host=_execution_host_fk(host),
-        host_name=host.hostname,
-        host_ip=host.ip_address,
-        **_execution_target_fields(host),
-        status=status,
-        command=command_text,
-        output=output[:8000],
-        error_message=error_message[:4000],
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_ms=duration_ms,
-    )
+    execution.finished_at = finished_at
+    execution.duration_ms = duration_ms
+    execution.status = status
+    execution.output = output[:8000]
+    execution.error_message = error_message[:4000]
+    execution.started_at = started_at
+    execution.save(update_fields=['status', 'output', 'error_message', 'duration_ms', 'started_at', 'finished_at'])
+    return execution
 
 
 def _run_single_task_with_ansible(task, host):
     started_at = timezone.now()
     monotonic_started = time.monotonic()
     command_text = _build_command_text(task)
+    execution = _create_running_host_execution(task, host, command_text)
     output = ''
     error_message = ''
     status = 'success'
@@ -596,20 +623,14 @@ def _run_single_task_with_ansible(task, host):
 
     finished_at = timezone.now()
     duration_ms = int((time.monotonic() - monotonic_started) * 1000)
-    return HostTaskExecution.objects.create(
-        task=task,
-        host=_execution_host_fk(host),
-        host_name=host.hostname,
-        host_ip=host.ip_address,
-        **_execution_target_fields(host),
-        status=status,
-        command=command_text,
-        output=output[:8000],
-        error_message=error_message[:4000],
-        started_at=started_at,
-        finished_at=finished_at,
-        duration_ms=duration_ms,
-    )
+    execution.finished_at = finished_at
+    execution.duration_ms = duration_ms
+    execution.status = status
+    execution.output = output[:8000]
+    execution.error_message = error_message[:4000]
+    execution.started_at = started_at
+    execution.save(update_fields=['status', 'output', 'error_message', 'duration_ms', 'started_at', 'finished_at'])
+    return execution
 
 
 def _run_single_task(task, host, execution_mode):
@@ -679,6 +700,33 @@ def record_task_center_event(task, action, title, summary='', request=None, acto
             **(task.source_context or {}),
         },
     )
+
+
+def mark_stale_running_host_tasks(max_running_seconds=1800):
+    threshold = timezone.now() - timezone.timedelta(seconds=max_running_seconds)
+    stale_tasks = list(HostTask.objects.filter(status=HostTask.STATUS_RUNNING, started_at__lt=threshold)[:100])
+    if not stale_tasks:
+        return 0
+    now = timezone.now()
+    for task in stale_tasks:
+        for execution in task.executions.filter(status='running'):
+            started_at = execution.started_at or task.started_at or threshold
+            execution.status = 'failed'
+            execution.error_message = '执行超时：任务执行中状态持续超过 30 分钟，系统已自动标记失败。'
+            execution.finished_at = now
+            execution.duration_ms = max(int((now - started_at).total_seconds() * 1000), 0)
+            execution.save(update_fields=['status', 'error_message', 'finished_at', 'duration_ms'])
+        finished_count = task.executions.filter(status__in=['success', 'failed', 'skipped']).count()
+        missing_count = max((task.target_count or 0) - finished_count, 0)
+        task.success_count = task.executions.filter(status='success').count()
+        task.failed_count = task.executions.filter(status='failed').count() + missing_count
+        task.skipped_count = task.executions.filter(status='skipped').count()
+        task.status = HostTask.STATUS_FAILED
+        task.lifecycle_status = HostTask.LIFECYCLE_FAILED
+        task.finished_at = now
+        task.summary = '执行超时：任务执行中状态持续超过 30 分钟，系统已自动标记失败。'
+        task.save(update_fields=['status', 'lifecycle_status', 'success_count', 'failed_count', 'skipped_count', 'finished_at', 'summary'])
+    return len(stale_tasks)
 
 
 def _coerce_positive_int(value):
@@ -832,6 +880,24 @@ def _create_k8s_execution(task, target, status_value, command, output='', error_
         duration_ms=max(int((finished_at - started_at).total_seconds() * 1000), 0),
         started_at=started_at,
         finished_at=finished_at,
+    )
+
+
+def _create_running_k8s_execution(task, target, command):
+    return HostTaskExecution.objects.create(
+        task=task,
+        target_type=HostTask.TARGET_K8S,
+        host_name=target.get('cluster_name') or '',
+        host_ip='',
+        target_id=str(target.get('id') or ''),
+        target_name=target.get('name') or target.get('cluster_name') or '',
+        target_namespace=target.get('namespace') or '',
+        target_kind=target.get('kind') or '',
+        status='running',
+        command=command,
+        output='',
+        error_message='',
+        started_at=timezone.now(),
     )
 
 
@@ -1022,7 +1088,9 @@ def _run_single_k8s_task(task, target):
     target = _enrich_k8s_target_from_payload(task, target)
     target = normalize_k8s_execution_target(target)
     started_at = timezone.now()
+    monotonic_started = time.monotonic()
     command = _k8s_command_text(task, target)
+    execution = _create_running_k8s_execution(task, target, command)
     try:
         if not target.get('cluster_id'):
             raise RuntimeError('缺少 K8s 集群')
@@ -1037,9 +1105,9 @@ def _run_single_k8s_task(task, target):
             output = _run_k8s_scale_workload(task, cluster, target)
         else:
             raise RuntimeError('不支持的 K8s 任务类型')
-        return _create_k8s_execution(task, target, 'success', command, output=output, started_at=started_at)
+        return _finish_execution(execution, 'success', output=output, started_at=started_at, monotonic_started=monotonic_started)
     except Exception as exc:
-        return _create_k8s_execution(task, target, 'failed', command, error_message=str(exc), started_at=started_at)
+        return _finish_execution(execution, 'failed', error_message=str(exc), started_at=started_at, monotonic_started=monotonic_started)
 
 
 def execute_k8s_task(task, targets):

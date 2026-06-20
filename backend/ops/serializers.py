@@ -322,7 +322,7 @@ class TaskResourceSerializer(serializers.ModelSerializer):
 
 
 class HostTaskExecutionSerializer(serializers.ModelSerializer):
-    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    status_display = serializers.SerializerMethodField()
 
     class Meta:
         model = HostTaskExecution
@@ -346,6 +346,11 @@ class HostTaskExecutionSerializer(serializers.ModelSerializer):
             'finished_at',
             'created_at',
         ]
+
+    def get_status_display(self, obj):
+        if obj.status == 'running':
+            return '执行中'
+        return obj.get_status_display()
 
 
 class HostTaskSerializer(serializers.ModelSerializer):

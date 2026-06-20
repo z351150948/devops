@@ -10723,8 +10723,6 @@ def _build_task_sections(draft):
     payload = draft.get('payload') or {}
     if payload.get('command'):
         sections.append({'title': '命令内容', 'items': [payload['command']]})
-    if payload.get('service_name'):
-        sections.append({'title': '服务名称', 'items': [payload['service_name']]})
     if payload.get('patch'):
         sections.append({'title': 'K8s Patch', 'items': [json.dumps(payload['patch'], ensure_ascii=False, default=_json_default)]})
     if payload.get('playbook_content'):
@@ -12298,14 +12296,17 @@ def confirm_action(action, user, request=None):
     config = get_agent_config()
     if not config.allow_action_execution:
         raise ValueError('管理员已关闭机器人动作执行。')
-    if action.status != AIOpsPendingAction.STATUS_PENDING:
-        raise ValueError('当前动作状态不可确认。')
     if action.session.user_id != user.id:
         raise ValueError('只能确认自己的动作。')
     if action.action_type != AIOpsPendingAction.ACTION_EXECUTE_HOST_TASK:
         raise ValueError('不支持的动作类型。')
     if not user_has_permissions(user, ['aiops.task.execute', 'ops.host.execute']):
         raise ValueError('当前账号无权执行机器人任务。')
+    if action.status != AIOpsPendingAction.STATUS_PENDING:
+        result_payload = action.result_payload if isinstance(action.result_payload, dict) else {}
+        if result_payload.get('draft_ready') and isinstance(result_payload.get('task_draft'), dict):
+            return result_payload['task_draft']
+        raise ValueError('当前动作状态不可确认。')
 
     normalized_payload = _ensure_task_draft_title(_convert_service_status_draft_to_shell(action.action_payload or {}))
     action.action_payload = normalized_payload
@@ -15299,7 +15300,6 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
         {'role': 'system', 'content': _build_runtime_prompt(config, active_mcp_servers, active_skills, user, mcp_diagnostics=mcp_diagnostics)},
         *_build_history_messages(session, config),
     ]
-    page_context_hint_lines = build_prompt_hint_lines(selected_action, page_context)
     messages.append({
         'role': 'user',
         'content': (
@@ -15311,7 +15311,6 @@ def _dispatch_with_tool_runtime(session, user_message, user, question, progress_
             + scoped_question
             + '\n优先证据：'
             + json.dumps(collected_tool_outputs, ensure_ascii=False, default=_json_default)[:3000]
-            + ('\n页面上下文提示：\n' + '\n'.join(page_context_hint_lines) if page_context_hint_lines else '')
         ),
     })
     if any(keyword in question.lower() for keyword in ['链路追踪', '调用链', 'trace', 'tracing']):
@@ -15721,10 +15720,6 @@ def _apply_dispatch_result_to_message(session, assistant_message, result, user, 
     if analysis_only:
         merged_metadata['analysis_only'] = True
     response_blocks = list(merged_metadata.get('response_blocks') or [])
-    if page_context and not any((block or {}).get('type') == 'context_summary' for block in response_blocks):
-        page_context_block = build_page_context_summary_block(page_context, action=merged_metadata.get('selected_action') or {})
-        if page_context_block:
-            response_blocks = [page_context_block, *response_blocks]
     pending_action = None
     draft = result.get('pending_action_draft')
     action_decision = None

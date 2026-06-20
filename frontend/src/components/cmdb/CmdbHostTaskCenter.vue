@@ -86,8 +86,17 @@
               <el-input v-model="taskForm.description" :placeholder="ui.taskDescPlaceholder" />
             </el-form-item>
             <div v-if="taskForm.task_type === 'k8s_pod_exec'" class="template-payload-stack">
-              <el-form-item :label="ui.command">
-                <el-input v-model="taskForm.payload.command" type="textarea" :rows="5" placeholder="例如：kubectl get deployment -A" />
+              <el-form-item :label="ui.script">
+                <div class="script-editor-shell">
+                  <div class="script-editor-head">
+                    <span>K8s</span>
+                    <strong>kubectl</strong>
+                  </div>
+                  <div class="script-editor-body">
+                    <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(taskForm.payload.command, 'k8s')" />
+                    <textarea v-model="taskForm.payload.command" class="script-editor-textarea" spellcheck="false" placeholder="例如：kubectl get deployment -A" @scroll="syncScriptEditorScroll" />
+                  </div>
+                </div>
               </el-form-item>
             </div>
             <div v-if="taskForm.target_type === 'host'" class="form-row">
@@ -96,21 +105,39 @@
               </el-form-item>
             </div>
             <div v-if="taskForm.target_type === 'host' && taskForm.task_type === 'run_command'" class="form-row">
-              <el-form-item :label="ui.command" class="form-col wide">
-                <el-input v-model="taskForm.payload.command" type="textarea" :rows="executionKind === 'python' ? 8 : 4" :placeholder="executionKind === 'python' ? ui.pythonPlaceholder : ui.commandPlaceholder" />
+              <el-form-item :label="ui.script" class="form-col wide">
+                <div class="script-editor-shell" :class="`script-editor-shell--${executionKind}`">
+                  <div class="script-editor-head">
+                    <span>{{ scriptEditorTitle }}</span>
+                    <strong>{{ scriptEditorLanguage }}</strong>
+                  </div>
+                  <div class="script-editor-body">
+                    <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(taskForm.payload.command, executionKind)" />
+                    <textarea v-model="taskForm.payload.command" class="script-editor-textarea" spellcheck="false" :placeholder="executionKind === 'python' ? ui.pythonPlaceholder : ui.commandPlaceholder" @scroll="syncScriptEditorScroll" />
+                  </div>
+                </div>
               </el-form-item>
             </div>
             <div v-else-if="taskForm.target_type === 'host' && taskForm.task_type === 'run_playbook'" class="template-payload-stack">
               <div class="form-row">
-                <el-form-item :label="ui.playbookName" class="form-col">
+                <el-form-item :label="ui.playbookFileName" class="form-col">
                   <el-input v-model="taskForm.payload.playbook_name" :placeholder="ui.playbookNamePlaceholder" />
                 </el-form-item>
                 <el-form-item :label="ui.timeout" class="form-col">
                   <el-input-number v-model="taskForm.timeout_seconds" :min="5" :max="300" style="width: 100%" />
                 </el-form-item>
               </div>
-              <el-form-item :label="ui.playbookContent">
-                <el-input v-model="taskForm.payload.playbook_content" type="textarea" :rows="9" :placeholder="ui.playbookContentPlaceholder" />
+              <el-form-item :label="ui.script">
+                <div class="script-editor-shell script-editor-shell--playbook">
+                  <div class="script-editor-head">
+                    <span>Ansible Playbook</span>
+                    <strong>YAML</strong>
+                  </div>
+                  <div class="script-editor-body">
+                    <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(taskForm.payload.playbook_content, 'playbook')" />
+                    <textarea v-model="taskForm.payload.playbook_content" class="script-editor-textarea" spellcheck="false" :placeholder="ui.playbookContentPlaceholder" @scroll="syncScriptEditorScroll" />
+                  </div>
+                </div>
               </el-form-item>
             </div>
             <div v-if="taskForm.target_type === 'host' && taskForm.task_type !== 'run_playbook'" class="form-row">
@@ -148,7 +175,7 @@
             <template v-if="taskForm.target_type === 'host'">
             <el-divider content-position="left">{{ ui.selectTargets }}</el-divider>
             <div class="toolbar">
-              <div class="toolbar-left">
+              <div class="toolbar-row toolbar-row-main">
                 <el-input v-model="targetFilters.search" :placeholder="ui.searchHostPlaceholder" clearable style="width: 220px" @keyup.enter="fetchTargets">
                   <template #prefix><el-icon><Search /></el-icon></template>
                 </el-input>
@@ -158,21 +185,31 @@
                 <el-select v-model="targetFilters.system" clearable :placeholder="ui.businessLine" style="width: 140px" :disabled="!targetFilters.environment">
                   <el-option v-for="system in currentSystemOptions" :key="system.id" :label="system.name" :value="system.id" />
                 </el-select>
-                <el-select v-model="targetFilters.status" clearable :placeholder="ui.status" style="width: 110px">
-                  <el-option v-for="option in hostStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
-                </el-select>
-                <el-tag size="small" effect="plain" type="info">{{ ui.matchedHosts }} {{ availableHosts.length }} {{ ui.unitHost }}</el-tag>
-              </div>
-              <div class="toolbar-right">
-                <el-button size="small" @click="fetchTargets">{{ ui.queryHosts }}</el-button>
-                <el-button size="small" @click="resetTargetFilters">{{ ui.resetFilters }}</el-button>
-                <el-button size="small" @click="selectAllCurrent">{{ ui.selectCurrent }}</el-button>
+                <span class="toolbar-spacer" />
+                <el-button size="small" type="primary" plain @click="fetchTargets">{{ ui.queryHosts }}</el-button>
                 <el-button size="small" @click="clearSelection">{{ ui.clearSelection }}</el-button>
               </div>
-            </div>
-            <div v-if="effectiveHostTargetRefs.length" class="selection-strip">
-              <span class="selection-pill">{{ ui.selectedHosts }} {{ effectiveHostTargetRefs.length }} {{ ui.unitHost }}</span>
-              <span v-if="hasPrefillDraft && !selectedRows.length" class="selection-pill info">{{ prefillSourceLabel }}预填目标</span>
+              <div class="toolbar-row toolbar-row-summary">
+                <div class="selection-strip">
+                  <span class="selection-pill muted">{{ ui.matchedHosts }} {{ availableHosts.length }} {{ ui.unitHost }}</span>
+                  <button v-if="effectiveHostTargetRefs.length" type="button" class="selection-pill selection-pill-button" @click="selectedTargetsExpanded = !selectedTargetsExpanded">
+                    {{ ui.selectedHosts }} {{ effectiveHostTargetRefs.length }} {{ ui.unitHost }}
+                    <el-icon :class="{ 'is-expanded': selectedTargetsExpanded }"><ArrowDown /></el-icon>
+                  </button>
+                  <span v-else class="selection-pill">{{ ui.selectedHosts }} 0 {{ ui.unitHost }}</span>
+                  <span v-if="hasPrefillDraft && !selectedRows.length" class="selection-pill info">{{ prefillSourceLabel }}预填目标</span>
+                </div>
+                <div v-if="effectiveHostTargetRefs.length && selectedTargetsExpanded" class="selected-target-panel">
+                  <div
+                    v-for="item in selectedHostPreviewItems"
+                    :key="item.key"
+                    class="selected-target-item"
+                  >
+                    <strong>{{ item.name }}</strong>
+                    <span>{{ item.meta }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <el-table ref="hostTableRef" :data="availableHosts" v-loading="targetLoading" row-key="id" max-height="320" :empty-text="ui.emptyHosts" @selection-change="handleSelectionChange">
               <el-table-column type="selection" width="44" reserve-selection />
@@ -186,7 +223,7 @@
             <template v-else-if="taskForm.target_type === 'k8s'">
             <el-divider content-position="left">{{ ui.selectTargets }}</el-divider>
             <div class="toolbar">
-              <div class="toolbar-left">
+              <div class="toolbar-row toolbar-row-main">
                 <el-input v-model="targetFilters.search" :placeholder="ui.searchK8sPlaceholder" clearable style="width: 220px" @keyup.enter="fetchTargets">
                   <template #prefix><el-icon><Search /></el-icon></template>
                 </el-input>
@@ -196,20 +233,16 @@
                 <el-select v-model="targetFilters.system" clearable :placeholder="ui.businessLine" style="width: 140px" :disabled="!targetFilters.environment">
                   <el-option v-for="system in currentSystemOptions" :key="system.id" :label="system.name" :value="system.id" />
                 </el-select>
-                <el-select v-model="targetFilters.status" clearable :placeholder="ui.status" style="width: 110px">
-                  <el-option v-for="option in k8sStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
-                </el-select>
-                <el-tag size="small" effect="plain" type="info">{{ ui.matchedK8s }} {{ availableK8sTargets.length }} {{ ui.unitCluster }}</el-tag>
-              </div>
-              <div class="toolbar-right">
-                <el-button size="small" @click="fetchTargets">{{ ui.queryHosts }}</el-button>
-                <el-button size="small" @click="resetTargetFilters">{{ ui.resetFilters }}</el-button>
-                <el-button size="small" @click="selectAllCurrent">{{ ui.selectCurrent }}</el-button>
+                <span class="toolbar-spacer" />
+                <el-button size="small" type="primary" plain @click="fetchTargets">{{ ui.queryHosts }}</el-button>
                 <el-button size="small" @click="clearSelection">{{ ui.clearSelection }}</el-button>
               </div>
-            </div>
-            <div v-if="selectedK8sRows.length" class="selection-strip">
-              <span class="selection-pill">{{ ui.selectedClusters }} {{ selectedK8sRows.length }} {{ ui.unitCluster }}</span>
+              <div class="toolbar-row toolbar-row-summary">
+                <div class="selection-strip">
+                  <span class="selection-pill muted">{{ ui.matchedK8s }} {{ availableK8sTargets.length }} {{ ui.unitCluster }}</span>
+                  <span class="selection-pill">{{ ui.selectedClusters }} {{ selectedK8sRows.length }} {{ ui.unitCluster }}</span>
+                </div>
+              </div>
             </div>
             <el-table ref="k8sTargetTableRef" :data="availableK8sTargets" v-loading="targetLoading" row-key="id" max-height="320" :empty-text="ui.emptyK8sTargets" @selection-change="handleK8sSelectionChange">
               <el-table-column type="selection" width="44" reserve-selection />
@@ -443,8 +476,17 @@
             <div class="template-editor-section">
               <div class="template-editor-section-title">{{ ui.editorPayload }}</div>
               <div v-if="templateDraft.task_type === 'run_command'" class="template-payload-stack">
-                <el-form-item :label="ui.command" class="form-col wide">
-                  <el-input v-model="templateDraft.payload.command" type="textarea" :rows="templateExecutionKind === 'python' ? 10 : 8" :placeholder="templateExecutionKind === 'python' ? ui.pythonPlaceholder : ui.commandPlaceholder" />
+                <el-form-item :label="ui.script" class="form-col wide">
+                  <div class="script-editor-shell" :class="`script-editor-shell--${templateExecutionKind}`">
+                    <div class="script-editor-head">
+                      <span>{{ templateScriptEditorTitle }}</span>
+                      <strong>{{ templateScriptEditorLanguage }}</strong>
+                    </div>
+                    <div class="script-editor-body">
+                      <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(templateDraft.payload.command, templateExecutionKind)" />
+                      <textarea v-model="templateDraft.payload.command" class="script-editor-textarea" spellcheck="false" :placeholder="templateExecutionKind === 'python' ? ui.pythonPlaceholder : ui.commandPlaceholder" @scroll="syncScriptEditorScroll" />
+                    </div>
+                  </div>
                 </el-form-item>
                 <div class="form-row">
                   <el-form-item :label="ui.timeout" class="form-col">
@@ -467,8 +509,17 @@
                     <el-input-number v-model="templateDraft.timeout_seconds" :min="5" :max="300" style="width: 100%" />
                   </el-form-item>
                 </div>
-                <el-form-item :label="ui.playbookContent">
-                  <el-input v-model="templateDraft.payload.playbook_content" type="textarea" :rows="12" :placeholder="ui.playbookContentPlaceholder" />
+                <el-form-item :label="ui.script">
+                  <div class="script-editor-shell script-editor-shell--playbook">
+                    <div class="script-editor-head">
+                      <span>Ansible Playbook</span>
+                      <strong>YAML</strong>
+                    </div>
+                    <div class="script-editor-body">
+                      <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(templateDraft.payload.playbook_content, 'playbook')" />
+                      <textarea v-model="templateDraft.payload.playbook_content" class="script-editor-textarea" spellcheck="false" :placeholder="ui.playbookContentPlaceholder" @scroll="syncScriptEditorScroll" />
+                    </div>
+                  </div>
                 </el-form-item>
                 <el-form-item :label="ui.strategy">
                   <el-radio-group v-model="templateDraft.execution_strategy">
@@ -478,8 +529,17 @@
                 </el-form-item>
               </div>
               <div v-else-if="templateDraft.task_type === 'k8s_pod_exec'" class="template-payload-stack">
-                <el-form-item :label="ui.command" class="form-col wide">
-                  <el-input v-model="templateDraft.payload.command" type="textarea" :rows="8" placeholder="例如：kubectl get deployment -A" />
+                <el-form-item :label="ui.script" class="form-col wide">
+                  <div class="script-editor-shell">
+                    <div class="script-editor-head">
+                      <span>K8s</span>
+                      <strong>kubectl</strong>
+                    </div>
+                    <div class="script-editor-body">
+                      <pre class="script-editor-highlight" aria-hidden="true" v-html="highlightScript(templateDraft.payload.command, 'k8s')" />
+                      <textarea v-model="templateDraft.payload.command" class="script-editor-textarea" spellcheck="false" placeholder="例如：kubectl get deployment -A" @scroll="syncScriptEditorScroll" />
+                    </div>
+                  </div>
                 </el-form-item>
                 <div class="task-inline-tip">{{ ui.k8sTip }}</div>
               </div>
@@ -639,6 +699,13 @@
           </div>
           <div class="detail-section">
             <div class="detail-section-title">{{ ui.executionDetails }}</div>
+            <div class="execution-progress-card">
+              <div class="execution-progress-head">
+                <strong>{{ ui.executionProgress }}</strong>
+                <span>{{ executionProgressSummary }}</span>
+              </div>
+              <el-progress :percentage="executionProgressPercent" :status="executionProgressStatus" :stroke-width="8" />
+            </div>
             <el-table :data="detailTask.executions || []" max-height="520" :empty-text="ui.emptyExecutions">
               <el-table-column :label="ui.targetResource" min-width="180">
                 <template #default="{ row }">
@@ -652,7 +719,7 @@
                 <template #default="{ row }"><el-tag size="small" :type="executionStatusType(row.status)">{{ row.status_display }}</el-tag></template>
               </el-table-column>
               <el-table-column :label="ui.duration" width="92">
-                <template #default="{ row }">{{ formatDuration(row.duration_ms) }}</template>
+                <template #default="{ row }">{{ formatExecutionDuration(row) }}</template>
               </el-table-column>
               <el-table-column :label="ui.output" min-width="560">
                 <template #default="{ row }">
@@ -673,10 +740,10 @@
   </div>
 </template>
 <script setup>
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Clock, Collection, Promotion, Search, VideoPlay } from '@element-plus/icons-vue'
+import { ArrowDown, Clock, Collection, Promotion, Search, VideoPlay } from '@element-plus/icons-vue'
 import { useRouteTabState } from '@/composables/useRouteTabState'
 import { normalizeTaskDraftTitle } from '@/utils/taskDraftTitle'
 import {
@@ -733,7 +800,7 @@ const ui = {
   noExtraParams: '\u8be5\u6a21\u677f\u65e0\u9700\u989d\u5916\u53c2\u6570\u3002',
   creator: '\u521b\u5efa\u4eba',
   createdAt: '\u521b\u5efa\u65f6\u95f4',
-  commandRequired: '\u8bf7\u586b\u5199\u6267\u884c\u547d\u4ee4',
+  commandRequired: '请填写执行脚本',
   playbookRequired: '\u8bf7\u586b\u5199 Playbook \u5185\u5bb9',
   serviceRequired: '\u8bf7\u586b\u5199\u670d\u52a1\u540d\u79f0',
   templateCreated: '\u6a21\u677f\u5df2\u521b\u5efa',
@@ -765,10 +832,12 @@ const ui = {
   serviceName: '\u670d\u52a1\u540d\u79f0',
   serviceNamePlaceholder: '\u4f8b\u5982 nginx / docker / sshd',
   playbookName: 'Playbook \u540d\u79f0',
+  playbookFileName: '文件名',
   playbookNamePlaceholder: '\u4f8b\u5982 deploy-app.yml',
   playbookContent: 'Playbook \u5185\u5bb9',
   playbookContentPlaceholder: '\u4f8b\u5982\uff1a- hosts: targets\n  gather_facts: false\n  tasks:\n    - name: check service\n      shell: systemctl status nginx',
   timeout: '\u8d85\u65f6(\u79d2)',
+  script: '执行脚本',
   command: '\u6267\u884c\u547d\u4ee4',
   commandPlaceholder: '\u4f8b\u5982\uff1auptime && df -h && free -m',
   pythonPlaceholder: "例如：python3 - <<'PY'\nimport os\nprint(os.uname())\nPY",
@@ -891,10 +960,10 @@ const innerTabs = [
   { key: 'library', label: '\u6a21\u677f\u5e93', icon: Collection, desc: '维护可复用执行模板' },
 ]
 const executionTypeOptions = [
-  { label: 'Shell 脚本', value: 'shell', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '在主机资源上执行 Shell 命令或脚本片段。' },
+  { label: 'Shell 脚本', value: 'shell', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '在主机资源上执行 Shell 脚本。' },
   { label: 'Python 脚本', value: 'python', targetType: 'host', taskType: 'run_command', executionMode: 'ansible', desc: '通过 Python 解释器执行诊断、巡检或自动化脚本。' },
   { label: 'Ansible Playbook', value: 'playbook', targetType: 'host', taskType: 'run_playbook', executionMode: 'ansible', desc: '执行结构化 Playbook，适合固化编排流程。' },
-  { label: 'K8s 命令', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群执行 kubectl 命令，适合 Service、Deployment 等资源变更。' },
+  { label: 'K8s 脚本', value: 'k8s_command', targetType: 'k8s', taskType: 'k8s_pod_exec', executionMode: 'k8s_api', desc: '通过 K8s API 在目标集群执行 kubectl 脚本，适合 Service、Deployment 等资源变更。' },
 ]
 const targetTypeOptions = [
   { label: ui.hostResource, value: 'host' },
@@ -965,6 +1034,8 @@ const outputDialogVisible = ref(false)
 const outputDialogTitle = ref('')
 const outputDialogContent = ref('')
 const currentTemplate = ref(null)
+const historyRefreshTimer = ref(null)
+const detailRefreshTimer = ref(null)
 const availableHosts = ref([])
 const availableK8sTargets = ref([])
 const selectedRows = ref([])
@@ -973,6 +1044,8 @@ const selectedTaskRows = ref([])
 const prefillDraftTargetRefs = ref([])
 const prefillDraftTargets = ref([])
 const prefillSourceContext = ref(null)
+const selectedTargetsExpanded = ref(false)
+let syncingPrefillSelection = false
 const tasks = ref([])
 const templates = ref([])
 const taskTotal = ref(0)
@@ -1033,7 +1106,55 @@ const selectedTargetCount = computed(() => taskForm.value.target_type === 'k8s' 
 const hasPrefillDraft = computed(() => !!prefillSourceContext.value)
 const prefillSourceLabel = computed(() => prefillSourceContext.value?.source === 'aiops' ? 'AIOps ' : '历史任务 ')
 const currentExecutionKindLabel = computed(() => executionKindLabel(executionKind.value))
+const scriptEditorTitle = computed(() => executionKind.value === 'python' ? 'Python 脚本' : 'Shell 脚本')
+const scriptEditorLanguage = computed(() => executionKind.value === 'python' ? 'Python' : 'Shell')
+const templateScriptEditorTitle = computed(() => templateExecutionKind.value === 'python' ? 'Python 脚本' : 'Shell 脚本')
+const templateScriptEditorLanguage = computed(() => templateExecutionKind.value === 'python' ? 'Python' : 'Shell')
 const selectedCancelableTaskIds = computed(() => selectedTaskRows.value.filter(canCancelTask).map(item => item.id))
+const hasActiveHistoryTasks = computed(() => tasks.value.some(isTaskActive))
+const detailTaskActive = computed(() => isTaskActive(detailTask.value))
+const executionProgressStats = computed(() => {
+  const task = detailTask.value || {}
+  const executions = Array.isArray(task.executions) ? task.executions : []
+  const total = Number(task.target_count || executions.length || 0)
+  const success = Number(task.success_count || executions.filter(item => item.status === 'success').length || 0)
+  const failed = Number(task.failed_count || executions.filter(item => item.status === 'failed').length || 0)
+  const skipped = Number(task.skipped_count || executions.filter(item => item.status === 'skipped').length || 0)
+  const running = executions.filter(item => item.status === 'running').length
+  const finished = Math.min(success + failed + skipped, total || success + failed + skipped)
+  return { total, success, failed, skipped, running, finished }
+})
+const executionProgressPercent = computed(() => {
+  const total = executionProgressStats.value.total
+  if (!total) return 0
+  const value = Math.round((executionProgressStats.value.finished / total) * 100)
+  return Math.min(Math.max(value, 0), 100)
+})
+const executionProgressStatus = computed(() => {
+  if (!detailTask.value) return undefined
+  if (detailTask.value.status === 'failed' || detailTask.value.status === 'canceled') return 'exception'
+  if (['success', 'partial'].includes(detailTask.value.status)) return 'success'
+  return undefined
+})
+const executionProgressSummary = computed(() => {
+  const stats = executionProgressStats.value
+  if (!stats.total) return '暂无进度'
+  const runningText = stats.running ? `，执行中 ${stats.running}` : ''
+  return `已完成 ${stats.finished}/${stats.total}，成功 ${stats.success}，失败 ${stats.failed}，跳过 ${stats.skipped}${runningText}`
+})
+const selectedHostPreviewItems = computed(() => {
+  const rows = selectedRows.value.length ? selectedRows.value : matchedPrefillHostRows.value
+  const fallback = rows.length ? rows : prefillDraftTargets.value
+  return fallback.map((item, index) => ({
+    key: `${item.source || 'target'}-${item.id || item.resource_id || item.host_id || index}`,
+    name: item.name || item.hostname || item.resource_name || item.host_name || '-',
+    meta: [item.ip_address || item.host_ip, item.environment_name || item.environment_display || item.environment].filter(Boolean).join(' / ') || '-',
+  }))
+})
+const matchedPrefillHostRows = computed(() => {
+  if (!prefillDraftTargetRefs.value.length || !availableHosts.value.length) return []
+  return availableHosts.value.filter(row => prefillDraftTargetRefs.value.some(ref => hostRowMatchesTargetRef(row, ref)))
+})
 const selectedStats = computed(() => selectedRows.value.reduce((summary, item) => {
   if (item.status === 'online') summary.online += 1
   if (item.status === 'warning') summary.warning += 1
@@ -1088,13 +1209,54 @@ function clearPrefillDraft() {
   prefillDraftTargetRefs.value = []
   prefillDraftTargets.value = []
   prefillSourceContext.value = null
+  selectedTargetsExpanded.value = false
 }
 function handleSelectionChange(rows) {
   selectedRows.value = rows
-  if (rows.length) {
+  if (rows.length && !syncingPrefillSelection) {
     prefillDraftTargetRefs.value = []
     prefillDraftTargets.value = []
   }
+}
+function normalizeId(value) {
+  return String(value ?? '').trim()
+}
+function hostRowMatchesTargetRef(row = {}, ref = {}) {
+  const refSource = String(ref.source || '').trim()
+  const refId = normalizeId(ref.id || ref.resource_id || ref.host_id)
+  if (!refId) return false
+  if (refSource === 'task_resource') {
+    return [row.id, row.resource_id, row.task_resource_id].some(value => normalizeId(value) === refId)
+  }
+  if (refSource === 'host') {
+    return [row.host_id, row.cmdb_host_id, row.id].some(value => normalizeId(value) === refId)
+  }
+  return [row.id, row.resource_id, row.task_resource_id, row.host_id, row.cmdb_host_id].some(value => normalizeId(value) === refId)
+}
+function hostRowMatchesTargetSnapshot(row = {}, target = {}) {
+  const targetIds = [target.id, target.resource_id, target.task_resource_id, target.host_id, target.cmdb_host_id].map(normalizeId).filter(Boolean)
+  const rowIds = [row.id, row.resource_id, row.task_resource_id, row.host_id, row.cmdb_host_id].map(normalizeId)
+  if (targetIds.some(id => rowIds.includes(id))) return true
+  const targetNames = [target.name, target.hostname, target.resource_name, target.host_name].map(value => String(value || '').trim()).filter(Boolean)
+  const rowNames = [row.name, row.hostname, row.resource_name, row.host_name].map(value => String(value || '').trim())
+  if (targetNames.some(name => rowNames.includes(name))) return true
+  const targetIp = String(target.ip_address || target.host_ip || '').trim()
+  return Boolean(targetIp && targetIp === String(row.ip_address || row.host_ip || '').trim())
+}
+async function syncPrefillHostSelection() {
+  if (!prefillDraftTargetRefs.value.length && !prefillDraftTargets.value.length) return
+  await nextTick()
+  const matchedRows = availableHosts.value.filter(row =>
+    prefillDraftTargetRefs.value.some(ref => hostRowMatchesTargetRef(row, ref))
+    || prefillDraftTargets.value.some(target => hostRowMatchesTargetSnapshot(row, target))
+  )
+  if (!matchedRows.length) return
+  syncingPrefillSelection = true
+  hostTableRef.value?.clearSelection()
+  matchedRows.forEach(row => hostTableRef.value?.toggleRowSelection(row, true))
+  selectedRows.value = matchedRows
+  syncingPrefillSelection = false
+  selectedTargetsExpanded.value = true
 }
 function handleK8sSelectionChange(rows) { selectedK8sRows.value = rows }
 function handleTaskHistorySelectionChange(rows) { selectedTaskRows.value = rows }
@@ -1245,6 +1407,119 @@ function formatPayloadJson(payload) { return JSON.stringify(payload || {}, null,
 function formatMultilineContent(value) {
   return String(value || '-').replace(/\\n/g, '\n')
 }
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+function splitLineComment(line = '', shellMode = false) {
+  let quote = ''
+  let escaped = false
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (char === quote) quote = ''
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '#' && (!shellMode || index === 0 || /\s/.test(line[index - 1]))) {
+      return [line.slice(0, index), line.slice(index)]
+    }
+  }
+  return [line, '']
+}
+function highlightRawTokens(value = '', tokenPattern, resolveClass) {
+  if (!tokenPattern) return escapeHtml(value)
+  tokenPattern.lastIndex = 0
+  let html = ''
+  let offset = 0
+  let match = tokenPattern.exec(value)
+  while (match) {
+    html += escapeHtml(value.slice(offset, match.index))
+    const token = match[0]
+    html += `<span class="${resolveClass(token)}">${escapeHtml(token)}</span>`
+    offset = match.index + token.length
+    match = tokenPattern.exec(value)
+  }
+  html += escapeHtml(value.slice(offset))
+  return html
+}
+function highlightTextTokens(value = '', tokenPattern, resolveClass) {
+  const stringPattern = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g
+  let html = ''
+  let offset = 0
+  let match = stringPattern.exec(value)
+  while (match) {
+    html += highlightRawTokens(value.slice(offset, match.index), tokenPattern, resolveClass)
+    html += `<span class="tok-string">${escapeHtml(match[0])}</span>`
+    offset = match.index + match[0].length
+    match = stringPattern.exec(value)
+  }
+  html += highlightRawTokens(value.slice(offset), tokenPattern, resolveClass)
+  return html
+}
+function highlightShellCode(value = '') {
+  const pattern = /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\b(?:if|then|elif|else|fi|for|while|do|done|case|esac|function|return|exit|export|set|local)\b|\b(?:sudo|apt-get|dnf|yum|systemctl|command|echo|grep|awk|sed|curl|kubectl|docker|cat|test)\b|\b\d+(?:\.\d+)?\b/g
+  return String(value || '').split('\n').map((line) => {
+    const [code, comment] = splitLineComment(line, true)
+    const codeHtml = highlightTextTokens(code, pattern, (token) => {
+      if (token.startsWith('$')) return 'tok-variable'
+      if (/^\d/.test(token)) return 'tok-number'
+      if (/^(sudo|apt-get|dnf|yum|systemctl|command|echo|grep|awk|sed|curl|kubectl|docker|cat|test)$/.test(token)) return 'tok-command'
+      return 'tok-keyword'
+    })
+    return comment ? `${codeHtml}<span class="tok-comment">${escapeHtml(comment)}</span>` : codeHtml
+  }).join('\n')
+}
+function highlightPythonCode(value = '') {
+  const pattern = /\b(?:def|class|if|elif|else|for|while|try|except|finally|with|as|import|from|return|yield|in|is|not|and|or|True|False|None|print)\b|\b\d+(?:\.\d+)?\b/g
+  return String(value || '').split('\n').map((line) => {
+    const [code, comment] = splitLineComment(line)
+    const codeHtml = highlightTextTokens(code, pattern, token => (/^\d/.test(token) ? 'tok-number' : 'tok-keyword'))
+    return comment ? `${codeHtml}<span class="tok-comment">${escapeHtml(comment)}</span>` : codeHtml
+  }).join('\n')
+}
+function highlightYamlCode(value = '') {
+  const pattern = /\b(?:true|false|null|yes|no|on|off)\b|\b\d+(?:\.\d+)?\b/gi
+  return String(value || '').split('\n').map((line) => {
+    const [code, comment] = splitLineComment(line)
+    const keyMatch = code.match(/^(\s*-?\s*)([A-Za-z_][A-Za-z0-9_-]*)(\s*:)/)
+    let codeHtml = ''
+    if (keyMatch) {
+      const headLength = keyMatch[0].length
+      codeHtml = `${escapeHtml(keyMatch[1])}<span class="tok-keyword">${escapeHtml(keyMatch[2])}</span>${escapeHtml(keyMatch[3])}`
+      codeHtml += highlightTextTokens(code.slice(headLength), pattern, token => (/^\d/.test(token) ? 'tok-number' : 'tok-bool'))
+    } else {
+      codeHtml = highlightTextTokens(code, pattern, token => (/^\d/.test(token) ? 'tok-number' : 'tok-bool'))
+    }
+    return comment ? `${codeHtml}<span class="tok-comment">${escapeHtml(comment)}</span>` : codeHtml
+  }).join('\n')
+}
+function highlightScript(value = '', kind = 'shell') {
+  if (kind === 'python') return highlightPythonCode(value)
+  if (kind === 'playbook') return highlightYamlCode(value)
+  if (kind === 'k8s') return highlightShellCode(value)
+  return highlightShellCode(value || '')
+}
+function syncScriptEditorScroll(event) {
+  const editor = event?.target
+  const highlight = editor?.previousElementSibling
+  if (!editor || !highlight) return
+  highlight.scrollTop = editor.scrollTop
+  highlight.scrollLeft = editor.scrollLeft
+}
 function executionTargetName(row) {
   return row?.target_name || row?.host_name || row?.host_ip || row?.target_id || '-'
 }
@@ -1339,6 +1614,7 @@ function applyTemplate(template) {
 function canCancelTask(task) { return ['pending', 'running'].includes(task.status) && !task.cancel_requested }
 function canExecuteTask(task) { return task.status === 'pending' && !task.cancel_requested }
 function canDeleteTask(task) { return !['pending', 'running'].includes(task.status) }
+function isTaskActive(task) { return ['pending', 'running'].includes(task?.status) }
 function riskTagType(risk) { if (risk === 'critical' || risk === 'high') return 'danger'; if (risk === 'medium') return 'warning'; return 'success' }
 function applySourceFilter(source, targetType = '') { taskFilters.value.trigger_source = source; taskFilters.value.target_type = targetType; taskPage.value = 1; activeTab.value = 'history'; fetchTasks() }
 function handleEnvironmentChange() { targetFilters.value.system = '' }
@@ -1417,6 +1693,15 @@ function formatDuration(value) {
   const seconds = Math.round((duration % 60000) / 1000)
   return seconds ? `${minutes}min ${seconds}s` : `${minutes}min`
 }
+function elapsedMsSince(value) {
+  const timestamp = value ? new Date(value).getTime() : 0
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 0
+  return Math.max(Date.now() - timestamp, 0)
+}
+function formatExecutionDuration(row) {
+  if (row?.status === 'running') return formatDuration(elapsedMsSince(row.started_at))
+  return formatDuration(row?.duration_ms)
+}
 function executionOutputContent(row) {
   return row?.error_message || row?.output || '-'
 }
@@ -1435,6 +1720,7 @@ async function fetchHostTargets() {
   try {
     const res = await getTaskResourceOptions({ ...targetFilters.value, resource_type: 'host' })
     availableHosts.value = Array.isArray(res) ? res : (res.results || [])
+    await syncPrefillHostSelection()
   } catch (error) {
     ElMessage.error(ui.loadTargetsFailed)
   } finally {
@@ -1590,6 +1876,7 @@ async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
   prefillDraftTargetRefs.value = Array.isArray(scriptTaskDraft.target_refs) ? scriptTaskDraft.target_refs : []
   prefillDraftTargets.value = Array.isArray(scriptTaskDraft.target_hosts) ? scriptTaskDraft.target_hosts : []
   prefillSourceContext.value = scriptTaskDraft.source_context || null
+  selectedTargetsExpanded.value = Boolean(prefillDraftTargetRefs.value.length || prefillDraftTargets.value.length)
   activeTab.value = 'dispatch'
   await fetchTargets()
   if (scriptTaskDraft.target_type === 'k8s' && Array.isArray(scriptTaskDraft.k8s_targets) && scriptTaskDraft.k8s_targets.length) {
@@ -1646,10 +1933,11 @@ async function submitTemplateDraft() {
     ElMessage.error(error?.response?.data?.payload || error?.response?.data?.detail || ui.saveTemplateFailed)
   } finally { creatingTemplate.value = false }
 }
-async function openDetail(task) {
+async function openDetail(task, options = {}) {
   if (!task?.id) return false
+  const silent = Boolean(options.silent)
   detailVisible.value = true
-  detailLoading.value = true
+  if (!silent) detailLoading.value = true
   detailTask.value = task
   try {
     detailTask.value = normalizeScriptTaskSource(await getHostTask(task.id))
@@ -1660,7 +1948,7 @@ async function openDetail(task) {
     ElMessage.error(ui.loadTaskDetailFailed)
     return false
   } finally {
-    detailLoading.value = false
+    if (!silent) detailLoading.value = false
   }
 }
 
@@ -1889,6 +2177,41 @@ async function handleBatchCancel() {
     await Promise.all([fetchStats(), fetchTasks()])
   } catch (error) { ElMessage.error(error?.response?.data?.detail || ui.batchCancelFailed) }
 }
+function stopHistoryAutoRefresh() {
+  if (!historyRefreshTimer.value) return
+  clearInterval(historyRefreshTimer.value)
+  historyRefreshTimer.value = null
+}
+function stopDetailAutoRefresh() {
+  if (!detailRefreshTimer.value) return
+  clearInterval(detailRefreshTimer.value)
+  detailRefreshTimer.value = null
+}
+function syncHistoryAutoRefresh() {
+  if (activeTab.value !== 'history' || !hasActiveHistoryTasks.value) {
+    stopHistoryAutoRefresh()
+    return
+  }
+  if (historyRefreshTimer.value) return
+  historyRefreshTimer.value = setInterval(async () => {
+    if (activeTab.value !== 'history') return
+    await Promise.all([fetchStats(), fetchTasks()])
+  }, 5000)
+}
+function syncDetailAutoRefresh() {
+  if (!detailVisible.value || !detailTaskActive.value || !detailTask.value?.id) {
+    stopDetailAutoRefresh()
+    return
+  }
+  if (detailRefreshTimer.value) return
+  detailRefreshTimer.value = setInterval(async () => {
+    if (!detailVisible.value || !detailTask.value?.id) return
+    await openDetail(detailTask.value, { silent: true })
+    if (!detailTaskActive.value) {
+      await Promise.all([fetchStats(), fetchTasks()])
+    }
+  }, 3000)
+}
 async function reloadAll() {
   await Promise.all([fetchStats(), fetchTasks(), fetchTemplates()])
 }
@@ -1901,7 +2224,15 @@ onMounted(async () => {
   await reloadAll()
   await hydratePrefillTaskDraft()
   await openRouteTaskDetail(route.query.taskId, true)
+  syncHistoryAutoRefresh()
+  syncDetailAutoRefresh()
 })
+onBeforeUnmount(() => {
+  stopHistoryAutoRefresh()
+  stopDetailAutoRefresh()
+})
+watch([activeTab, hasActiveHistoryTasks], syncHistoryAutoRefresh)
+watch([detailVisible, detailTaskActive], syncDetailAutoRefresh)
 watch(() => route.query.aiopsDraft, async (value, previousValue) => {
   if (!value || value === previousValue) return
   await hydratePrefillTaskDraft()
@@ -2288,24 +2619,37 @@ watch(() => route.query.taskId, async (value, previousValue) => {
 
 .toolbar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  flex-wrap: wrap;
   margin-bottom: 8px;
-  padding: 6px 8px;
+  padding: 8px;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.12);
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
-.toolbar-left,
-.toolbar-right {
+.toolbar-row {
   display: flex;
   align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar-row-main {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 1px;
+}
+
+.toolbar-row-summary {
+  align-items: stretch;
+}
+
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 16px;
 }
 
 .toolbar :deep(.el-input__wrapper),
@@ -2326,7 +2670,7 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   border-radius: 8px;
 }
 
-.toolbar-right :deep(.el-button),
+.toolbar-row-main :deep(.el-button),
 .history-actions :deep(.el-button),
 .task-form-head-actions :deep(.el-button),
 .head-actions :deep(.el-button) {
@@ -2336,7 +2680,7 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   font-weight: 500;
 }
 
-.toolbar-right :deep(.el-button:not(.el-button--primary)),
+.toolbar-row-main :deep(.el-button:not(.el-button--primary)),
 .history-actions :deep(.el-button:not(.el-button--primary)),
 .task-form-head-actions :deep(.el-button:not(.el-button--primary)),
 .head-actions :deep(.el-button:not(.el-button--primary)) {
@@ -2346,7 +2690,7 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   box-shadow: none;
 }
 
-.toolbar-right :deep(.el-button:not(.is-link):hover),
+.toolbar-row-main :deep(.el-button:not(.is-link):hover),
 .history-actions :deep(.el-button:not(.is-link):hover),
 .task-form-head-actions :deep(.el-button:not(.is-link):hover),
 .head-actions :deep(.el-button:not(.is-link):hover) {
@@ -2360,16 +2704,41 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  margin-bottom: 8px;
+  width: 100%;
 }
 
 .selection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 9px;
   border-radius: 999px;
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.1);
   color: #2563eb;
   font-size: 11px;
+}
+
+.selection-pill-button {
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  cursor: pointer;
+}
+
+.selection-pill-button:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.selection-pill-button {
+  background: rgba(59, 130, 246, 0.08);
+  font: inherit;
+}
+
+.selection-pill-button .el-icon {
+  transition: transform 0.2s ease;
+}
+
+.selection-pill-button .el-icon.is-expanded {
+  transform: rotate(180deg);
 }
 
 .selection-pill.success {
@@ -2394,6 +2763,54 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   background: rgba(14, 116, 144, 0.1);
   border-color: rgba(14, 116, 144, 0.14);
   color: #0f766e;
+}
+
+.selection-pill.muted {
+  background: rgba(100, 116, 139, 0.08);
+  border-color: rgba(100, 116, 139, 0.12);
+  color: #475569;
+}
+
+.selected-target-panel {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.selected-target-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.selected-target-item strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #1e293b;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selected-target-item span {
+  flex: 0 1 auto;
+  max-width: 55%;
+  color: #64748b;
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .submit-row {
@@ -2854,6 +3271,36 @@ watch(() => route.query.taskId, async (value, previousValue) => {
   font-size: 11px;
 }
 
+.execution-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.1);
+  background: linear-gradient(180deg, rgba(248, 251, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.execution-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.execution-progress-head strong {
+  color: #1f2937;
+  font-size: 12px;
+}
+
+.execution-progress-head span {
+  color: #64748b;
+  font-size: 11px;
+  text-align: right;
+}
+
 .output-preview-card {
   display: flex;
   align-items: center;
@@ -2918,6 +3365,109 @@ watch(() => route.query.taskId, async (value, previousValue) => {
 .task-center-page :deep(.el-select__wrapper.is-focused),
 .task-center-page :deep(.el-textarea__inner:focus) {
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.22) inset;
+}
+
+.script-editor-shell {
+  width: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: #0f172a;
+}
+
+.script-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  padding: 3px 9px;
+  background: rgba(15, 23, 42, 0.96);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.08);
+  color: #cbd5e1;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.script-editor-head strong {
+  color: #93c5fd;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.script-editor-body {
+  position: relative;
+  min-height: 280px;
+  max-height: 460px;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.script-editor-highlight,
+.script-editor-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 280px;
+  max-height: 460px;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  font-family: Consolas, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.script-editor-highlight {
+  position: absolute;
+  inset: 0;
+  color: #dbeafe;
+  pointer-events: none;
+}
+
+.script-editor-textarea {
+  position: relative;
+  z-index: 1;
+  display: block;
+  resize: vertical;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: transparent;
+  color: transparent;
+  caret-color: #f8fafc;
+  -webkit-text-fill-color: transparent;
+}
+
+.script-editor-textarea::selection {
+  background: rgba(96, 165, 250, 0.28);
+  -webkit-text-fill-color: transparent;
+}
+
+.script-editor-textarea::placeholder {
+  color: rgba(203, 213, 225, 0.45);
+  -webkit-text-fill-color: rgba(203, 213, 225, 0.45);
+}
+
+.tok-comment { color: #64748b; }
+.tok-string { color: #86efac; }
+.tok-keyword { color: #93c5fd; font-weight: 700; }
+.tok-command { color: #fbbf24; }
+.tok-variable { color: #c4b5fd; }
+.tok-number { color: #fdba74; }
+.tok-bool { color: #f0abfc; font-weight: 700; }
+
+.script-editor-body:focus-within {
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.28);
+}
+
+.script-editor-shell--python .script-editor-head strong {
+  color: #facc15;
+}
+
+.script-editor-shell--playbook .script-editor-head strong {
+  color: #86efac;
 }
 
 .task-center-page :deep(.el-button) {

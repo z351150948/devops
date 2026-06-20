@@ -89,9 +89,6 @@
                   <span class="environment-chip" :class="{ empty: !currentEnvironmentName }">
                     {{ currentEnvironmentName ? `环境：${currentEnvironmentName}` : '未指定环境' }}
                   </span>
-                  <span v-if="currentPageContextSubject" class="environment-chip page-context-chip">
-                    对象：{{ currentPageContextSubject }}
-                  </span>
                   <label class="analysis-toggle">
                     <span>只分析</span>
                     <el-switch v-model="analysisSwitchValue" size="small" :disabled="forcedAnalysisOnly" />
@@ -426,11 +423,12 @@
                           {{ getPendingActionScriptContent(message.pending_action) }}
                         </div>
                         <div v-if="message.pending_action.status === 'pending'" class="pending-actions">
-                          <el-button size="small" type="primary" @click="handleConfirmAction(message.pending_action)">确认载入</el-button>
+                          <el-button size="small" type="primary" @click="handleConfirmAction(message.pending_action)">{{ getPendingActionConfirmLabel(message.pending_action) }}</el-button>
                           <el-button size="small" @click="handleCancelAction(message.pending_action)">取消</el-button>
                         </div>
                         <div v-else-if="message.pending_action.result_payload?.draft_ready" class="pending-result">
                           <span>任务草稿已准备就绪</span>
+                          <el-button size="small" text @click="handleConfirmAction(message.pending_action)">再次载入</el-button>
                           <el-button size="small" text @click="openTaskCenter">前往任务中心</el-button>
                         </div>
                         <div v-else-if="message.pending_action.result_payload?.task_id" class="pending-result">
@@ -652,12 +650,6 @@ const currentEnvironmentName = computed(() => {
   const value = currentSession.value?.context?.current_environment
   if (!value) return ''
   return typeof value === 'string' ? value : (value.name || '')
-})
-const pageContext = computed(() => buildPageContext())
-const currentPageContextSubject = computed(() => {
-  const context = currentSession.value?.context?.page_context || pageContext.value
-  const hints = context?.hints || {}
-  return hints.service || hints.cluster || hints.namespace || hints.alert_id || ''
 })
 const fabStyle = computed(() => {
   if (!fabPosition.value || visible.value) return null
@@ -1133,7 +1125,10 @@ function getResponseBlockStateKey(message, block, index = 0) {
 function isResponseBlockExpanded(message, block, index = 0) {
   const key = getResponseBlockStateKey(message, block, index)
   if (!key) return false
-  return Boolean(responseBlockExpandedState.value[key])
+  if (Object.prototype.hasOwnProperty.call(responseBlockExpandedState.value, key)) {
+    return Boolean(responseBlockExpandedState.value[key])
+  }
+  return isResponseBlockDefaultExpanded(block, message)
 }
 
 function toggleResponseBlockExpanded(message, block, index = 0) {
@@ -1145,6 +1140,16 @@ function toggleResponseBlockExpanded(message, block, index = 0) {
   }
 }
 
+function isResponseBlockDefaultExpanded(block, message) {
+  const type = String(block?.type || '')
+  return Boolean(
+    type === 'approval_form'
+    || type === 'alert_rule_draft'
+    || type === 'dashboard_draft'
+    || (message?.pending_action && type.includes('draft'))
+  )
+}
+
 function syncResponseBlockState(list = renderMessages.value) {
   const nextExpanded = {}
   for (const message of list || []) {
@@ -1152,7 +1157,9 @@ function syncResponseBlockState(list = renderMessages.value) {
     getMessageBlocks(message).forEach((block, index) => {
       const key = getResponseBlockStateKey(message, block, index)
       if (!key) return
-      nextExpanded[key] = Boolean(responseBlockExpandedState.value[key])
+      nextExpanded[key] = Object.prototype.hasOwnProperty.call(responseBlockExpandedState.value, key)
+        ? Boolean(responseBlockExpandedState.value[key])
+        : isResponseBlockDefaultExpanded(block, message)
     })
   }
   responseBlockExpandedState.value = nextExpanded
@@ -1196,11 +1203,17 @@ function getBlockActions(block, message) {
   const actions = Array.isArray(block?.actions) ? block.actions.filter(Boolean).map(action => ({ ...action })) : []
   if (block?.type === 'approval_form') {
     const actionTypes = new Set(actions.map(action => action.type).filter(Boolean))
+    if (message?.pending_action?.result_payload?.draft_ready) {
+      actions.forEach((action) => {
+        if (action.type === 'confirm') action.label = '再次载入'
+      })
+    }
     if (message?.pending_action?.status === 'pending') {
-      if (!actionTypes.has('confirm')) actions.unshift({ type: 'confirm', label: '确认载入' })
+      if (!actionTypes.has('confirm')) actions.unshift({ type: 'confirm', label: getPendingActionConfirmLabel(message.pending_action) })
       if (!actionTypes.has('cancel')) actions.push({ type: 'cancel', label: '取消' })
     } else if (message?.pending_action?.result_payload?.draft_ready) {
-      if (!actionTypes.has('open_task_center')) actions.unshift({ type: 'open_task_center', label: '前往任务中心' })
+      if (!actionTypes.has('confirm')) actions.unshift({ type: 'confirm', label: '再次载入' })
+      if (!actionTypes.has('open_task_center')) actions.push({ type: 'open_task_center', label: '前往任务中心' })
     } else if (message?.pending_action?.result_payload?.task_id) {
       if (!actionTypes.has('open_task_center')) actions.unshift({ type: 'open_task_center', label: '查看任务中心' })
     }
@@ -1209,6 +1222,10 @@ function getBlockActions(block, message) {
     actions.push({ type: 'copy', label: '复制内容', value: getBlockCopyValue(block) })
   }
   return actions
+}
+
+function getPendingActionConfirmLabel(pendingAction) {
+  return pendingAction?.result_payload?.draft_ready ? '再次载入' : '确认载入'
 }
 
 function getBlockActionIcon(type) {
@@ -1744,7 +1761,7 @@ async function selectSession(sessionId) {
 
 async function handleCreateSession() {
   try {
-    const session = await createAIOpsSession({ title: '', page_context: pageContext.value })
+    const session = await createAIOpsSession({ title: '' })
     sessions.value.unshift(session)
     messages.value = []
     await selectSession(session.id)
@@ -1755,7 +1772,7 @@ async function handleCreateSession() {
 
 async function ensureSession() {
   if (currentSessionId.value) return currentSessionId.value
-  const session = await createAIOpsSession({ title: '', page_context: pageContext.value })
+  const session = await createAIOpsSession({ title: '' })
   sessions.value.unshift(session)
   currentSessionId.value = session.id
   localStorage.setItem(STORAGE_SESSION_KEY, String(session.id))
@@ -1792,7 +1809,6 @@ async function handleSend() {
     const response = await sendAIOpsMessageAsync(sessionId, {
       content,
       analysis_only: effectiveAnalysisOnly.value,
-      page_context: pageContext.value,
     })
     messages.value.push(response.user_message)
     messages.value.push(response.assistant_message)
@@ -2232,7 +2248,7 @@ onBeforeUnmount(() => {
 .response-block-field{padding:7px 8px;border-radius:10px;background:rgba(255,255,255,.72);border:1px dashed rgba(251,146,60,.36);display:flex;flex-direction:column;gap:3px;min-width:0}
 .response-block-field span{font-size:10px;color:#9a3412}
 .response-block-field strong{font-size:12px;color:#7c2d12;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.response-block-command{margin-top:8px;padding:8px 10px;border-radius:10px;background:#111827;color:#f8fafc;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.response-block-command{margin-top:8px;max-height:320px;overflow:auto;padding:8px 10px;border-radius:10px;background:#111827;color:#f8fafc;font-size:11px;line-height:1.5;white-space:pre;word-break:normal}
 .response-block-trace{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .response-block-trace-item,.response-block-item{display:flex;align-items:flex-start;gap:8px;min-width:0}
 .response-block-trace-dot,.response-block-item-dot{width:8px;height:8px;border-radius:50%;margin-top:6px;background:#94a3b8;flex:0 0 auto}
@@ -2262,7 +2278,7 @@ onBeforeUnmount(() => {
 .pending-detail-item{padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.7);display:flex;flex-direction:column;gap:4px}
 .pending-detail-item span{font-size:12px;color:#9a3412}
 .pending-detail-item strong{font-size:12px;color:#7c2d12}
-.pending-command{margin-top:8px;padding:8px 10px;border-radius:10px;background:#111827;color:#f8fafc;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.pending-command{margin-top:8px;max-height:320px;overflow:auto;padding:8px 10px;border-radius:10px;background:#111827;color:#f8fafc;font-size:11px;line-height:1.5;white-space:pre;word-break:normal}
 .pending-actions{display:flex;gap:8px;margin-top:10px}
 .message-state-card{margin-top:10px;padding:8px 10px;border-radius:12px;background:#f8fafc;border:1px solid #cbd5e1;color:#475569;font-size:11px;line-height:1.5}
 .message-error-card{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-radius:14px;background:linear-gradient(180deg,#fffaf5 0%,#fff 100%);border:1px solid #fed7aa}

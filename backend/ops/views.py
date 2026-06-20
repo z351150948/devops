@@ -21,7 +21,7 @@ from .host_task_schedules import (
     resolve_schedule_hosts,
     trigger_schedule,
 )
-from .host_tasks import build_host_target_queryset, build_k8s_target_snapshot, record_task_center_event, resolve_host_source_refs, start_host_task, start_k8s_task
+from .host_tasks import build_host_target_queryset, build_k8s_target_snapshot, mark_stale_running_host_tasks, record_task_center_event, resolve_host_source_refs, start_host_task, start_k8s_task
 from .models import (
     Alert,
     AlertAction,
@@ -542,6 +542,14 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
             return HostTaskDetailSerializer
         return HostTaskSerializer
 
+    def list(self, request, *args, **kwargs):
+        mark_stale_running_host_tasks()
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        mark_stale_running_host_tasks()
+        return super().retrieve(request, *args, **kwargs)
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -695,6 +703,7 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
+        mark_stale_running_host_tasks()
         queryset = self.filter_queryset(self.get_queryset())
         total = queryset.count()
         success = queryset.filter(status=HostTask.STATUS_SUCCESS).count()
