@@ -76,17 +76,17 @@
     <div class="cmdb-items-main resource-list-card">
       <div class="toolbar section-gap resource-toolbar">
         <div class="toolbar-left resource-toolbar-left">
-          <el-select v-model="filters.resource_type" placeholder="资源类型" clearable style="width:120px" size="small" @change="fetchResources">
+          <el-select v-model="filters.resource_type" placeholder="资源类型" clearable style="width:120px" size="small" @change="refreshResourceView">
             <el-option label="主机" value="host" />
             <el-option label="K8s" value="k8s" />
           </el-select>
           <el-select v-model="filters.environment" placeholder="环境" clearable filterable style="width:120px" size="small" @change="onEnvironmentFilterChange">
             <el-option v-for="env in environments" :key="env.id" :label="env.name" :value="env.id" />
           </el-select>
-          <el-select v-model="filters.system" placeholder="系统" clearable filterable style="width:120px" size="small" :disabled="!filters.environment" @change="fetchResources">
+          <el-select v-model="filters.system" placeholder="系统" clearable filterable style="width:120px" size="small" :disabled="!filters.environment" @change="refreshResourceView">
             <el-option v-for="system in systemsForFilter" :key="system.id" :label="system.name" :value="system.id" />
           </el-select>
-          <el-select v-model="filters.status" placeholder="状态" clearable style="width:110px" size="small" @change="fetchResources">
+          <el-select v-model="filters.status" placeholder="状态" clearable style="width:110px" size="small" @change="refreshResourceView">
             <el-option label="可用" value="active" />
             <el-option label="异常" value="warning" />
             <el-option label="停用" value="inactive" />
@@ -97,8 +97,8 @@
             clearable
             style="width:200px"
             size="small"
-            @clear="fetchResources"
-            @keyup.enter="fetchResources"
+            @clear="refreshResourceView"
+            @keyup.enter="refreshResourceView"
           >
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
@@ -415,7 +415,7 @@ function clearTreeFilter() {
   treeRef.value?.setCurrentKey(null)
   filters.environment = ''
   filters.system = ''
-  fetchResources()
+  refreshResourceView()
 }
 
 function onNodeClick(data) {
@@ -426,19 +426,19 @@ function onNodeClick(data) {
     filters.environment = data.parent || ''
     filters.system = data.id
   }
-  fetchResources()
+  refreshResourceView()
 }
 
 function onEnvironmentFilterChange() {
   filters.system = ''
   treeRef.value?.setCurrentKey(filters.environment || null)
-  fetchResources()
+  refreshResourceView()
 }
 
 function resetFilters() {
   Object.assign(filters, { search: '', resource_type: '', status: '', environment: '', system: '' })
   treeRef.value?.setCurrentKey(null)
-  fetchResources()
+  refreshResourceView()
 }
 
 function applyStatCard(card) {
@@ -448,7 +448,7 @@ function applyStatCard(card) {
   if (card.status) {
     filters.status = filters.status === card.status ? '' : card.status
   }
-  fetchResources()
+  refreshResourceView()
 }
 
 function syncK8sResourceName() {
@@ -532,10 +532,23 @@ async function fetchResources() {
   }
 }
 
+function statFilterParams() {
+  return {
+    environment: filters.environment || undefined,
+    system: filters.system || undefined,
+    status: filters.status || undefined,
+    search: filters.search || undefined,
+  }
+}
+
 async function fetchStats() {
-  const res = await getTaskResourceStats()
+  const res = await getTaskResourceStats(statFilterParams())
   stats.value = res || {}
   emit('stats-updated', stats.value)
+}
+
+async function refreshResourceView() {
+  await Promise.all([fetchResources(), fetchStats()])
 }
 
 async function fetchK8sClusters() {

@@ -72,9 +72,10 @@ class HostTaskApiTests(TestCase):
         self.assertIn('load average', payload['executions'][0]['output'])
 
     @patch('ops.host_tasks.allow_ansible_fallback_to_ssh', return_value=True)
+    @patch('ops.host_tasks.is_ansible_available', return_value=True)
     @patch('ops.host_tasks.execute_ansible_command')
     @patch('ops.host_tasks.open_ssh_client')
-    def test_ansible_mode_falls_back_to_ssh_when_controller_unavailable(self, mock_open_ssh_client, mock_execute_ansible_command, _mock_allow_fallback):
+    def test_ansible_mode_falls_back_to_ssh_when_controller_unavailable(self, mock_open_ssh_client, mock_execute_ansible_command, _mock_available, _mock_allow_fallback):
         mock_execute_ansible_command.side_effect = AnsibleControllerError('ansible controller unavailable')
         mock_open_ssh_client.return_value = self._mock_client({
             'uptime': {'exit_status': 0, 'stdout': 'fallback-ok'},
@@ -99,10 +100,17 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(payload['success_count'], 1)
         self.assertIn('Ansible', payload['summary'])
         self.assertIn('SSH', payload['summary'])
-        self.assertEqual(self._finished_executions(payload)[0]['output'], 'fallback-ok')
+        self.assertEqual(len(payload['executions']), 1)
+        self.assertEqual(payload['executions'][0]['status'], HostTaskExecution.STATUS_SUCCESS)
+        self.assertEqual(payload['executions'][0]['output'], 'fallback-ok')
+        self.assertEqual(HostTaskExecution.objects.filter(task_id=payload['id']).count(), 1)
+        self.assertFalse(
+            HostTaskExecution.objects.filter(task_id=payload['id'], status=HostTaskExecution.STATUS_RUNNING).exists()
+        )
 
+    @patch('ops.host_tasks.is_ansible_playbook_available', return_value=True)
     @patch('ops.host_tasks.execute_ansible_playbook')
-    def test_run_playbook_task_executes_with_ansible_mode(self, mock_execute_ansible_playbook):
+    def test_run_playbook_task_executes_with_ansible_mode(self, mock_execute_ansible_playbook, _mock_available):
         mock_execute_ansible_playbook.return_value = ('PLAY [targets]\\nTASK [ping]\\nok: [app-01]', '')
 
         response = self.client.post(
@@ -127,8 +135,9 @@ class HostTaskApiTests(TestCase):
         self.assertEqual(payload['executions'][0]['command'], 'ansible-playbook smoke-check.yml')
         self.assertIn('PLAY [targets]', payload['executions'][0]['output'])
 
+    @patch('ops.host_tasks.is_ansible_playbook_available', return_value=True)
     @patch('ops.host_tasks.execute_ansible_playbook')
-    def test_run_playbook_formats_debug_summary_output(self, mock_execute_ansible_playbook):
+    def test_run_playbook_formats_debug_summary_output(self, mock_execute_ansible_playbook, _mock_available):
         mock_execute_ansible_playbook.return_value = (
             'TASK [Summarize]\n'
             'ok: [app-01] => {\n'
@@ -163,9 +172,10 @@ class HostTaskApiTests(TestCase):
         self.assertNotIn('"msg": [', output)
 
     @patch('ops.host_tasks.allow_ansible_fallback_to_ssh', return_value=True)
+    @patch('ops.host_tasks.is_ansible_playbook_available', return_value=True)
     @patch('ops.host_tasks.execute_ansible_playbook')
     @patch('ops.host_tasks.open_ssh_client')
-    def test_run_playbook_does_not_fallback_to_ssh(self, mock_open_ssh_client, mock_execute_ansible_playbook, _mock_allow_fallback):
+    def test_run_playbook_does_not_fallback_to_ssh(self, mock_open_ssh_client, mock_execute_ansible_playbook, _mock_available, _mock_allow_fallback):
         mock_execute_ansible_playbook.side_effect = AnsibleControllerError('playbook controller unavailable')
 
         response = self.client.post(
@@ -321,6 +331,44 @@ class HostTaskApiTests(TestCase):
         inactive_resource.refresh_from_db()
         self.assertEqual(inactive_resource.status, TaskResource.STATUS_ACTIVE)
 
+    def test_task_resource_stats_follow_context_not_selected_resource_type(self):
+        env = TaskResourceGroup.objects.create(name='stats-env', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        other_env = TaskResourceGroup.objects.create(name='stats-other-env', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        cluster = K8sCluster.objects.create(name='stats-env-k3s', kubeconfig='demo', status='connected')
+        TaskResource.objects.create(
+            name='stats-host',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.30.1.10',
+        )
+        TaskResource.objects.create(
+            name='stats-k8s',
+            resource_type=TaskResource.RESOURCE_K8S,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            cluster=cluster,
+        )
+        TaskResource.objects.create(
+            name='stats-other-host',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=other_env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='10.30.1.11',
+        )
+
+        response = self.client.get(
+            '/api/task-resources/stats/',
+            {'environment': env.id, 'resource_type': TaskResource.RESOURCE_HOST},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['total'], 2)
+        self.assertEqual(payload['host'], 1)
+        self.assertEqual(payload['k8s'], 1)
+        self.assertEqual(payload['active'], 2)
+
     @patch('ops.host_tasks.open_ssh_client')
     def test_task_resource_ssh_failure_does_not_mark_resource_inactive(self, mock_open_ssh_client):
         mock_open_ssh_client.side_effect = RuntimeError('authentication failed')
@@ -352,8 +400,9 @@ class HostTaskApiTests(TestCase):
         resource.refresh_from_db()
         self.assertEqual(resource.status, TaskResource.STATUS_ACTIVE)
 
+    @patch('ops.host_tasks.is_ansible_available', return_value=True)
     @patch('ops.host_tasks.execute_ansible_command')
-    def test_task_resource_ansible_failure_does_not_mark_resource_inactive(self, mock_execute_ansible_command):
+    def test_task_resource_ansible_failure_does_not_mark_resource_inactive(self, mock_execute_ansible_command, _mock_available):
         mock_execute_ansible_command.side_effect = RuntimeError('UNREACHABLE! authentication failed')
         env = TaskResourceGroup.objects.create(name='ansible-failure-env', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
         resource = TaskResource.objects.create(
@@ -550,6 +599,63 @@ class HostTaskApiTests(TestCase):
         payload = response.json()
         self.assertEqual(payload['executions'][0]['target_kind'], 'cluster')
         self.assertEqual(payload['executions'][0]['target_name'], cluster.name)
+
+    @patch('ops.host_tasks.subprocess.run')
+    def test_k8s_apply_heredoc_uses_manifest_file_for_real_cluster(self, mocked_run):
+        cluster = K8sCluster.objects.create(
+            name='real-k8s-apply',
+            kubeconfig='apiVersion: v1\nclusters: []\n',
+            status='connected',
+        )
+        manifest = (
+            'apiVersion: apps/v1\n'
+            'kind: Deployment\n'
+            'metadata:\n'
+            '  name: xxl-job-admin\n'
+            '---\n'
+            'apiVersion: v1\n'
+            'kind: Service\n'
+            'metadata:\n'
+            '  name: xxl-job-admin\n'
+        )
+        command = (
+            "kubectl apply -f - <<'EOF'\n"
+            f"{manifest}"
+            "EOF\n"
+            "kubectl rollout status deployment/xxl-job-admin -n default --timeout=120s\n"
+            "kubectl get deploy,svc -n default -l app.kubernetes.io/instance=xxl-job-admin"
+        )
+        mocked_run.return_value.returncode = 0
+        mocked_run.return_value.stdout = 'ok'
+        mocked_run.return_value.stderr = ''
+        task = HostTask.objects.create(
+            name='k8s-apply-heredoc',
+            target_type=HostTask.TARGET_K8S,
+            task_type=HostTask.TASK_K8S_POD_EXEC,
+            execution_mode=HostTask.EXECUTION_MODE_K8S_API,
+            payload={
+                'command': command,
+                'manifest': manifest,
+                'resource_kind': 'deployment',
+                'namespace': 'default',
+            },
+            created_by=self.user.username,
+        )
+
+        execute_k8s_task(task, [{'cluster_id': cluster.id, 'namespace': 'default', 'name': 'xxl-job-admin', 'kind': 'deployment'}])
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, HostTask.STATUS_SUCCESS)
+        self.assertEqual(mocked_run.call_count, 3)
+        apply_args = mocked_run.call_args_list[0].args[0]
+        self.assertEqual(apply_args[0], 'kubectl')
+        self.assertIn('--kubeconfig', apply_args)
+        self.assertIn('-f', apply_args)
+        filename_arg = apply_args[apply_args.index('-f') + 1]
+        self.assertNotEqual(filename_arg, '-')
+        self.assertNotIn('---', apply_args)
+        self.assertIn('rollout', mocked_run.call_args_list[1].args[0])
+        self.assertIn('get', mocked_run.call_args_list[2].args[0])
 
     def test_k8s_helm_release_runs_as_helm_command_not_kubectl(self):
         cluster = K8sCluster.objects.create(name='demo-k8s-helm', kubeconfig='demo', status='connected')
@@ -775,6 +881,26 @@ class HostTaskApiTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('execution_mode', response.json())
+
+    def test_k8s_resource_options_include_unmapped_clusters(self):
+        cluster = K8sCluster.objects.create(
+            name='task-option-k3s',
+            api_server='https://10.10.10.2:6443',
+            kubeconfig='demo',
+            status='connected',
+            description='测试集群',
+        )
+
+        response = self.client.get('/api/host-tasks/resource_options/', {'resource_type': TaskResource.RESOURCE_K8S})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        option = next(item for item in payload if item['cluster'] == cluster.id)
+        self.assertEqual(option['id'], f'cluster:{cluster.id}')
+        self.assertEqual(option['name'], cluster.name)
+        self.assertEqual(option['resource_type'], TaskResource.RESOURCE_K8S)
+        self.assertEqual(option['status'], TaskResource.STATUS_ACTIVE)
+        self.assertEqual(option['endpoint'], cluster.api_server)
 
     @patch('ops.host_tasks.open_ssh_client')
     def test_create_task_preserves_aiops_trigger_source(self, mock_open_ssh_client):

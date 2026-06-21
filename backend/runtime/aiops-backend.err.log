@@ -1,9 +1,6 @@
-2026-06-21 17:31:18,811 INFO     observability history scheduler thread started
-2026-06-21 17:31:19,112 INFO     observability history scheduler loop started
-2026-06-21 17:31:20,318 INFO     Starting server at tcp:port=8000:interface=0.0.0.0
-2026-06-21 17:31:20,319 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)
-2026-06-21 17:31:20,319 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0
-2026-06-21 17:31:20,320 INFO     Listening on TCP address 0.0.0.0:8000
-2026-06-21 18:00:02,032 INFO     observability history scheduler refreshed today snapshot: {'day': '2026-06-21', 'captured': 6, 'actor': 'system-scheduler', 'force_refresh': True}
-Not Found: /api/k8s/clusters/15/
-2026-06-21 18:13:20,261 WARNING  Not Found: /api/k8s/clusters/15/
+2026-06-21 21:37:46,583 INFO     observability history scheduler thread started
+2026-06-21 21:37:46,872 INFO     observability history scheduler loop started
+2026-06-21 21:37:48,430 INFO     Starting server at tcp:port=8000:interface=0.0.0.0
+2026-06-21 21:37:48,430 INFO     HTTP/2 support not enabled (install the http2 and tls Twisted extras)
+2026-06-21 21:37:48,431 INFO     Configuring endpoint tcp:port=8000:interface=0.0.0.0
+2026-06-21 21:37:48,432 INFO     Listening on TCP address 0.0.0.0:8000

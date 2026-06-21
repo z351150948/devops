@@ -43,6 +43,7 @@ from .models import (
     HostTaskSchedule,
     HostTaskScheduleExecution,
     HostTaskTemplate,
+    K8sCluster,
     LogEntry,
     TaskResource,
     TaskResourceGroup,
@@ -455,7 +456,24 @@ class TaskResourceViewSet(EventWallModelViewSetMixin, RBACPermissionMixin, views
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        queryset = self.filter_queryset(self.get_queryset())
+        queryset = TaskResource.objects.select_related('environment', 'system', 'cluster').all()
+        environment = request.query_params.get('environment')
+        system_value = request.query_params.get('system')
+        status_value = request.query_params.get('status')
+        search = (request.query_params.get('search') or '').strip()
+        if environment:
+            queryset = queryset.filter(Q(environment_id=environment) | Q(environment__name=environment))
+        if system_value:
+            queryset = queryset.filter(Q(system_id=system_value) | Q(system__name=system_value))
+        if status_value:
+            queryset = queryset.filter(status=status_value)
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(ip_address__icontains=search)
+                | Q(description__icontains=search)
+                | Q(cluster__name__icontains=search)
+            )
         return Response({
             'total': queryset.count(),
             'host': queryset.filter(resource_type=TaskResource.RESOURCE_HOST).count(),
@@ -862,7 +880,71 @@ class HostTaskViewSet(RBACPermissionMixin, viewsets.ModelViewSet):
                 | Q(cluster__name__icontains=search)
             )
         data = TaskResourceSerializer(queryset[:200], many=True).data
+        if resource_type == TaskResource.RESOURCE_K8S:
+            mapped_cluster_ids = {
+                item['cluster']
+                for item in data
+                if item.get('cluster')
+            }
+            cluster_queryset = K8sCluster.objects.exclude(id__in=mapped_cluster_ids).order_by('name', 'id')
+            if status_value:
+                cluster_status = {
+                    TaskResource.STATUS_ACTIVE: 'connected',
+                    TaskResource.STATUS_INACTIVE: 'disconnected',
+                    TaskResource.STATUS_WARNING: 'error',
+                }.get(status_value, status_value)
+                cluster_queryset = cluster_queryset.filter(status=cluster_status)
+            if search:
+                cluster_queryset = cluster_queryset.filter(
+                    Q(name__icontains=search)
+                    | Q(api_server__icontains=search)
+                    | Q(description__icontains=search)
+                )
+            cluster_options = [
+                self._k8s_cluster_resource_option(cluster)
+                for cluster in cluster_queryset[: max(200 - len(data), 0)]
+            ]
+            data = list(data) + cluster_options
         return Response(data)
+
+    def _k8s_cluster_resource_option(self, cluster):
+        status_map = {
+            'connected': (TaskResource.STATUS_ACTIVE, '可用'),
+            'disconnected': (TaskResource.STATUS_INACTIVE, '停用'),
+            'error': (TaskResource.STATUS_WARNING, '异常'),
+        }
+        status_value, status_display = status_map.get(cluster.status, (TaskResource.STATUS_WARNING, cluster.get_status_display()))
+        return {
+            'id': f'cluster:{cluster.id}',
+            'name': cluster.name,
+            'hostname': cluster.name,
+            'resource_type': TaskResource.RESOURCE_K8S,
+            'resource_type_display': 'K8s',
+            'environment': None,
+            'environment_name': '',
+            'environment_display': '',
+            'system': None,
+            'system_name': '',
+            'business_line': '',
+            'status': status_value,
+            'status_display': status_display,
+            'ip_address': None,
+            'ssh_port': 22,
+            'ssh_user': '',
+            'cluster': cluster.id,
+            'cluster_id': cluster.id,
+            'cluster_name': cluster.name,
+            'namespace': 'default',
+            'endpoint': cluster.api_server or cluster.name,
+            'owner': '',
+            'admin_user': '',
+            'description': cluster.description or cluster.api_server or 'K8s 集群',
+            'metadata': {'source': 'k8s_cluster'},
+            'created_by': '',
+            'updated_by': '',
+            'created_at': cluster.created_at,
+            'updated_at': cluster.updated_at,
+        }
 
     @action(detail=True, methods=['post'])
     def rerun(self, request, pk=None):

@@ -50,11 +50,21 @@ class TaskResourceHostTarget:
 
 def normalize_host_execution_targets(hosts):
     normalized = []
+    seen = set()
     for host in hosts or []:
         if isinstance(host, TaskResource):
-            normalized.append(TaskResourceHostTarget(host))
+            target = TaskResourceHostTarget(host)
+            identity = ('task_resource', target.resource_id)
+        elif isinstance(host, TaskResourceHostTarget):
+            target = host
+            identity = ('task_resource', target.resource_id)
         else:
-            normalized.append(host)
+            target = host
+            identity = ('host', getattr(target, 'id', id(target)))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(target)
     return normalized
 
 
@@ -582,6 +592,11 @@ def _run_single_task_with_ansible(task, host):
     started_at = timezone.now()
     monotonic_started = time.monotonic()
     command_text = _build_command_text(task)
+    if task.task_type == HostTask.TASK_RUN_PLAYBOOK:
+        if not is_ansible_playbook_available():
+            raise AnsibleControllerError('未检测到 Ansible Playbook 控制端环境：后端运行环境未找到 ansible-playbook 命令，请安装 ansible-core 或配置 HOST_TASK_ANSIBLE_PLAYBOOK_BINARY。')
+    elif not is_ansible_available():
+        raise AnsibleControllerError('未检测到 Ansible 控制端环境：后端运行环境未找到 ansible 命令，请安装 ansible-core 或配置 HOST_TASK_ANSIBLE_BINARY。')
     execution = _create_running_host_execution(task, host, command_text)
     output = ''
     error_message = ''
@@ -614,6 +629,7 @@ def _run_single_task_with_ansible(task, host):
                 host.status = 'online'
                 host.save(update_fields=['status'])
     except AnsibleControllerError:
+        execution.delete()
         raise
     except Exception as exc:
         status = 'failed'
@@ -819,10 +835,79 @@ def build_k8s_target_snapshot(targets):
     return snapshot
 
 
+def _strip_kubectl_binary(args):
+    return args[1:] if args and args[0] == 'kubectl' else args
+
+
+def _replace_kubectl_stdin_manifest_arg(args, manifest_path):
+    replaced = []
+    replace_next = False
+    for arg in args:
+        if replace_next and arg == '-':
+            replaced.append(manifest_path)
+            replace_next = False
+            continue
+        replaced.append(arg)
+        replace_next = arg in ('-f', '--filename')
+    return replaced
+
+
+def _extract_kubectl_heredoc(command):
+    lines = str(command or '').splitlines()
+    for index, line in enumerate(lines):
+        if '<<' not in line or 'kubectl apply' not in line:
+            continue
+        command_line, marker = line.split('<<', 1)
+        marker = marker.strip().strip('\'"')
+        if not marker:
+            continue
+        manifest_lines = []
+        tail_lines = []
+        found_end = False
+        for body_line in lines[index + 1:]:
+            if not found_end and body_line.strip() == marker:
+                found_end = True
+                continue
+            if found_end:
+                tail_lines.append(body_line)
+            else:
+                manifest_lines.append(body_line)
+        if not found_end:
+            return '', '', []
+        return command_line.strip(), '\n'.join(manifest_lines).strip(), tail_lines
+    return '', '', []
+
+
+def _kubectl_command_steps(command, payload=None):
+    payload = payload if isinstance(payload, dict) else {}
+    command = str(command or '').strip()
+    manifest_from_payload = str(payload.get('manifest') or payload.get('k8s_manifest') or '').strip()
+    heredoc_command, heredoc_manifest, tail_lines = _extract_kubectl_heredoc(command)
+    if heredoc_command:
+        steps = [{
+            'args': _strip_kubectl_binary(shlex.split(heredoc_command)),
+            'manifest': manifest_from_payload or heredoc_manifest,
+        }]
+        for line in tail_lines:
+            line = line.strip()
+            if line:
+                steps.append({'args': _strip_kubectl_binary(shlex.split(line))})
+        return steps
+
+    lines = [line.strip() for line in command.splitlines() if line.strip()]
+    if manifest_from_payload and lines and 'kubectl apply' in lines[0] and ' -f -' in f' {lines[0]} ':
+        steps = [{'args': _strip_kubectl_binary(shlex.split(lines[0])), 'manifest': manifest_from_payload}]
+        steps.extend({'args': _strip_kubectl_binary(shlex.split(line))} for line in lines[1:])
+        return steps
+
+    return [{'args': _strip_kubectl_binary(shlex.split(command))}]
+
+
 def _run_k8s_cluster_command(task, cluster):
     from . import k8s_views
 
-    command = ((task.payload or {}).get('command') or '').strip() or 'kubectl get pods -A | head -20'
+    payload = task.payload or {}
+    command = (payload.get('command') or '').strip() or 'kubectl get pods -A | head -20'
     rendered_command = command if command.startswith('kubectl') else f'kubectl {command}'
     if k8s_views._is_demo(cluster):
         return '\n'.join([
@@ -837,28 +922,39 @@ def _run_k8s_cluster_command(task, cluster):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False, encoding='utf-8') as tmp:
         tmp.write(_prepare_kubeconfig(cluster))
         kubeconfig_path = tmp.name
+    temporary_paths = [kubeconfig_path]
     try:
-        kubectl_args = shlex.split(command)
-        if kubectl_args and kubectl_args[0] == 'kubectl':
-            kubectl_args = kubectl_args[1:]
-        process = subprocess.run(
-            ['kubectl', '--kubeconfig', kubeconfig_path, *kubectl_args],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=max(int(task.timeout_seconds or 30), 5),
-        )
-        output = (process.stdout or '').strip()
-        error_output = (process.stderr or '').strip()
-        if process.returncode != 0:
-            raise RuntimeError(error_output or output or f'kubectl exited with code {process.returncode}')
+        outputs = []
+        for step in _kubectl_command_steps(command, payload):
+            kubectl_args = list(step['args'])
+            manifest = step.get('manifest') or ''
+            if manifest:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.manifest.yaml', delete=False, encoding='utf-8') as manifest_file:
+                    manifest_file.write(manifest)
+                    manifest_path = manifest_file.name
+                temporary_paths.append(manifest_path)
+                kubectl_args = _replace_kubectl_stdin_manifest_arg(kubectl_args, manifest_path)
+            process = subprocess.run(
+                ['kubectl', '--kubeconfig', kubeconfig_path, *kubectl_args],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=max(int(task.timeout_seconds or 30), 5),
+            )
+            output = (process.stdout or '').strip()
+            error_output = (process.stderr or '').strip()
+            if process.returncode != 0:
+                raise RuntimeError(error_output or output or f'kubectl exited with code {process.returncode}')
+            if output or error_output:
+                outputs.append(output or error_output)
         return output or error_output or '命令执行完成'
     finally:
-        try:
-            os.unlink(kubeconfig_path)
-        except OSError:
-            pass
+        for path in temporary_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 def _is_helm_deployment_payload(payload):

@@ -7116,6 +7116,7 @@ INSTALL_TARGET_PROFILES = {
     'openjdk': {'display': 'OpenJDK', 'apt': 'default-jdk', 'package': 'java-17-openjdk', 'service': '', 'binary': 'java'},
     'jdk': {'display': 'OpenJDK', 'apt': 'default-jdk', 'package': 'java-17-openjdk', 'service': '', 'binary': 'java'},
     'maven': {'display': 'Maven', 'apt': 'maven', 'package': 'maven', 'service': '', 'binary': 'mvn'},
+    'helm': {'display': 'Helm', 'apt': 'helm', 'package': 'helm', 'service': '', 'binary': 'helm', 'installer': 'helm_official_script'},
 }
 
 
@@ -7198,11 +7199,15 @@ def _looks_like_k8s_deployment_scope(question='', draft_request=None):
 
 
 def _looks_like_k8s_install_task_request(question='', draft_request=None):
+    if _looks_like_host_tool_install_request(question, draft_request):
+        return False
     return _looks_like_install_task_request(question, draft_request) and _looks_like_k8s_deployment_scope(question, draft_request)
 
 
 def _looks_like_helm_install_task_request(question='', draft_request=None):
     draft_request = draft_request or {}
+    if _looks_like_host_tool_install_request(question, draft_request):
+        return False
     strategy = str(draft_request.get('deployment_strategy') or draft_request.get('strategy') or '').strip().lower()
     if strategy == 'helm':
         return True
@@ -7210,6 +7215,29 @@ def _looks_like_helm_install_task_request(question='', draft_request=None):
         return True
     text = str(question or draft_request.get('request_summary') or '').lower()
     return any(keyword in text for keyword in ['helm', 'chart'])
+
+
+def _looks_like_host_tool_install_request(question='', draft_request=None):
+    draft_request = draft_request or {}
+    combined_text = _merge_task_request_text(draft_request.get('request_summary', ''), question).lower()
+    install_target = _extract_install_target_from_request(combined_text, draft_request)
+    if install_target not in {'helm'}:
+        return False
+    resource_type = str(draft_request.get('resource_type') or draft_request.get('target_type') or '').strip().lower()
+    if resource_type in {TaskResource.RESOURCE_HOST, HostTask.TARGET_HOST, 'server', 'machine'}:
+        return True
+    if draft_request.get('target_host_ids'):
+        return True
+    tool_context_keywords = [
+        '命令行', '命令行工具', '客户端', '工具', 'cli', 'client', 'binary',
+        '机器', '主机', '服务器', '宿主机', '节点', 'ecs', 'vm', 'linux',
+    ]
+    has_tool_context = any(keyword in combined_text for keyword in tool_context_keywords)
+    has_k8s_release_context = any(keyword in combined_text for keyword in [
+        'chart', 'release', 'helm release', 'helm chart', 'namespace', '命名空间',
+        '集群', 'k8s', 'kubernetes', 'helm 部署', '用helm部署', '用 helm 部署',
+    ])
+    return has_tool_context and not has_k8s_release_context
 
 
 def _looks_like_playbook_task_request(question='', draft_request=None):
@@ -7238,6 +7266,27 @@ def _build_install_shell_script(target):
     profile = _install_profile_for_target(target)
     service = profile.get('service') or ''
     binary = profile.get('binary') or profile.get('package') or target
+    if profile.get('installer') == 'helm_official_script':
+        return f'''#!/usr/bin/env bash
+set -euo pipefail
+
+APP_NAME="{profile['display']}"
+BINARY_NAME="{binary}"
+
+if command -v "$BINARY_NAME" >/dev/null 2>&1; then
+  echo "$APP_NAME already installed: $($BINARY_NAME version --short 2>&1 || true)"
+else
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 -o "$TMP_DIR/get-helm-3"
+  chmod 700 "$TMP_DIR/get-helm-3"
+  "$TMP_DIR/get-helm-3"
+fi
+
+command -v "$BINARY_NAME" >/dev/null 2>&1
+$BINARY_NAME version --short
+echo "$APP_NAME install check passed."
+'''.strip()
     service_block = ''
     if service:
         service_block = f'''
@@ -7329,16 +7378,23 @@ def _build_k8s_install_manifest(target, namespace='default', draft_request=None)
     port = int(draft_request.get('container_port') or draft_request.get('port') or profile.get('port') or 8080)
     replicas = int(draft_request.get('replicas') or 1)
     container_name = _safe_k8s_name(profile.get('container_name') or app_name)
-    label_block = f'''app.kubernetes.io/name: {app_name}
-    app.kubernetes.io/instance: {app_name}
-    app.kubernetes.io/managed-by: sxdevops-aiops'''
+    labels = [
+        ('app.kubernetes.io/name', app_name),
+        ('app.kubernetes.io/instance', app_name),
+        ('app.kubernetes.io/managed-by', 'sxdevops-aiops'),
+    ]
+
+    def label_block(indent):
+        prefix = ' ' * indent
+        return '\n'.join(f'{prefix}{key}: {value}' for key, value in labels)
+
     return f'''apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {app_name}
   namespace: {namespace}
   labels:
-    {label_block}
+{label_block(4)}
 spec:
   replicas: {replicas}
   selector:
@@ -7348,7 +7404,7 @@ spec:
   template:
     metadata:
       labels:
-        {label_block}
+{label_block(8)}
     spec:
       containers:
         - name: {container_name}
@@ -7374,7 +7430,7 @@ metadata:
   name: {app_name}
   namespace: {namespace}
   labels:
-    {label_block}
+{label_block(4)}
 spec:
   type: ClusterIP
   selector:
@@ -11823,6 +11879,15 @@ def _normalize_k8s_draft_request_for_generation(draft_request=None, original_que
     arguments = dict(draft_request or {})
     arguments['task_kind'] = _normalize_task_kind(arguments.get('task_kind'))
     combined_text = _merge_task_request_text(arguments.get('request_summary', ''), original_question)
+    if _looks_like_host_tool_install_request(combined_text, arguments):
+        arguments['task_kind'] = HostTask.TASK_RUN_COMMAND
+        arguments['resource_type'] = TaskResource.RESOURCE_HOST
+        arguments['target_type'] = HostTask.TARGET_HOST
+        for key in ['deployment_strategy', 'resource_kind', 'namespace', 'chart', 'chart_ref', 'helm_chart']:
+            arguments.pop(key, None)
+        if not arguments.get('software_name') and not arguments.get('package_name'):
+            arguments['software_name'] = _extract_install_target_from_request(combined_text, arguments)
+        return arguments
     if not (_looks_like_k8s_task_request(combined_text, arguments) or _draft_request_has_k8s_write_fields(arguments)):
         return arguments
 
@@ -12130,6 +12195,14 @@ def _build_k8s_target_snapshot_for_draft(k8s_targets):
     return build_ops_k8s_target_snapshot(k8s_targets)
 
 
+def _host_task_timeout_seconds(value=None, fallback=30):
+    try:
+        number = int(value if value not in (None, '') else fallback)
+    except (TypeError, ValueError):
+        number = fallback
+    return min(max(number, 5), 120)
+
+
 def _build_k8s_service_patch_draft(user, question='', draft_request=None):
     draft_request = draft_request or {}
     if not user_has_permissions(user, ['ops.k8s.view']):
@@ -12184,7 +12257,7 @@ def _build_k8s_service_patch_draft(user, question='', draft_request=None):
         'k8s_targets': k8s_targets,
         'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
         'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
-        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'timeout_seconds': _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 30),
         'host_count': len(k8s_targets),
         'risk_level': AIOpsPendingAction.RISK_HIGH,
         'request_summary': request_summary,
@@ -12255,7 +12328,7 @@ def _build_k8s_install_draft(user, question='', draft_request=None):
             'k8s_targets': k8s_targets,
             'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
             'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
-            'timeout_seconds': draft_request.get('timeout_seconds') or 300,
+            'timeout_seconds': _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 120),
             'host_count': len(k8s_targets),
             'risk_level': AIOpsPendingAction.RISK_HIGH,
             'request_summary': request_summary,
@@ -12306,7 +12379,7 @@ def _build_k8s_install_draft(user, question='', draft_request=None):
         'k8s_targets': k8s_targets,
         'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
         'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
-        'timeout_seconds': draft_request.get('timeout_seconds') or 180,
+        'timeout_seconds': _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 120),
         'host_count': len(k8s_targets),
         'risk_level': AIOpsPendingAction.RISK_HIGH,
         'request_summary': request_summary,
@@ -12361,7 +12434,7 @@ def _build_k8s_scale_workload_draft(user, question='', draft_request=None):
         'k8s_targets': k8s_targets,
         'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
         'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
-        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'timeout_seconds': _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 30),
         'host_count': len(k8s_targets),
         'risk_level': AIOpsPendingAction.RISK_HIGH,
         'request_summary': request_summary,
@@ -12410,7 +12483,7 @@ def _build_k8s_restart_pod_draft(user, question='', draft_request=None):
         'k8s_targets': k8s_targets,
         'execution_mode': HostTask.EXECUTION_MODE_K8S_API,
         'execution_strategy': HostTask.STRATEGY_STOP_ON_ERROR,
-        'timeout_seconds': draft_request.get('timeout_seconds') or 30,
+        'timeout_seconds': _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 30),
         'host_count': len(k8s_targets),
         'risk_level': AIOpsPendingAction.RISK_HIGH,
         'request_summary': request_summary,
@@ -12460,8 +12533,12 @@ def build_task_draft(user, question='', draft_request=None):
     request_summary = (draft_request.get('request_summary') or question or '').strip()
     install_target = _extract_install_target_from_request(question, draft_request)
     is_install_request = _looks_like_install_task_request(question, draft_request)
+    is_host_tool_install_request = _looks_like_host_tool_install_request(question, draft_request)
     is_shell_request = _looks_like_shell_task_request(question, draft_request)
     is_playbook_generation_request = _looks_like_playbook_generation_request(question, draft_request)
+
+    if is_host_tool_install_request:
+        task_kind = 'run_command'
 
     if task_kind == 'service_status' and (is_install_request or is_shell_request or is_playbook_generation_request):
         task_kind = 'run_playbook' if is_playbook_generation_request else 'run_command'
@@ -12488,7 +12565,7 @@ def build_task_draft(user, question='', draft_request=None):
     payload = {}
     execution_mode = HostTask.EXECUTION_MODE_SSH
     execution_strategy = HostTask.STRATEGY_CONTINUE
-    timeout_seconds = 30
+    timeout_seconds = _host_task_timeout_seconds(draft_request.get('timeout_seconds'), 30)
     title = '智能巡检任务'
     description = '由 AIOps 智能助手生成的任务草稿'
 
@@ -12574,6 +12651,7 @@ def build_task_draft(user, question='', draft_request=None):
     return _ensure_task_draft_title({
         'name': title,
         'description': description,
+        'target_type': HostTask.TARGET_HOST,
         'task_type': task_type,
         'payload': payload,
         'host_ids': host_ids,
@@ -12875,7 +12953,7 @@ def _build_task_center_draft_from_aiops_draft(draft, action=None):
         'task_type': task_type,
         'execution_mode': payload.get('execution_mode') or HostTask.EXECUTION_MODE_SSH,
         'execution_strategy': payload.get('execution_strategy') or HostTask.STRATEGY_CONTINUE,
-        'timeout_seconds': payload.get('timeout_seconds') or 30,
+        'timeout_seconds': _host_task_timeout_seconds(payload.get('timeout_seconds'), 30),
         'payload': payload.get('payload') or {},
         'host_ids': payload.get('host_ids') or [],
         'resource_ids': payload.get('resource_ids') or [],
@@ -12927,7 +13005,7 @@ def _create_host_task_record_from_draft(draft, user, session=None, request=None)
         target_count=len(hosts),
         execution_mode=payload.get('execution_mode') or HostTask.EXECUTION_MODE_SSH,
         execution_strategy=payload.get('execution_strategy') or HostTask.STRATEGY_CONTINUE,
-        timeout_seconds=payload.get('timeout_seconds') or 30,
+        timeout_seconds=_host_task_timeout_seconds(payload.get('timeout_seconds'), 30),
         trigger_source=HostTask.TRIGGER_SOURCE_AIOPS,
         lifecycle_status=HostTask.LIFECYCLE_PENDING_EXECUTION,
         risk_level=payload.get('risk_level') or HostTask.RISK_LOW,
@@ -14522,6 +14600,7 @@ def _build_runtime_prompt(config, active_mcp_servers, active_skills, user, mcp_d
         'K8s 写操作（Service 修改、NodePort/LoadBalancer/端口调整、Pod 重启、Deployment/StatefulSet 伸缩）应生成 K8s API 类型任务草稿；不要因为 query_k8s_resources 没查到目标 Service/Pod/Deployment 就拒绝生成草稿。',
         'K8s 写操作如果用户没有明确命名空间，且无法从参数中确定目标命名空间，必须提醒用户先补充命名空间，不能默认使用 default。',
         '安装、部署、初始化软件或中间件时，不要退化成 service_status 服务状态检查；如果用户明确说明 K8s/Kubernetes/集群/命名空间/Deployment/Helm/kubectl 部署，必须调用 generate_host_task 并使用 task_kind=k8s_command 生成 Kubernetes manifest、kubectl apply 或 Helm 风格 K8s 草稿，不能生成宿主机 yum/apt/systemctl 脚本。',
+        '如果用户说“在机器/主机/服务器上安装 helm 命令行工具/客户端/CLI”，这是安装 Helm 客户端工具，不是创建 Helm Release；必须生成主机 Shell 安装任务，task_kind=run_command，software_name=helm，不能生成 K8s/Helm 部署任务。',
         'K8s 安装部署类请求如果不确定软件的生产级参数，应在草稿中标记需查阅官方 Kubernetes/Helm 文档并生成可编辑 K8s 清单草稿；不要因此退回主机安装脚本。非 K8s 安装才默认 task_kind=run_command 生成 Shell 安装脚本；用户明确要求 Ansible/Playbook 时使用 task_kind=run_playbook。',
         '安装脚本草稿应包含包管理器探测、幂等安装、服务启动/enable（如适用）和安装后验证；如果模型不确定包名，应生成可编辑草稿并说明需要人工确认，而不是只检查服务状态。',
         '只要已经调用 generate_host_task，就要在最终回答里明确说明：是生成任务草稿，还是已经在任务中心创建真实任务。',
@@ -14537,6 +14616,7 @@ def _build_runtime_prompt(config, active_mcp_servers, active_skills, user, mcp_d
         '- “生成一份 Redis 巡检任务” => 调用 generate_host_task，而不是只做查询。',
         '- “帮我在电商测试环境安装 Redis” => 如果未提 K8s，先 query_task_resources 获取主机资源，再调用 generate_host_task，task_kind=run_command；不要生成 service_status。',
         '- “帮我在电商测试环境 K8s 集群部署 Redis / 在 production 命名空间安装 Redis” => 先 query_task_resources(resource_type=k8s)，再调用 generate_host_task，task_kind=k8s_command，script_purpose=install，namespace=production，software_name=Redis；生成 Kubernetes manifest/kubectl apply 草稿，不能生成宿主机安装脚本。',
+        '- “帮我在个人测试环境的机器上安装 helm 命令行工具” => 先 query_task_resources(resource_type=host)，再调用 generate_host_task，task_kind=run_command，script_purpose=install，software_name=helm；不要生成 Helm Release 或 K8s 部署草稿。',
         '- “生成 Ansible Playbook 安装 nginx” => 调用 generate_host_task，task_kind=run_playbook，填写 playbook_content；不要只生成 nginx 状态检查。',
         '- “修改 monitoring 命名空间下的 svc kube-prome type 为 NodePort” => 先用 query_task_resources(resource_type=k8s) 查任务资源底座，再调用 generate_host_task，task_kind=k8s_command，namespace=monitoring，service_name=kube-prome，patch={"spec":{"type":"NodePort"}}；系统会生成通用 K8s 命令任务并通过 K8s API 执行 kubectl patch。',
         '- “把 monitoring 下 deployment checkout 扩到 3 个副本 / 重启 monitoring 下 pod api-xxx” => 先查 query_task_resources(resource_type=k8s)，再调用 generate_host_task 生成 k8s_scale_workload 或 k8s_restart_pod 草稿；query_k8s_resources 不是前置条件。',
@@ -14737,13 +14817,13 @@ def _tool_specs_for_runtime(active_mcp_servers, user):
             'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}, 'status': {'type': 'string', 'enum': ['pending', 'running', 'success', 'partial', 'failed', 'canceled']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 10}}},
         },
         'generate_host_task': {
-            'description': '生成任务中心待执行任务草稿；当用户明确要求生成、创建、新建巡检任务、运维任务、安装/部署软件脚本或 K8s 修改/重启/伸缩任务时必须调用。安装/部署/初始化软件不要生成 service_status；用户明确说明 K8s/Kubernetes/集群/命名空间/Deployment/Helm/kubectl 部署时，必须 task_kind=k8s_command 并生成 Kubernetes manifest/kubectl apply/Helm 风格 K8s 草稿，不能生成宿主机 yum/apt/systemctl 脚本。不确定具体软件的 K8s 参数时，在草稿中提示需查阅官方 Kubernetes/Helm 文档并生成可编辑清单。非 K8s 安装才默认 task_kind=run_command；用户明确要求 Ansible/Playbook 时使用 task_kind=run_playbook。任务目标来自任务中心资源底座 query_task_resources，知识图谱只做环境辅助识别。K8s 资源修改统一生成 K8s API 类型任务；Service 修改可提供 namespace、service_name 和 patch，系统会生成 kubectl patch 命令并通过 K8s API 执行。',
+            'description': '生成任务中心待执行任务草稿；当用户明确要求生成、创建、新建巡检任务、运维任务、安装/部署软件脚本或 K8s 修改/重启/伸缩任务时必须调用。安装/部署/初始化软件不要生成 service_status；用户明确说明 K8s/Kubernetes/集群/命名空间/Deployment/Helm/kubectl 部署时，必须 task_kind=k8s_command 并生成 Kubernetes manifest/kubectl apply/Helm 风格 K8s 草稿，不能生成宿主机 yum/apt/systemctl 脚本。用户说在机器/主机/服务器上安装 helm 命令行工具/客户端/CLI 时，是安装 Helm 客户端工具，必须 task_kind=run_command、software_name=helm，不能生成 Helm Release。不确定具体软件的 K8s 参数时，在草稿中提示需查阅官方 Kubernetes/Helm 文档并生成可编辑清单。非 K8s 安装才默认 task_kind=run_command；用户明确要求 Ansible/Playbook 时使用 task_kind=run_playbook。任务目标来自任务中心资源底座 query_task_resources，知识图谱只做环境辅助识别。K8s 资源修改统一生成 K8s API 类型任务；Service 修改可提供 namespace、service_name 和 patch，系统会生成 kubectl patch 命令并通过 K8s API 执行。',
             'parameters': {
                 'type': 'object',
                 'required': ['request_summary'],
                 'properties': {
                     'request_summary': {'type': 'string', 'description': '原始任务诉求，例如“生成一份 Redis 巡检任务”或“修改 monitoring 命名空间 kube-prome Service type 为 NodePort”。'},
-                    'task_kind': {'type': 'string', 'enum': ['refresh_metrics', 'service_status', 'run_command', 'check_connection', 'run_playbook', 'k8s_command', 'k8s_scale_workload', 'k8s_restart_pod'], 'description': '任务类型。K8s/Kubernetes/集群/命名空间/Deployment/Helm/kubectl 安装部署必须填 k8s_command；非 K8s 安装才填 run_command；用户明确要求 Ansible 或 Playbook 时填 run_playbook；只有纯状态巡检才填 service_status。'},
+                    'task_kind': {'type': 'string', 'enum': ['refresh_metrics', 'service_status', 'run_command', 'check_connection', 'run_playbook', 'k8s_command', 'k8s_scale_workload', 'k8s_restart_pod'], 'description': '任务类型。K8s/Kubernetes/集群/命名空间/Deployment/Helm/kubectl 安装部署必须填 k8s_command；但在机器/主机/服务器上安装 helm 命令行工具/客户端/CLI 必须填 run_command。非 K8s 安装才填 run_command；用户明确要求 Ansible 或 Playbook 时填 run_playbook；只有纯状态巡检才填 service_status。'},
                     'environment': {'type': 'string', 'enum': ['prod', 'test', 'dev']},
                     'target_status': {'type': 'string', 'enum': ['all', 'offline']},
                     'service_name': {'type': 'string'},

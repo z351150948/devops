@@ -130,7 +130,7 @@
                   <el-input v-model="taskForm.payload.playbook_name" :placeholder="ui.playbookNamePlaceholder" />
                 </el-form-item>
                 <el-form-item :label="ui.timeout" class="form-col">
-                  <el-input-number v-model="taskForm.timeout_seconds" :min="5" :max="300" style="width: 100%" />
+                  <el-input-number v-model="taskForm.timeout_seconds" :min="5" :max="120" style="width: 100%" />
                 </el-form-item>
               </div>
               <el-form-item :label="ui.script">
@@ -513,7 +513,7 @@
                     <el-input v-model="templateDraft.payload.playbook_name" :placeholder="ui.playbookNamePlaceholder" />
                   </el-form-item>
                   <el-form-item :label="ui.timeout" class="form-col">
-                    <el-input-number v-model="templateDraft.timeout_seconds" :min="5" :max="300" style="width: 100%" />
+                    <el-input-number v-model="templateDraft.timeout_seconds" :min="5" :max="120" style="width: 100%" />
                   </el-form-item>
                 </div>
                 <el-form-item :label="ui.script">
@@ -1120,11 +1120,11 @@ const templateDialogSubmitText = computed(() => (templateEditorMode.value === 'e
 const templateDraftTypeLabel = computed(() => executionKindLabel(templateExecutionKind.value))
 const selectedResourceIds = computed(() => selectedRows.value.map(item => item.id))
 const selectedHostIds = selectedResourceIds
-const selectedK8sClusterIds = computed(() => selectedK8sRows.value.map(item => item.cluster || item.cluster_id || item.id).filter(Boolean))
+const selectedK8sClusterIds = computed(() => selectedK8sRows.value.map(item => k8sRowClusterId(item)).filter(Boolean))
 const selectedK8sSubmitRows = computed(() => selectedK8sRows.value.map(item => ({
-  cluster_id: item.cluster || item.cluster_id || item.id,
-  resource_id: item.id,
-  task_resource_id: item.id,
+  cluster_id: k8sRowClusterId(item),
+  resource_id: k8sRowResourceId(item),
+  task_resource_id: k8sRowResourceId(item),
   cluster_name: item.cluster_name || item.name || '',
   resource_name: item.name || '',
   environment_name: item.environment_name || item.environment_display || '',
@@ -1374,6 +1374,24 @@ function normalizeScriptTaskSource(source = {}) {
     },
   }
 }
+function clampTaskTimeout(value, fallback = 30) {
+  const number = Number(value || fallback)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(Math.max(Math.round(number), 5), 120)
+}
+function taskRequestErrorMessage(error, fallback) {
+  const data = error?.response?.data || {}
+  const timeoutMessage = Array.isArray(data.timeout_seconds) ? data.timeout_seconds[0] : data.timeout_seconds
+  if (timeoutMessage) return `超时时间需在 5-120 秒之间，已为你按 120 秒以内处理，请重新执行。`
+  if (Array.isArray(data.non_field_errors) && data.non_field_errors[0]) return data.non_field_errors[0]
+  if (data.detail) return data.detail
+  const firstKey = Object.keys(data).find(key => data[key])
+  if (firstKey) {
+    const value = Array.isArray(data[firstKey]) ? data[firstKey][0] : data[firstKey]
+    return value ? `${firstKey}: ${value}` : fallback
+  }
+  return fallback
+}
 function buildEditablePayload(payload = {}, executionKindValue = 'shell') {
   const patch = isPlainObject(payload.patch) ? payload.patch : {}
   const command = extractCommandText(payload)
@@ -1403,6 +1421,16 @@ function normalizePayloadByType(taskType, source = {}) {
   }
   if (taskType === 'k8s_scale_workload') return { workload_type: source.workload_type || 'deployment', replicas: Number(source.replicas || 0) }
   return {}
+}
+function k8sRowClusterId(item = {}) {
+  const value = item.cluster || item.cluster_id
+  if (value) return value
+  const id = String(item.id || '')
+  return id.startsWith('cluster:') ? id.slice(8) : id
+}
+function k8sRowResourceId(item = {}) {
+  const id = item.task_resource_id || item.resource_id || item.id
+  return Number.isInteger(Number(id)) ? Number(id) : undefined
 }
 function buildK8sSubmitTargets(payload = {}) {
   const kind = payload.resource_kind || payload.workload_type || (payload.service_name ? 'service' : 'cluster')
@@ -1621,7 +1649,7 @@ function buildTemplateDraft(source = {}) {
     description: normalizedSource.description || '',
     execution_mode: normalizedSource.execution_mode || (targetType === 'k8s' ? 'k8s_api' : (['run_command', 'run_playbook'].includes(taskType) ? 'ansible' : 'ssh')),
     execution_strategy: normalizedSource.execution_strategy || 'continue',
-    timeout_seconds: normalizedSource.timeout_seconds || 15,
+    timeout_seconds: clampTaskTimeout(normalizedSource.timeout_seconds, 15),
     payload: buildEditablePayload(normalizedSource.payload || {}, detectExecutionKind(normalizedSource)),
   }
 }
@@ -1636,7 +1664,7 @@ function applyTemplate(template) {
     description: normalizedTemplate.description || '',
     execution_mode: normalizedTemplate.execution_mode || (normalizedTemplate.task_type?.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(normalizedTemplate.task_type) ? 'ansible' : 'ssh')),
     execution_strategy: normalizedTemplate.execution_strategy,
-    timeout_seconds: normalizedTemplate.timeout_seconds,
+    timeout_seconds: clampTaskTimeout(normalizedTemplate.timeout_seconds),
     payload: buildEditablePayload(normalizedTemplate.payload || {}, detectedExecutionKind),
   }
   clearSelection()
@@ -1872,7 +1900,7 @@ function buildPrefillDraftFromTask(task = {}) {
     task_type: taskType,
     execution_mode: normalizedTask.execution_mode || (targetType === 'k8s' ? 'k8s_api' : 'ansible'),
     execution_strategy: normalizedTask.execution_strategy || 'continue',
-    timeout_seconds: normalizedTask.timeout_seconds || 30,
+    timeout_seconds: clampTaskTimeout(normalizedTask.timeout_seconds),
     payload: { ...(normalizedTask.payload || {}) },
     target_refs: targetRefs,
     target_hosts: targetSnapshot,
@@ -1904,7 +1932,7 @@ async function applyTaskDraft(taskDraft, sourceLabel = '任务草稿') {
     description: scriptTaskDraft.description || '',
     execution_mode: scriptTaskDraft.execution_mode || (scriptTaskDraft.task_type?.startsWith('k8s_') ? 'k8s_api' : (['run_command', 'run_playbook'].includes(scriptTaskDraft.task_type) ? 'ansible' : 'ssh')),
     execution_strategy: scriptTaskDraft.execution_strategy || 'continue',
-    timeout_seconds: scriptTaskDraft.timeout_seconds || 30,
+    timeout_seconds: clampTaskTimeout(scriptTaskDraft.timeout_seconds),
     payload: buildEditablePayload(scriptTaskDraft.payload || {}, detectedExecutionKind),
   }
   prefillDraftTargetRefs.value = Array.isArray(scriptTaskDraft.target_refs) ? scriptTaskDraft.target_refs : []
@@ -1951,7 +1979,7 @@ async function submitTemplateDraft() {
     payload: sanitizePayload(payload),
     execution_mode: templateDraft.value.execution_mode,
     execution_strategy: templateDraft.value.execution_strategy,
-    timeout_seconds: templateDraft.value.timeout_seconds,
+    timeout_seconds: clampTaskTimeout(templateDraft.value.timeout_seconds),
   }
   creatingTemplate.value = true
   try {
@@ -2037,7 +2065,7 @@ async function saveTaskAsTemplate(task) {
       payload: sanitizePayload(payload),
       execution_mode: normalizedTask.execution_mode,
       execution_strategy: normalizedTask.execution_strategy,
-      timeout_seconds: normalizedTask.timeout_seconds,
+      timeout_seconds: clampTaskTimeout(normalizedTask.timeout_seconds),
     })
     ElMessage.success(ui.saveTemplateSuccess)
     await fetchTemplates()
@@ -2059,7 +2087,7 @@ async function saveCurrentAsTemplate() {
   } catch (error) { return }
   savingTemplate.value = true
   try {
-    const created = await createHostTaskTemplate({ name: templateName, target_type: taskForm.value.target_type, task_type: taskForm.value.task_type, description: taskForm.value.description, payload: sanitizePayload(payload), execution_mode: taskForm.value.execution_mode, execution_strategy: taskForm.value.execution_strategy, timeout_seconds: taskForm.value.timeout_seconds })
+    const created = await createHostTaskTemplate({ name: templateName, target_type: taskForm.value.target_type, task_type: taskForm.value.task_type, description: taskForm.value.description, payload: sanitizePayload(payload), execution_mode: taskForm.value.execution_mode, execution_strategy: taskForm.value.execution_strategy, timeout_seconds: clampTaskTimeout(taskForm.value.timeout_seconds) })
     ElMessage.success(ui.saveTemplateSuccess)
     await fetchTemplates()
     currentTemplate.value = created
@@ -2165,7 +2193,7 @@ async function submitTask() {
       description: taskForm.value.description,
       execution_mode: taskForm.value.execution_mode,
       execution_strategy: taskForm.value.execution_strategy,
-      timeout_seconds: taskForm.value.timeout_seconds,
+      timeout_seconds: clampTaskTimeout(taskForm.value.timeout_seconds),
       selection_filters: {
         ...targetFilters.value,
         ...(hasPrefillDraft.value ? {
@@ -2194,7 +2222,7 @@ async function submitTask() {
     activeTab.value = 'history'
     await Promise.all([fetchStats(), fetchTasks()])
   } catch (error) {
-    ElMessage.error(error?.response?.data?.detail || ui.executeTaskFailed)
+    ElMessage.error(taskRequestErrorMessage(error, ui.executeTaskFailed))
   } finally { submitting.value = false }
 }
 async function handleRerun(task) {

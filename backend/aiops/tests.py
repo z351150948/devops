@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest import mock
 
 import requests
+import yaml
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
@@ -7932,6 +7933,80 @@ class AIOpsApiTests(TestCase):
         self.assertIn('install check passed', draft['payload']['command'])
         self.assertIn('安装 Redis', draft['name'])
 
+    def test_build_task_draft_installs_helm_cli_on_host_not_helm_release(self):
+        env = TaskResourceGroup.objects.create(name='个人测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='personal-test-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.193',
+            ssh_user='root',
+        )
+        question = '帮我在个人测试环境的机器上安装helm命令行工具'
+
+        draft = build_task_draft(
+            self.user,
+            question,
+            {
+                'request_summary': question,
+                'resource_environment': '个人测试环境',
+                'target_resource_ids': [resource.id],
+            },
+        )
+
+        self.assertNotIn('error', draft)
+        self.assertEqual(draft.get('target_type'), HostTask.TARGET_HOST)
+        self.assertEqual(draft['task_type'], HostTask.TASK_RUN_COMMAND)
+        self.assertEqual(draft['execution_mode'], HostTask.EXECUTION_MODE_ANSIBLE)
+        self.assertEqual(draft['payload']['script_purpose'], 'install')
+        self.assertEqual(draft['payload']['software_name'], 'Helm')
+        self.assertEqual(draft['payload']['package_name'], 'helm')
+        self.assertEqual(draft['payload']['service_name'], '')
+        self.assertIn('get-helm-3', draft['payload']['command'])
+        self.assertIn('version --short', draft['payload']['command'])
+        self.assertNotIn('helm upgrade --install', draft['payload']['command'])
+        self.assertNotEqual(draft.get('target_type'), HostTask.TARGET_K8S)
+        self.assertNotEqual(draft['payload'].get('resource_kind'), 'helm_release')
+
+    def test_host_helm_cli_install_overrides_wrong_k8s_task_kind(self):
+        env = TaskResourceGroup.objects.create(name='个人测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
+        resource = TaskResource.objects.create(
+            name='personal-test-node',
+            resource_type=TaskResource.RESOURCE_HOST,
+            environment=env,
+            status=TaskResource.STATUS_ACTIVE,
+            ip_address='120.26.213.194',
+            ssh_user='root',
+        )
+        session = AIOpsChatSession.objects.create(user=self.user, title='helm-cli-install')
+        question = '帮我在个人测试环境的机器上安装helm命令行工具'
+        user_message = AIOpsChatMessage.objects.create(session=session, role='user', content=question)
+
+        result = _run_tool_call(
+            session,
+            user_message,
+            self.user,
+            'generate_host_task',
+            {
+                'request_summary': question,
+                'resource_environment': '个人测试环境',
+                'target_resource_ids': [resource.id],
+                'task_kind': 'k8s_command',
+                'script_purpose': 'install',
+                'software_name': 'helm',
+            },
+        )
+
+        draft = result['pending_action_draft']
+        self.assertEqual(result['message_type'], AIOpsChatMessage.TYPE_ACTION)
+        self.assertEqual(draft.get('target_type'), HostTask.TARGET_HOST)
+        self.assertEqual(draft['task_type'], HostTask.TASK_RUN_COMMAND)
+        self.assertEqual(draft['payload']['script_purpose'], 'install')
+        self.assertEqual(draft['payload']['software_name'], 'Helm')
+        self.assertIn('get-helm-3', draft['payload']['command'])
+        self.assertNotIn('helm upgrade --install', draft['payload']['command'])
+
     def test_generate_host_task_tool_builds_install_script_from_request_summary(self):
         env = TaskResourceGroup.objects.create(name='电商测试环境', group_type=TaskResourceGroup.GROUP_ENVIRONMENT)
         resource = TaskResource.objects.create(
@@ -7977,6 +8052,7 @@ class AIOpsApiTests(TestCase):
             {
                 'request_summary': question,
                 'resource_environment': '电商测试环境',
+                'timeout_seconds': 300,
             },
         )
 
@@ -7992,10 +8068,14 @@ class AIOpsApiTests(TestCase):
         self.assertIn('kind: Deployment', draft['payload']['manifest'])
         self.assertIn('kind: Service', draft['payload']['manifest'])
         self.assertIn('image: redis:7-alpine', draft['payload']['manifest'])
+        manifest_documents = list(yaml.safe_load_all(draft['payload']['manifest']))
+        self.assertEqual([item['kind'] for item in manifest_documents], ['Deployment', 'Service'])
+        self.assertIn('spec', manifest_documents[0]['spec']['template'])
         self.assertIn('kubectl apply -f -', draft['payload']['command'])
         self.assertNotIn('apt-get install', draft['payload']['command'])
         self.assertNotIn('yum install', draft['payload']['command'])
         self.assertNotIn('systemctl enable', draft['payload']['command'])
+        self.assertEqual(draft['timeout_seconds'], 120)
         self.assertEqual(draft['k8s_targets'][0]['kind'], 'deployment')
         self.assertEqual(draft['k8s_targets'][0]['namespace'], 'production')
 
@@ -8084,6 +8164,7 @@ class AIOpsApiTests(TestCase):
         self.assertIn('helm upgrade --install redis bitnami/redis', draft['payload']['command'])
         self.assertNotIn('kubectl apply -f -', draft['payload']['command'])
         self.assertNotIn('apt-get install', draft['payload']['command'])
+        self.assertEqual(draft['timeout_seconds'], 120)
         self.assertEqual(draft['k8s_targets'][0]['kind'], 'helm_release')
 
     def test_k8s_install_helm_request_without_chart_requires_official_docs(self):
