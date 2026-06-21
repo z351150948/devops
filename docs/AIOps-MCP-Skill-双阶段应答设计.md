@@ -24,13 +24,13 @@ AIOps 智能助手需要同时满足两类目标：
 
 当前平台内置 MCP 能力包括：
 
-- CMDB MCP：`query_cmdb_items`
+- 资源上下文 MCP：`query_task_resources`
 - 可观测性 MCP：`query_observability`
 - 工单系统 MCP：`query_workorders`
 - 任务中心 MCP：`query_task_center`、`generate_host_task`
 - 时间中心 MCP：`query_event_wall`
 - 容器管理 MCP：`query_container_assets`
-- 中间件 MCP：`query_middleware_assets`
+- 容器 MCP：`query_container_status`
 
 LLM 看到的是工具 schema，并通过 tool-calling 决定调用哪个工具。后端只负责按 MCP 工具注册表执行被选中的工具，不根据用户原始问题做关键词路由。
 
@@ -102,9 +102,9 @@ environment:prod service:order-center 最近异常 告警 日志 链路 变更
 - LLM 第二阶段：按 Skill 模板整形答案。
 - 代码兜底：在二阶段失败时保证可用、可信的回复。
 
-后续可以把不同类型问题的模板继续配置化，例如：
+不同类型问题的模板可以持续配置化，例如：
 
-- 成本分析模板
+- 工单汇总模板
 - 告警处置模板
 - 工单汇总模板
 - K8s 异常模板

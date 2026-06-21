@@ -1,191 +1,112 @@
-# SxDevOps 运维与平台工程演示项目
+# SxDevOps 智能运维 Agent 平台
 
-SxDevOps 是一个基于 `Django + Django REST framework + Channels + Vue 3 + Element Plus` 的平台工程与运维一体化演示项目，覆盖 **CMDB、应用发布、容器运维、日志与可观测性、SQL 审计、工具市场、IaC 资源编排** 等核心场景。
+SxDevOps 是一套面向真实运维现场的智能运维 Agent 平台，基于 `Django + Django REST framework + Channels + Vue 3 + Element Plus` 构建。项目以 **AIOps、可观测性、事件中心、任务中心** 四个模块为主线，把告警、日志、链路、事件和自动化任务组织成一条可解释、可审计、可确认的处置链路。
 
-这个仓库不是单页 Demo，也不是纯 CRUD 后台。它把资源治理、变更执行、排障分析和权限控制串成了一条完整闭环，适合用于：
+在线体验：[https://www.sxdevops.top](https://www.sxdevops.top)
 
-- 企业内部运维门户原型
-- 平台工程 / DevOps / SRE 能力演示
-- 交付、售前、汇报场景展示
-- 个人求职作品集或全栈工程项目样例
+## 核心亮点
 
-## 项目亮点
+- **AIOps 智能体**：以 LLM tool-calling 为核心，通过内置 MCP 工具、Skill 模板、Action 预检和二阶段回答，把平台事实转化为可追溯的诊断结论、证据摘要和待确认动作。
+- **可观测性事实层**：统一承接指标、日志、链路追踪、Grafana 看板、告警和系统态势，让智能体能按同一套事实模型完成取证、关联和解释。
+- **事件中心**：沉淀告警变化、关键写操作、任务结果、发布结果和失败线索，形成可过滤、可复盘、可回放的事件现场。
+- **任务中心**：承接主机巡检、批量命令、脚本模板、执行历史和任务草稿；智能体生成的动作必须经过用户确认后才进入执行链路。
+- **工单系统**：提供应用发布、SQL 审计、事务工单和审批流能力，作为变更、审批和执行留痕的配套闭环。
+- **容器管理**：支持 K8s 集群、工作负载、Pod 终端、ConfigMap / Secret 与 Docker 环境管理，补齐容器化运维场景。
+- **权限与审计体系**：后端接口、前端路由、菜单、按钮和 WebSocket 场景均接入 RBAC；会话、工具调用、待确认动作、任务执行和关键操作都可审计。
 
-- **CMDB 基座**：统一管理资源树、配置项、主机资产、资源拓扑、成本分析与资源优化。
-- **应用发布闭环**：支持自研应用发布单、审批流、Docker / K8s 双模式部署、灰度 / 批次、回滚、重新执行，并自动回写 CMDB 关系。
-- **可观测性平台**：新增统一的 `可观测性平台` 菜单，将日志中心、告警中心、链路追踪、Grafana 大屏聚合到一个入口下。
-- **事件墙**：新增独立的 `事件墙` 菜单，聚焦最终执行结果与关键写操作，支持按业务线、环境、应用做失败事件定位与操作审计。
-- **链路追踪已接入 SkyWalking**：支持 SkyWalking OAP GraphQL 查询，未配置或不可达时自动回落到演示数据。
-- **日志与告警联动**：日志中心支持查询收藏、历史记录、趋势图；告警、日志、链路、Grafana 之间支持带条件联动跳转。
-- **容器运维增强**：K8s 集群概览、Pod Terminal、工作负载扩缩容、配置回滚，Docker 容器与镜像治理。
-- **工具市场双模式部署**：内置中间件与运行环境模板，可按 `Docker Compose 单机` 或 `Kubernetes` 部署。
-- **IaC 编排**：支持按模块配置云资源，生成 Terraform 工程并同步 CMDB。
-- **统一 RBAC**：权限注册、后端接口校验、前端路由与菜单可见性保持一致。
+## 产品截图
 
-## 功能总览
+### AI Agent 与可观测性总览
 
-### 1. 可观测性平台
+![AI Agent 与可观测性总览](docs/screenshots/ai-agent-observability-overview.png)
 
-可观测性平台是这次 README 更新的重点，当前包含：
+### 日志与排障取证
 
-- **平台总览**：统一展示日志、告警、Trace、Grafana 看板的摘要、入口和最近活动。
-- **日志中心**：页内 Tab 切换日志查询与日志数据源管理，支持 `ELK / Loki / 阿里云 SLS`。
-- **告警中心**：支持级别、状态筛选，并可一键跳转日志、链路追踪和 Grafana 大屏做进一步排障。
-- **链路追踪**：对接 SkyWalking，支持服务筛选、Trace 搜索、拓扑图、Span 详情、异常 Span 与慢调用聚焦。
-- **Grafana 大屏**：支持推荐看板列表、筛选、分组浏览、嵌入和外链打开。
+![日志与排障取证](docs/screenshots/logs-query.png)
 
-当前可观测性平台内部已经形成了常用排障链路：
+### 事件中心
 
-`告警中心 -> 日志中心 -> 链路追踪 -> Grafana 大屏`
+![事件中心](docs/screenshots/event-wall.png)
 
-### 2. CMDB
+### 任务资源与执行入口
 
-- CI 类型与配置项管理
-- 主机资产与主机申请
-- 统一资源树
-- 资源拓扑
-- 成本分析
-- 资源优化建议
-- 主机连通性测试与 WebShell
+![任务资源与执行入口](docs/screenshots/task-resources.png)
 
-### 3. 应用发布
+更多截图保存在 [docs/screenshots](docs/screenshots)。
 
-- 自研应用发布单
-- 审批流与发布状态跟踪
-- Docker / K8s 双模式
-- 标准发布、灰度发布、批次发布
-- 回滚、重新执行、下线
-- 发布后自动建立 CMDB 关系
+## 功能模块
 
-### 4. 容器与中间件运维
+### AIOps
 
-- Kubernetes 集群概览
-- Pod 日志、事件、YAML 与浏览器内 Pod Terminal
-- ConfigMap / Secret 在线编辑、Diff 预览与回滚
-- Docker 容器启停、日志、Inspect、镜像治理
-- Nginx 环境、域名、证书与配置发布
+- 智能助手：支持自然语言排障、证据查询、工单汇总、任务草稿生成。
+- 知识图谱：沉淀运维对象、关系、上下文和故障知识。
+- 智能体配置：管理模型、MCP 工具、Skill、Action 和运行策略。
+- 智能体审计：追踪会话、工具调用、模型调用、待确认动作和执行结果。
 
-### 5. 工具市场
+### 可观测性
 
-执行 `python manage.py seed_templates` 后，内置模板包括：
+- 可视化与系统态势：提供平台级状态入口和 Grafana 看板承接。
+- 指标查询：面向 Prometheus 等指标源组织查询和证据包。
+- 日志中心：支持日志检索、过滤、上下文定位和排障分析。
+- 链路追踪：接入 Trace 数据源，辅助定位跨服务调用问题。
+- 数据源管理：维护指标、日志、Trace 和关联配置。
+- 告警中心：承接告警事件、告警规则和排障入口。
 
-- MySQL
-- Redis
-- PostgreSQL
-- MongoDB
-- Nginx
-- Jenkins
-- GitLab
-- Grafana
-- Elasticsearch
-- Loki
-- JumpServer
-- Nacos
-- XXL-Job
-- Java / Python / Go / Node.js 运行环境
+### 事件中心
 
-这些模板支持直接选择部署模式，并用于演示双模式交付流程。
+- 事件墙：按系统、环境、应用、级别、结果和时间窗口过滤事件。
+- 事件源：管理平台事件接入与事件标准化配置。
+- 复盘线索：将关键结果、失败原因和操作上下文沉淀为可追溯现场。
 
-### 6. SQL 审计
+### 任务中心
 
-- 多数据源管理
-- SQL 工单
-- 只读查询
-- `MySQL`、`MongoDB`、`PolarDB` 支持
-- RBAC 审批与查询控制
+- 任务工作台：执行主机任务、脚本任务、批量命令和运维模板。
+- 资源底座：维护任务执行所需的主机、资源分组和连接上下文。
+- 执行审计：记录任务输入、目标范围、执行结果和失败详情。
+- 计划任务：支持定时任务能力，默认按产品配置隐藏入口。
 
-### 7. IaC 资源编排
+### 配套模块
 
-- 云厂商、区域、可用区配置
-- VPC、子网、开放端口
-- ECS / 云主机编排
-- RDS、Redis、SLB / ELB、NAT 网关、对象存储
-- Terraform 文件预览与编辑
-- `init / plan / apply / destroy`
-- 同步 CMDB
-
-## README 展示截图
-
-README 当前使用以下页面截图：
-
-| 页面 | 截图文件 | 用途 |
-| --- | --- | --- |
-| 仪表盘 | `docs/screenshots/dashboard.png` | 展示首页整体运营视角 |
-| CMDB | `docs/screenshots/cmdb.png` | 展示资源树、配置项和治理能力 |
-| 日志 / SQL | `docs/screenshots/logs-or-sql.png` | 展示日志中心与审计排障能力 |
-| 事件墙 | `docs/screenshots/event-wall.png` | 展示失败事件定位、操作审计与范围筛选能力 |
-| IaC 编排 | `docs/screenshots/iac-orchestration.png` | 展示 Terraform 方案设计与执行 |
-| K8s Pod Terminal | `docs/screenshots/k8s-pod-terminal.png` | 展示浏览器内实时终端能力 |
-
-### 仪表盘
-
-![仪表盘](docs/screenshots/dashboard.png)
-
-用于展示平台首页的核心指标、摘要卡片与关键入口。
-
-### CMDB
-
-![CMDB 页面](docs/screenshots/cmdb.png)
-
-用于展示 CMDB 的资源树、配置项管理和资源治理能力。
-
-### 日志 / SQL
-
-![日志与 SQL 页面](docs/screenshots/logs-or-sql.png)
-
-用于展示日志中心与 SQL 审计的查询能力。当前 README 对这一页的定位已经扩展为“可观测性排障入口”，与新的可观测性平台能力保持一致。
-
-### 事件墙
-
-![事件墙](docs/screenshots/event-wall.png)
-
-用于展示事件墙的总览能力：只保留最终执行结果与关键写操作，默认过滤掉未执行的驳回审批流，并支持按业务线、环境、应用快速收敛失败事件范围。
-
-### IaC 编排
-
-![IaC 编排](docs/screenshots/iac-orchestration.png)
-
-用于展示 Terraform 方案设计、预览、执行与 CMDB 同步流程。
-
-### K8s Pod Terminal
-
-![K8s Pod Terminal](docs/screenshots/k8s-pod-terminal.png)
-
-用于展示浏览器内 Pod Shell、实时终端交互和 RBAC 控制能力。
+- 工单系统：应用发布、SQL 审计、事务工单和审批流。
+- 容器管理：K8s 集群、Pod 终端和 Docker 环境管理。
+- 系统管理：用户、角色、权限、模块显示配置和操作审计。
 
 ## 技术架构
 
-- **后端**：`Django` + `Django REST framework` + `Channels`
-- **前端**：`Vue 3` + `Pinia` + `Vue Router` + `Element Plus`
-- **实时能力**：WebSocket 用于 Pod Terminal、WebShell 等场景
-- **执行能力**：SSH、Docker Compose、Kubernetes Python Client、Terraform
-- **数据库**：默认本地开发使用 `SQLite`
-
-## RBAC 权限体系
-
-项目内置统一 RBAC 权限模型，新增功能遵循同一套约束：
-
-- 权限统一注册在 `backend/rbac/registry.py`
-- 后端接口统一做权限校验
-- 前端路由、侧边栏和页面操作按钮基于权限动态收敛
-- WebSocket 场景在服务端做二次校验
-
-本次新增的可观测性能力也已经纳入 RBAC：
-
-- `ops.trace.view`
-- `ops.grafana.view`
-- `eventwall.view`
-
-## 典型使用场景
-
-- **企业内部运维门户**：统一承载资产、发布、日志、告警、链路和审计能力
-- **平台工程演示项目**：展示资源治理、变更执行、排障链路和 IaC 的完整闭环
-- **交付 / 售前演示环境**：通过真实页面快速说明平台化建设思路
-- **求职作品集项目**：突出全栈工程能力、运维场景理解与产品化思维
+- **后端**：`Django`、`Django REST framework`、`Daphne`、`Channels`
+- **前端**：`Vue 3`、`Pinia`、`Vue Router`、`Element Plus`、`ECharts`
+- **数据层**：本地开发默认 `SQLite`，容器化部署默认 `MySQL`
+- **缓存与实时协同**：`Redis` 用于缓存与 Channels 消息层
+- **外部集成**：Kubernetes API、Docker、SSH、Prometheus / Grafana、SkyWalking、Loki / ELK / SLS
 
 ## 快速启动
 
-### 1. 启动后端
+### Docker Compose 一键部署
+
+仓库已内置应用镜像、MySQL、Redis 的编排配置：
+
+```bash
+docker compose up -d --build
+```
+
+启动后访问：
+
+- 前端与 API：`http://localhost:8000`
+- MySQL、Redis 由 Compose 内部网络提供，后端默认连接 `mysql:3306` 和 `redis:6379`
+
+首次启动容器会自动执行：
+
+```bash
+python manage.py migrate
+python manage.py seed_data
+python manage.py seed_templates
+```
+
+如需关闭初始化数据，可在 `docker-compose.yml` 中把 `SXDEVOPS_SEED_DATA` 或 `SXDEVOPS_SEED_TEMPLATES` 设置为 `0`。
+
+### 本地开发启动
+
+后端：
 
 ```bash
 cd backend
@@ -196,18 +117,7 @@ python manage.py seed_templates
 python -m daphne -b 0.0.0.0 -p 8000 sxdevops.asgi:application
 ```
 
-后端默认地址：`http://localhost:8000`
-
-可选 Redis 缓存：
-
-```bash
-# 不配置时默认使用本进程内存缓存，适合本地开发
-export REDIS_URL=redis://127.0.0.1:6379/0
-```
-
-配置后，K8s 资源缓存、AIOps 知识图谱缓存和 MCP 调用限流等会共享到 Redis。
-
-### 2. 启动前端
+前端：
 
 ```bash
 cd frontend
@@ -215,43 +125,54 @@ npm install
 npm run dev
 ```
 
-前端默认地址：`http://localhost:3000`
+本地开发地址：
 
-### 2.1 一键启动（Windows）
+- 前端：`http://localhost:3000`
+- 后端：`http://localhost:8000`
 
-在仓库根目录可直接使用：
+Windows 下也可以在仓库根目录执行：
 
 ```powershell
 .\start-dev.ps1
 ```
 
-或双击：
+## 体验账号
 
-```bat
-start-dev.cmd
+执行初始化数据后可使用以下账号登录，默认密码均为：
+
+```text
+Admin@123456
 ```
 
-停止服务：
-
-```powershell
-.\stop-dev.ps1
-```
-
-脚本会同时启动前端 `3000` 与后端 `8000`，并将日志写入 `.runlogs/`。
-
-### 3. 常用演示账号
-
-执行 `python manage.py seed_data` 后会自动补齐演示数据。默认密码均为：
-
-`Admin@123456`
-
-可使用的演示账号包括：
+常用账号：
 
 - `admin`
 - `ops_demo`
 - `dev_demo`
 - `audit_demo`
 - `viewer_demo`
+
+## 配置说明
+
+后端支持通过环境变量或 `backend/config.json` 覆盖关键配置。
+
+常用环境变量：
+
+```bash
+DATABASE_ENGINE=mysql
+MYSQL_HOST=mysql
+MYSQL_PORT=3306
+MYSQL_DATABASE=sxdevops
+MYSQL_USER=sxdevops
+MYSQL_PASSWORD=sxdevops_password
+REDIS_URL=redis://redis:6379/0
+CHANNEL_REDIS_URL=redis://redis:6379/1
+SECRET_KEY=change-me
+DEBUG=0
+ALLOWED_HOSTS=localhost,127.0.0.1
+```
+
+本地开发不配置数据库时会自动使用 `backend/db.sqlite3`；Docker Compose 默认使用 MySQL 与 Redis。
 
 ## 常用命令
 
@@ -262,25 +183,23 @@ cd backend && python manage.py test
 # 前端构建
 cd frontend && npm run build
 
-# 重新生成工具市场模板
-cd backend && python manage.py seed_templates
-
-# 重新生成演示数据
+# 重新生成基础数据
 cd backend && python manage.py seed_data
+
+# 重新生成智能体与任务模板
+cd backend && python manage.py seed_templates
 ```
 
-## 相关文档
+## 核心设计文档
 
-- `docs/应用发布执行逻辑与时序图.md`
-- `docs/应用发布执行逻辑-汇报版.md`
-- `docs/工具市场部署模式.md`
-- `docs/screenshots/README.md`
+- [AIOps 2.0 升级优化方案](docs/AIOps2.0升级优化方案.md)
+- [AIOps 2.1 指标证据包设计](docs/AIOps2.1指标证据包设计.md)
+- [AIOps 2.1.2 Action Handler 与上下文 Copilot 设计](docs/AIOps2.1.2-Action-Handler与上下文Copilot设计.md)
+- [AIOps MCP + Skill 双阶段应答设计](docs/AIOps-MCP-Skill-双阶段应答设计.md)
+- [AIOps 智能体实现说明](docs/AIOps智能体实现说明.md)
 
-## 适合怎么介绍这个项目
+## 开源提示
 
-如果要在面试、汇报或路演中介绍这个仓库，可以按下面的顺序展开：
-
-1. 这是一个面向企业内部的统一运维与平台工程演示平台。
-2. 核心闭环是 `CMDB -> 变更执行 -> 可观测性排障 -> IaC 资源交付`。
-3. 项目不是纯 CRUD，包含审批流、K8s API、SSH 执行、WebSocket 交互和 CMDB 联动。
-4. 新增的可观测性平台把日志、告警、链路追踪和 Grafana 大屏收拢到了一个统一入口下，更适合做真实运维场景演示。
+- `backend/sxdevops/settings.py` 默认适配本地开发；生产环境请显式配置 `SECRET_KEY`、`DEBUG=0`、`ALLOWED_HOSTS`、数据库和 Redis。
+- 不要提交真实云账号、数据库密码、Kubeconfig、SSH 密钥、Grafana Token 或其他生产凭据。
+- 运行日志、SQLite 数据库、临时截图和本地配置已加入忽略规则，不应进入版本库。

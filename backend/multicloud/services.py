@@ -229,11 +229,11 @@ def _inventory(environment):
         'shared': '10.40',
     }.get(environment.environment_type, '10.50')
     public_prefix = {
-        'aliyun': '47.96',
-        'tencent': '119.29',
-        'huawei': '124.70',
-        'baidu': '180.76',
-        'aws': '54.251',
+        'aliyun': '198.18',
+        'tencent': '198.19',
+        'huawei': '198.18',
+        'baidu': '198.19',
+        'aws': '198.18',
     }.get(provider, '198.18')
     prefix = environment.code
     rows = [

@@ -165,7 +165,7 @@ class MultiCloudTests(TestCase):
                         'status': 'running',
                         'charge_type': 'on_demand',
                         'private_ip': '10.10.1.10',
-                        'public_ip': '54.251.10.10',
+                        'public_ip': '203.0.113.54',
                         'vpc_name': 'vpc-live',
                         'spec': 't3.large',
                         'cpu': 2,

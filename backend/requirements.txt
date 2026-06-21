@@ -9,6 +9,7 @@ pymongo>=4.8
 cryptography>=42.0
 paramiko>=3.4
 channels>=4.0
+channels-redis>=4.2
 daphne>=4.1
 kubernetes>=31.0
 aliyun-python-sdk-ecs>=4.24
