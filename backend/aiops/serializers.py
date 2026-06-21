@@ -166,7 +166,7 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
             'metric_datasource_ids', 'log_datasource_ids', 'tracing_datasource_ids', 'observability_link_ids', 'alert_environments',
             'posture_environments', 'k8s_cluster_ids', 'k8s_namespaces', 'docker_host_ids',
             'task_resource_environment_ids',
-            'is_enabled', 'created_by', 'updated_by', 'created_at', 'updated_at',
+            'is_default', 'is_enabled', 'created_by', 'updated_by', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_by', 'updated_by', 'created_at', 'updated_at']
 
@@ -248,6 +248,10 @@ class AIOpsKnowledgeEnvironmentSerializer(serializers.ModelSerializer):
         )
         if not has_association:
             raise serializers.ValidationError('请至少选择一个事件中心、看板目录、日志、链路、告警、系统态势、K8s 集群、Docker 环境或任务资源底座来源')
+        is_default = attrs.get('is_default', getattr(instance, 'is_default', False))
+        is_enabled = attrs.get('is_enabled', getattr(instance, 'is_enabled', True))
+        if is_default and not is_enabled:
+            raise serializers.ValidationError({'is_default': '停用图谱不能设为默认'})
         return attrs
 
 

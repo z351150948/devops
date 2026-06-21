@@ -1292,6 +1292,49 @@ class AIOpsApiTests(TestCase):
         self.assertEqual(env_entry['resource_count'], 1)
         self.assertNotIn('task_resource_systems', response.data)
 
+    def test_knowledge_environment_default_is_unique_and_ordered_first(self):
+        first = AIOpsKnowledgeEnvironment.objects.create(name='alpha-env', alert_environments=['alpha'])
+        second = AIOpsKnowledgeEnvironment.objects.create(name='beta-env', alert_environments=['beta'])
+
+        response = self.client.patch(
+            f'/api/aiops/knowledge-environments/{second.id}/',
+            {'is_default': True},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertFalse(first.is_default)
+        self.assertTrue(second.is_default)
+
+        list_response = self.client.get('/api/aiops/knowledge-environments/')
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.data[0]['name'], 'beta-env')
+        self.assertTrue(list_response.data[0]['is_default'])
+
+    def test_knowledge_graph_returns_default_environment_first(self):
+        AIOpsKnowledgeEnvironment.objects.create(name='alpha-env', alert_environments=['alpha'])
+        AIOpsKnowledgeEnvironment.objects.create(name='beta-env', alert_environments=['beta'], is_default=True)
+
+        response = self.client.get('/api/aiops/knowledge-graph/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['filters']['default_environment'], 'beta-env')
+        self.assertEqual(response.data['filters']['environments'][0], 'beta-env')
+
+    def test_disabled_knowledge_environment_cannot_be_default(self):
+        environment = AIOpsKnowledgeEnvironment.objects.create(name='alpha-env', alert_environments=['alpha'])
+
+        response = self.client.patch(
+            f'/api/aiops/knowledge-environments/{environment.id}/',
+            {'is_default': True, 'is_enabled': False},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('is_default', response.data)
+
     def test_knowledge_graph_only_links_observability_and_event_context(self):
         log_source = LogDataSource.objects.create(name='prod-loki', provider='loki', is_enabled=True)
         trace_source = TracingDataSource.objects.create(name='prod-tempo', provider='tempo', is_enabled=True)

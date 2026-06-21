@@ -1,6 +1,6 @@
 ﻿<template>
-  <div class="observability-page">
-    <section class="hero panel">
+  <div class="observability-page" :class="{ 'is-embedded': embeddedMode }">
+    <section v-if="!embeddedMode" class="hero panel">
       <div class="hero-copy">
         <div class="hero-title-row">
           <span class="hero-icon">
@@ -554,7 +554,7 @@
       </section>
     </div>
 
-    <section class="panel embed-panel">
+    <section v-if="!embeddedMode" class="panel embed-panel">
       <div class="section-head">
         <h3>外部链路平台</h3>
         <div class="section-head-tags">
@@ -603,6 +603,28 @@ import TracingDataSources from './TracingDataSources.vue'
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const props = defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+  topology: {
+    type: Boolean,
+    default: false,
+  },
+  provider: {
+    type: String,
+    default: '',
+  },
+  datasourceId: {
+    type: String,
+    default: '',
+  },
+  service: {
+    type: String,
+    default: '',
+  },
+})
 const loading = reactive({
   catalog: false,
   datasources: false,
@@ -635,7 +657,19 @@ let topologyChart = null
 const DEFAULT_DURATION_MINUTES = 30
 const TRACE_LIST_PAGE_SIZE = 15
 const TOPOLOGY_LIST_PAGE_SIZE = 6
-const topologyOnly = computed(() => route.query.topology === '1')
+const embeddedMode = computed(() => Boolean(props.embedded))
+const topologyOnly = computed(() => Boolean(props.topology) || route.query.topology === '1')
+const routeParams = computed(() => ({
+  provider: props.provider || (typeof route.query.provider === 'string' ? route.query.provider : ''),
+  datasourceId: props.datasourceId || (typeof route.query.datasourceId === 'string' ? route.query.datasourceId : ''),
+  service: props.service || (typeof route.query.service === 'string' ? route.query.service : ''),
+  traceId: typeof route.query.traceId === 'string' ? route.query.traceId : '',
+  keyword: typeof route.query.keyword === 'string' ? route.query.keyword : '',
+  window: route.query.window || '',
+  from: route.query.from || '',
+  to: route.query.to || '',
+  topology: topologyOnly.value ? '1' : '',
+}))
 const tracePageTitle = computed(() => {
   if (topologyOnly.value) return 'Trace 调用拓扑'
   if (activeTraceTab.value === 'datasources') return '链路追踪数据源'
@@ -776,13 +810,58 @@ const traceListMaxDuration = computed(() =>
 )
 
 const topologyHighlights = computed(() =>
-  (focusedTopology.value.nodes || [])
-    .map((item) => {
+  (() => {
+    const topologyData = focusedTopology.value || {}
+    const nodes = topologyData.nodes || []
+    const calls = topologyData.calls || []
+    const selectedNodeId = String(topologyData.selected_node_id || '')
+    const levels = new Map()
+    if (selectedNodeId) {
+      const outgoing = new Map()
+      const incoming = new Map()
+      calls.forEach((call) => {
+        const sourceId = String(call.source || '')
+        const targetId = String(call.target || '')
+        if (!sourceId || !targetId) return
+        if (!outgoing.has(sourceId)) outgoing.set(sourceId, new Set())
+        if (!incoming.has(targetId)) incoming.set(targetId, new Set())
+        outgoing.get(sourceId).add(targetId)
+        incoming.get(targetId).add(sourceId)
+      })
+      const walk = (direction, step) => {
+        const queue = [{ id: selectedNodeId, level: 0 }]
+        const visited = new Set([selectedNodeId])
+        while (queue.length) {
+          const current = queue.shift()
+          ;[...(direction.get(current.id) || [])].forEach((nextId) => {
+            if (visited.has(nextId)) return
+            visited.add(nextId)
+            const nextLevel = current.level + step
+            levels.set(nextId, nextLevel)
+            queue.push({ id: nextId, level: nextLevel })
+          })
+        }
+      }
+      levels.set(selectedNodeId, 0)
+      walk(outgoing, 1)
+      walk(incoming, -1)
+    }
+    return nodes.map((item) => {
       const nodeId = String(item.id || '')
-      const selectedNodeId = String(focusedTopology.value.selected_node_id || '')
-      const hasIncoming = (focusedTopology.value.calls || []).some((call) => call.target === nodeId && call.source !== nodeId)
-      const hasOutgoing = (focusedTopology.value.calls || []).some((call) => call.source === nodeId && call.target !== nodeId)
-      const role = nodeId === selectedNodeId ? 'selected' : hasIncoming && !hasOutgoing ? 'downstream' : hasOutgoing && !hasIncoming ? 'upstream' : 'peer'
+      const level = levels.get(nodeId)
+      const hasIncoming = calls.some((call) => call.target === nodeId && call.source !== nodeId)
+      const hasOutgoing = calls.some((call) => call.source === nodeId && call.target !== nodeId)
+      const role = nodeId === selectedNodeId
+        ? 'selected'
+        : level < 0
+          ? 'upstream'
+          : level > 0
+            ? 'downstream'
+            : hasIncoming && !hasOutgoing
+              ? 'downstream'
+              : hasOutgoing && !hasIncoming
+                ? 'upstream'
+                : 'peer'
       return {
         id: item.id,
         name: item.name,
@@ -792,6 +871,7 @@ const topologyHighlights = computed(() =>
         roleLabel: role === 'selected' ? '当前服务' : role === 'upstream' ? '上游' : role === 'downstream' ? '下游' : '关联',
       }
     })
+  })()
     .sort((a, b) => {
       const order = { selected: 0, upstream: 1, downstream: 2, peer: 3 }
       return (order[a.role] ?? 9) - (order[b.role] ?? 9) || a.name.localeCompare(b.name)
@@ -836,14 +916,38 @@ const focusedTopology = computed(() => {
   }
 
   const selectedNodeId = matchedNode.id
-  const relatedCalls = calls.filter((item) => item.source === selectedNodeId || item.target === selectedNodeId)
-  const relatedNodeIds = new Set([selectedNodeId])
-  relatedCalls.forEach((item) => {
-    relatedNodeIds.add(item.source)
-    relatedNodeIds.add(item.target)
+  const selectedNodeKey = String(selectedNodeId)
+  const adjacency = new Map()
+  calls.forEach((item) => {
+    const sourceId = String(item.source || '')
+    const targetId = String(item.target || '')
+    if (!sourceId || !targetId) return
+    if (!adjacency.has(sourceId)) adjacency.set(sourceId, new Set())
+    if (!adjacency.has(targetId)) adjacency.set(targetId, new Set())
+    adjacency.get(sourceId).add(targetId)
+    adjacency.get(targetId).add(sourceId)
   })
 
-  const relatedNodes = nodes.filter((item) => relatedNodeIds.has(item.id))
+  const relatedNodeKeys = new Set([selectedNodeKey])
+  const queue = [selectedNodeKey]
+  while (queue.length) {
+    const currentId = queue.shift()
+    ;[...(adjacency.get(currentId) || [])].forEach((nextId) => {
+      if (relatedNodeKeys.has(nextId)) return
+      relatedNodeKeys.add(nextId)
+      queue.push(nextId)
+    })
+  }
+
+  const relatedCalls = calls.filter((item) => relatedNodeKeys.has(String(item.source || '')) && relatedNodeKeys.has(String(item.target || '')))
+  const relatedNodeIds = new Set()
+  relatedCalls.forEach((item) => {
+    relatedNodeIds.add(String(item.source || ''))
+    relatedNodeIds.add(String(item.target || ''))
+  })
+  relatedNodeIds.add(selectedNodeKey)
+
+  const relatedNodes = nodes.filter((item) => relatedNodeIds.has(String(item.id || '')))
   return {
     node_count: relatedNodes.length,
     call_count: relatedCalls.length,
@@ -1350,14 +1454,14 @@ function serviceIdFromRouteValue(raw) {
 }
 
 function routeWindowMinutes() {
-  const raw = Number(route.query.window || 0)
+  const raw = Number(routeParams.value.window || 0)
   if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_DURATION_MINUTES
   return raw
 }
 
 function routeTimeRange() {
-  const from = Number(route.query.from || 0)
-  const to = Number(route.query.to || 0)
+  const from = Number(routeParams.value.from || 0)
+  const to = Number(routeParams.value.to || 0)
   if (Number.isFinite(from) && Number.isFinite(to) && from > 0 && to > 0) {
     return normalizeTimeRange([from, to])
   }
@@ -1467,11 +1571,11 @@ async function runSearch(selectFirst = true) {
 }
 
 async function applyRouteTracePreset(force = false) {
-  const traceId = typeof route.query.traceId === 'string' ? route.query.traceId.trim() : ''
-  const provider = typeof route.query.provider === 'string' ? route.query.provider.trim() : ''
-  const datasourceId = typeof route.query.datasourceId === 'string' ? route.query.datasourceId.trim() : ''
-  const routeService = typeof route.query.service === 'string' ? route.query.service.trim() : ''
-  const routeKeyword = typeof route.query.keyword === 'string' ? route.query.keyword.trim() : ''
+  const traceId = String(routeParams.value.traceId || '').trim()
+  const provider = String(routeParams.value.provider || '').trim()
+  const datasourceId = String(routeParams.value.datasourceId || '').trim()
+  const routeService = String(routeParams.value.service || '').trim()
+  const routeKeyword = String(routeParams.value.keyword || '').trim()
   let contextChanged = false
   if (provider && provider !== filters.provider) {
     filters.provider = provider
@@ -1882,43 +1986,117 @@ function renderTopology() {
   const rawLinks = topologyData.calls || []
   const selectedNodeId = String(topologyData.selected_node_id || '')
   const chartWidth = topologyChartRef.value.clientWidth || 780
-  const chartHeight = topologyChartRef.value.clientHeight || 240
-  const upstreamIds = rawLinks.filter((item) => item.target === selectedNodeId).map((item) => item.source)
-  const downstreamIds = rawLinks.filter((item) => item.source === selectedNodeId).map((item) => item.target)
-  const middleIds = rawNodes
-    .map((item) => item.id)
-    .filter((id) => id !== selectedNodeId && !upstreamIds.includes(id) && !downstreamIds.includes(id))
+  const chartHeight = topologyChartRef.value.clientHeight || 320
+  const nodeIdSet = new Set(rawNodes.map((item) => String(item.id || '')).filter(Boolean))
+  const outgoing = new Map()
+  const incoming = new Map()
+  rawLinks.forEach((item) => {
+    const sourceId = String(item.source || '')
+    const targetId = String(item.target || '')
+    if (!sourceId || !targetId || !nodeIdSet.has(sourceId) || !nodeIdSet.has(targetId)) return
+    if (!outgoing.has(sourceId)) outgoing.set(sourceId, new Set())
+    if (!incoming.has(targetId)) incoming.set(targetId, new Set())
+    outgoing.get(sourceId).add(targetId)
+    incoming.get(targetId).add(sourceId)
+  })
 
-  const placeColumn = (ids, x) => {
-    const count = ids.length || 1
-    return new Map(
-      ids.map((id, index) => [
-        id,
-        {
-          x,
-          y: ((index + 1) * chartHeight) / (count + 1),
-        },
-      ])
-    )
+  const nodeLevels = new Map()
+  const walkLevels = (startIds, direction, step) => {
+    const queue = startIds
+      .filter((id) => nodeIdSet.has(id))
+      .map((id) => ({ id, level: nodeLevels.get(id) || 0 }))
+    const visited = new Set(queue.map((item) => `${item.id}:${step}`))
+    while (queue.length) {
+      const current = queue.shift()
+      const nextIds = direction.get(current.id) || new Set()
+      nextIds.forEach((nextId) => {
+        const nextLevel = current.level + step
+        const currentLevel = nodeLevels.get(nextId)
+        if (currentLevel === undefined || (step > 0 ? nextLevel > currentLevel : nextLevel < currentLevel)) {
+          nodeLevels.set(nextId, nextLevel)
+        }
+        const visitKey = `${nextId}:${step}`
+        if (visited.has(visitKey)) return
+        visited.add(visitKey)
+        queue.push({ id: nextId, level: nodeLevels.get(nextId) ?? nextLevel })
+      })
+    }
   }
 
-  const upstreamPositions = placeColumn(upstreamIds, chartWidth * 0.22)
-  const downstreamPositions = placeColumn(downstreamIds, chartWidth * 0.78)
-  const middlePositions = placeColumn(middleIds, chartWidth * 0.5)
+  if (selectedNodeId && nodeIdSet.has(selectedNodeId)) {
+    nodeLevels.set(selectedNodeId, 0)
+    walkLevels([selectedNodeId], outgoing, 1)
+    walkLevels([selectedNodeId], incoming, -1)
+  } else {
+    const rootIds = rawNodes
+      .map((item) => String(item.id || ''))
+      .filter((id) => id && !(incoming.get(id)?.size))
+    const starts = rootIds.length ? rootIds : rawNodes.slice(0, 1).map((item) => String(item.id || '')).filter(Boolean)
+    starts.forEach((id) => nodeLevels.set(id, 0))
+    walkLevels(starts, outgoing, 1)
+  }
+
+  rawNodes.forEach((item) => {
+    const nodeId = String(item.id || '')
+    if (!nodeLevels.has(nodeId)) {
+      const maxLevel = Math.max(...nodeLevels.values(), 0)
+      nodeLevels.set(nodeId, maxLevel + 1)
+    }
+  })
+
+  const levelGroups = new Map()
+  rawNodes.forEach((item) => {
+    const nodeId = String(item.id || '')
+    const level = nodeLevels.get(nodeId) ?? 0
+    if (!levelGroups.has(level)) levelGroups.set(level, [])
+    levelGroups.get(level).push(nodeId)
+  })
+
+  const orderedLevels = [...levelGroups.keys()].sort((a, b) => a - b)
+  const xPadding = Math.min(96, Math.max(58, chartWidth * 0.08))
+  const yPadding = Math.min(72, Math.max(44, chartHeight * 0.16))
+  const usableWidth = Math.max(chartWidth - xPadding * 2, 1)
+  const usableHeight = Math.max(chartHeight - yPadding * 2, 1)
+  const positions = new Map()
+  orderedLevels.forEach((level, columnIndex) => {
+    const ids = levelGroups.get(level) || []
+    const sortedIds = [...ids].sort((a, b) => {
+      const aWeight = Number(rawLinks.find((item) => String(item.source || '') === a || String(item.target || '') === a)?.count || 0)
+      const bWeight = Number(rawLinks.find((item) => String(item.source || '') === b || String(item.target || '') === b)?.count || 0)
+      return bWeight - aWeight || String(a).localeCompare(String(b))
+    })
+    const x = orderedLevels.length <= 1
+      ? chartWidth * 0.5
+      : xPadding + (columnIndex * usableWidth) / (orderedLevels.length - 1)
+    sortedIds.forEach((id, rowIndex) => {
+      positions.set(id, {
+        x,
+        y: sortedIds.length <= 1 ? chartHeight * 0.5 : yPadding + ((rowIndex + 0.5) * usableHeight) / sortedIds.length,
+      })
+    })
+  })
+
+  const selectedLevel = nodeLevels.get(selectedNodeId) ?? 0
+  const nodeRole = (nodeId) => {
+    const level = nodeLevels.get(nodeId) ?? 0
+    if (nodeId === selectedNodeId) return 'selected'
+    if (selectedNodeId && level < selectedLevel) return 'upstream'
+    if (selectedNodeId && level > selectedLevel) return 'downstream'
+    return 'peer'
+  }
 
   const nodes = rawNodes.map((item, index) => {
     const nodeId = String(item.id || '')
     const isRuntimeNode = item.type === 'RUNTIME_COMPONENT' || String(item.id || '').startsWith('runtime:')
-    const position = nodeId === selectedNodeId
-      ? { x: chartWidth * 0.5, y: chartHeight * 0.5 }
-      : upstreamPositions.get(nodeId) || downstreamPositions.get(nodeId) || middlePositions.get(nodeId) || { x: chartWidth * 0.5, y: chartHeight * 0.5 }
+    const position = positions.get(nodeId) || { x: chartWidth * 0.5, y: chartHeight * 0.5 }
+    const role = nodeRole(nodeId)
     const color = nodeId === selectedNodeId
       ? '#2563eb'
       : isRuntimeNode
         ? '#0891b2'
-      : upstreamIds.includes(nodeId)
+      : role === 'upstream'
         ? '#0f766e'
-        : downstreamIds.includes(nodeId)
+        : role === 'downstream'
           ? '#ea580c'
           : ['#7c3aed', '#0891b2', '#64748b'][index % 3]
     return {
@@ -1928,7 +2106,7 @@ function renderTopology() {
       x: position.x,
       y: position.y,
       symbol: isRuntimeNode ? 'roundRect' : 'circle',
-      symbolSize: nodeId === selectedNodeId ? 54 : isRuntimeNode ? [74, 36] : 40,
+      symbolSize: nodeId === selectedNodeId ? 56 : isRuntimeNode ? [84, 38] : 42,
       itemStyle: {
         color,
         borderColor: nodeId === selectedNodeId ? 'rgba(191, 219, 254, 0.95)' : '#ffffff',
@@ -1938,7 +2116,7 @@ function renderTopology() {
       },
       label: {
         position: 'bottom',
-        formatter: () => ellipsisText(item.name, nodeId === selectedNodeId ? 18 : 14),
+        formatter: () => ellipsisText(item.name, nodeId === selectedNodeId ? 18 : 16),
       },
     }
   })
@@ -1948,10 +2126,10 @@ function renderTopology() {
     target: item.target,
     value: item.count || 0,
     lineStyle: {
-      color: item.source === selectedNodeId ? '#fdba74' : '#99f6e4',
+      color: String(item.source || '') === selectedNodeId ? '#fdba74' : '#99f6e4',
       width: Math.min(4, 1.6 + Number(item.count || 0) * 0.2),
       opacity: 0.95,
-      curveness: 0.04,
+      curveness: 0.03,
     },
     symbol: ['none', 'arrow'],
     symbolSize: 8,
@@ -2061,8 +2239,8 @@ onMounted(async () => {
   if (topologyOnly.value) {
     topologyExpanded.value = true
   }
-  filters.provider = typeof route.query.provider === 'string' ? route.query.provider : ''
-  filters.datasourceId = typeof route.query.datasourceId === 'string' ? route.query.datasourceId : ''
+  filters.provider = routeParams.value.provider
+  filters.datasourceId = routeParams.value.datasourceId
   await loadTracingDataSources()
   if (!filters.datasourceId) {
     applyDefaultTracingDataSource(filters.provider)
@@ -2076,9 +2254,21 @@ onMounted(async () => {
 })
 
 watch(
-  () => [route.query.provider || '', route.query.datasourceId || '', route.query.traceId || '', route.query.service || '', route.query.keyword || '', route.query.window || '', route.query.from || '', route.query.to || '', route.query.topology || ''].join('|'),
+  () => [
+    routeParams.value.provider,
+    routeParams.value.datasourceId,
+    routeParams.value.traceId,
+    routeParams.value.service,
+    routeParams.value.keyword,
+    routeParams.value.window,
+    routeParams.value.from,
+    routeParams.value.to,
+    routeParams.value.topology,
+  ].join('|'),
   async (value, previous) => {
     if (!value || value === previous) return
+    filters.provider = routeParams.value.provider
+    filters.datasourceId = routeParams.value.datasourceId
     if (topologyOnly.value) {
       topologyExpanded.value = true
     }
@@ -2109,6 +2299,41 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.observability-page.is-embedded {
+  background: #ffffff;
+  gap: 0;
+  height: 100%;
+  padding: 0;
+}
+
+.observability-page.is-embedded .panel {
+  background: #ffffff;
+  border: 0;
+  border-radius: 18px;
+  box-shadow: none;
+  overflow: hidden;
+  padding: 16px 18px 18px;
+}
+
+.observability-page.is-embedded .topology-layout {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.observability-page.is-embedded .topology-chart,
+.observability-page.is-embedded .topology-side {
+  height: clamp(420px, 72vh, 680px);
+  min-height: 420px;
+}
+
+.observability-page.is-embedded .topology-chart {
+  background: linear-gradient(180deg, #fbfdff 0%, #f7fbff 100%);
+}
+
+.observability-page.is-embedded .section-head h3 {
+  font-size: 20px;
+  font-weight: 800;
 }
 
 .panel {

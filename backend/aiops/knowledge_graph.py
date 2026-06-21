@@ -380,6 +380,7 @@ def _empty_graph(filters=None):
             'business_lines': [],
             'environments': [],
             'services': [],
+            'default_environment': '',
             **(filters or {}),
         },
         'relation_legend': [
@@ -425,7 +426,7 @@ def _int_list(values):
 
 
 def _enabled_knowledge_environments():
-    return list(AIOpsKnowledgeEnvironment.objects.filter(is_enabled=True).order_by('name', 'id'))
+    return list(AIOpsKnowledgeEnvironment.objects.filter(is_enabled=True).order_by('-is_default', 'name', 'id'))
 
 
 def resolve_knowledge_environment(name):
@@ -2087,6 +2088,7 @@ def build_knowledge_graph(params=None):
                     )
 
     configured_environment_options = [config.name for config in knowledge_env_configs]
+    default_environment = next((config.name for config in knowledge_env_configs if getattr(config, 'is_default', False)), '')
     discovered_environment_options = sorted({
         environment
         for counter in context_by_service.values()
@@ -2096,7 +2098,7 @@ def build_knowledge_graph(params=None):
     available_environment_options = configured_environment_options or discovered_environment_options
 
     if not selected_env:
-        return _empty_graph({'environments': available_environment_options})
+        return _empty_graph({'environments': available_environment_options, 'default_environment': default_environment})
 
     for key, label, kind, route in CAPABILITY_DEFS:
         add_node(_node_key('capability', key), label, kind, '数据来源', route=route)
@@ -3056,6 +3058,7 @@ def build_knowledge_graph(params=None):
             'systems': system_options,
             'business_lines': system_options,
             'environments': available_environment_options,
+            'default_environment': default_environment,
             'services': service_options,
         },
         'relation_legend': [

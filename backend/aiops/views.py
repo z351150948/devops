@@ -626,7 +626,11 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
     }
 
     def get_queryset(self):
-        return AIOpsKnowledgeEnvironment.objects.all().order_by('name', 'id')
+        return AIOpsKnowledgeEnvironment.objects.all().order_by('-is_default', 'name', 'id')
+
+    def _ensure_single_default(self, instance):
+        if instance.is_default:
+            AIOpsKnowledgeEnvironment.objects.exclude(id=instance.id).filter(is_default=True).update(is_default=False)
 
     @action(detail=False, methods=['get'])
     def catalog(self, request):
@@ -790,6 +794,7 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
             created_by=getattr(self.request.user, 'username', ''),
             updated_by=getattr(self.request.user, 'username', ''),
         )
+        self._ensure_single_default(instance)
         record_event(
             request=self.request,
             module='aiops',
@@ -805,6 +810,7 @@ class AIOpsKnowledgeEnvironmentViewSet(RBACPermissionMixin, viewsets.ModelViewSe
 
     def perform_update(self, serializer):
         instance = serializer.save(updated_by=getattr(self.request.user, 'username', ''))
+        self._ensure_single_default(instance)
         record_event(
             request=self.request,
             module='aiops',

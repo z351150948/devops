@@ -30,17 +30,20 @@
       <el-table v-loading="loading" :data="environments" row-key="id">
         <el-table-column prop="name" label="图谱环境名" min-width="150">
           <template #default="{ row }">
-            <div class="env-name">{{ row.name }}</div>
+            <div class="env-name">
+              <span>{{ row.name }}</span>
+              <el-tag v-if="row.is_default" size="small" type="warning">默认</el-tag>
+            </div>
             <div v-if="row.description" class="env-desc">{{ row.description }}</div>
           </template>
         </el-table-column>
-        <el-table-column label="环境别名" min-width="110">
+        <el-table-column label="环境别名" min-width="150">
           <template #default="{ row }"><TagList :items="row.aliases" /></template>
         </el-table-column>
         <el-table-column label="事件中心环境" min-width="170">
           <template #default="{ row }"><TagList :items="row.event_environments" /></template>
         </el-table-column>
-        <el-table-column label="可观测性来源" min-width="260">
+        <el-table-column label="可观测性来源" min-width="220">
           <template #default="{ row }"><TagList :items="observabilityNames(row)" /></template>
         </el-table-column>
         <el-table-column label="基础设施" min-width="190">
@@ -51,10 +54,13 @@
             <el-tag :type="row.is_enabled ? 'success' : 'info'">{{ row.is_enabled ? '启用' : '停用' }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="canManage" label="操作" width="160" fixed="right">
+        <el-table-column v-if="canManage" label="操作" width="170" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-button size="small" link type="danger" @click="removeEnvironment(row)">删除</el-button>
+            <div class="table-actions">
+              <el-button v-if="!row.is_default" size="small" link type="primary" :disabled="!row.is_enabled" @click="setDefaultEnvironment(row)">设为默认</el-button>
+              <el-button size="small" link type="primary" @click="openDialog(row)">编辑</el-button>
+              <el-button size="small" link type="danger" @click="removeEnvironment(row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -170,6 +176,13 @@
         <el-form-item label="启用">
           <el-switch v-model="form.is_enabled" />
         </el-form-item>
+        <el-form-item label="默认图谱">
+          <el-switch
+            v-model="form.is_default"
+            active-text="打开图谱视图时优先展示"
+            inactive-text="普通图谱"
+          />
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialog.visible = false">取消</el-button>
@@ -250,6 +263,7 @@ const form = reactive({
   k8s_namespaces: {},
   docker_host_ids: [],
   task_resource_environment_ids: [],
+  is_default: false,
   is_enabled: true,
 })
 
@@ -279,6 +293,7 @@ function resetForm(row = null) {
   form.k8s_namespaces = { ...(row?.k8s_namespaces || {}) }
   form.docker_host_ids = [...(row?.docker_host_ids || [])]
   form.task_resource_environment_ids = [...(row?.task_resource_environment_ids || [])]
+  form.is_default = row?.is_default ?? false
   form.is_enabled = row?.is_enabled ?? true
 }
 
@@ -442,6 +457,7 @@ async function submitForm() {
       k8s_namespaces: form.k8s_namespaces,
       docker_host_ids: form.docker_host_ids,
       task_resource_environment_ids: form.task_resource_environment_ids,
+      is_default: form.is_default,
       is_enabled: form.is_enabled,
     }
     if (dialog.editingId) {
@@ -455,6 +471,12 @@ async function submitForm() {
   } finally {
     saving.value = false
   }
+}
+
+async function setDefaultEnvironment(row) {
+  await updateAIOpsKnowledgeEnvironment(row.id, { is_default: true })
+  ElMessage.success(`已设为默认图谱：${row.name}`)
+  await loadData()
 }
 
 async function removeEnvironment(row) {
@@ -581,6 +603,10 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
 }
 
 .env-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
   color: #0f172a;
   font-weight: 700;
 }
@@ -589,6 +615,17 @@ watch(() => [...form.k8s_cluster_ids], (ids) => {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
+}
+
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.table-actions :deep(.el-button) {
+  margin-left: 0;
 }
 
 .form-group-card {

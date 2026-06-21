@@ -285,6 +285,25 @@
         </section>
       </div>
     </el-dialog>
+
+    <el-dialog
+      v-model="traceTopologyDialogVisible"
+      width="84vw"
+      class="trace-topology-dialog"
+      append-to-body
+      destroy-on-close
+      :show-close="false"
+      @opened="traceTopologyDialogReady = true"
+      @closed="traceTopologyDialogReady = false"
+    >
+      <TraceObservability
+        v-if="traceTopologyDialogReady"
+        embedded
+        topology
+        :datasource-id="traceTopologyDatasourceId"
+        :service="traceTopologyService"
+      />
+    </el-dialog>
   </div>
 </template>
 
@@ -295,6 +314,7 @@ import { Connection, InfoFilled, RefreshRight, Setting, Share } from '@element-p
 import echarts from '@/lib/echarts'
 import { getAIOpsKnowledgeGraph } from '@/api/modules/aiops'
 import AIOpsKnowledgeConfig from './AIOpsKnowledgeConfig.vue'
+import TraceObservability from './TraceObservability.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -306,6 +326,8 @@ const loading = ref(false)
 const graph = ref({ nodes: [], edges: [], summary: {}, filters: {}, relation_legend: [] })
 const selectedNodeId = ref('')
 const adoptionDocVisible = ref(false)
+const traceTopologyDialogVisible = ref(false)
+const traceTopologyDialogReady = ref(false)
 const activeTab = ref(route.query.tab === 'config' ? 'config' : 'graph')
 const filters = reactive({ environment: '', system: '', service: '' })
 const DEFAULT_GRAPH_ZOOM = 0.84
@@ -339,6 +361,12 @@ const graphNodeById = computed(() => new Map((graph.value.nodes || []).map(node 
 const traceTopologyDatasourceId = computed(() => {
   const traceNode = (graph.value.nodes || []).find(node => String(node.id || '').startsWith('trace_ds:'))
   return traceNode ? String(traceNode.id).replace('trace_ds:', '') : ''
+})
+const traceTopologyService = computed(() => {
+  if (filters.service) return filters.service
+  if (selectedNode.value?.service) return selectedNode.value.service
+  if (selectedNode.value?.kind === 'service') return selectedNode.value.label || selectedNode.value.name || ''
+  return ''
 })
 const graphEdges = computed(() => (graph.value.edges || []).filter(edge => {
   const source = graphNodeById.value.get(edge.source)
@@ -1087,7 +1115,10 @@ async function loadGraph() {
     if (filters.service) params.service = filters.service
     graph.value = await getAIOpsKnowledgeGraph(params)
     if (!filters.environment && graph.value.filters?.environments?.length) {
-      filters.environment = graph.value.filters.environments[0]
+      const defaultEnvironment = graph.value.filters.default_environment
+      filters.environment = graph.value.filters.environments.includes(defaultEnvironment)
+        ? defaultEnvironment
+        : graph.value.filters.environments[0]
       await loadGraph()
       return
     }
@@ -1281,13 +1312,8 @@ function handleTabChange(tabName) {
 
 function openTraceTopology() {
   if (!traceTopologyDatasourceId.value) return
-  router.push({
-    path: '/observability/tracing/topology',
-    query: {
-      datasourceId: traceTopologyDatasourceId.value,
-      service: filters.service || selectedNode.value?.service || undefined,
-    },
-  })
+  traceTopologyDialogReady.value = false
+  traceTopologyDialogVisible.value = true
 }
 
 watch(() => graph.value.nodes.length, () => nextTick(renderGraph))
@@ -1534,6 +1560,24 @@ onBeforeUnmount(() => {
   color: #cbd5e1;
   background: rgba(248, 250, 252, 0.62);
   box-shadow: none;
+}
+
+:global(.trace-topology-dialog.el-dialog) {
+  max-width: 1280px;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+:global(.trace-topology-dialog .el-dialog__header) {
+  display: none;
+}
+
+:global(.trace-topology-dialog .el-dialog__body) {
+  margin: 0;
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  padding: 0;
+  background: #ffffff;
 }
 
 .toolbar-label {

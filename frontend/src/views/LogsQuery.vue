@@ -1820,10 +1820,10 @@ onUnmounted(() => {
 }
 
 .hero-panel {
-  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
-  border: 1px solid rgba(96,165,250,.18);
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border: 1px solid rgba(36, 91, 219, 0.09);
   border-radius: 20px;
-  box-shadow: 0 16px 36px rgba(14,165,233,.08);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
   padding: 14px 16px;
 }
 
@@ -1841,14 +1841,15 @@ onUnmounted(() => {
 .log-header-icon {
   width: 42px;
   height: 42px;
-  border-radius: 16px;
+  border-radius: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 20px;
-  color: #fff;
-  background: linear-gradient(135deg, #0ea5e9, #2563eb);
-  box-shadow: 0 10px 20px rgba(37,99,235,.2);
+  color: #245bdb;
+  background: linear-gradient(180deg, #f3f7ff 0%, #ebf2ff 100%);
+  border: 1px solid rgba(36, 91, 219, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .hero h2 {
@@ -2862,10 +2863,10 @@ pre {
   }
 }
 .hero.panel.hero-panel {
-  background: linear-gradient(180deg, #ffffff 0%, #fffdf8 100%);
-  border-color: #e5e7eb;
+  background: linear-gradient(135deg, #fbfdff 0%, #f7faff 52%, #f9fbfd 100%);
+  border-color: rgba(36, 91, 219, 0.09);
   border-radius: 20px;
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 </style>
 

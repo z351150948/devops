@@ -213,6 +213,7 @@ class AIOpsKnowledgeEnvironment(models.Model):
     association_snapshot = models.JSONField('关联快照', default=dict, blank=True)
     child_node_snapshot = models.JSONField('子节点快照', default=dict, blank=True)
     snapshot_generated_at = models.DateTimeField('快照生成时间', null=True, blank=True)
+    is_default = models.BooleanField('默认图谱', default=False)
     is_enabled = models.BooleanField('启用', default=True)
     created_by = models.CharField('创建人', max_length=64, blank=True, default='')
     updated_by = models.CharField('更新人', max_length=64, blank=True, default='')

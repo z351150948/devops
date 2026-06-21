@@ -2934,6 +2934,55 @@ class ObservabilityViewsTests(TestCase):
         self.assertTrue(any(call['source'] == 'checkout' and call['target'] == 'runtime:redis' for call in topology['calls']))
         self.assertTrue(any(call['source'] == 'checkout' and call['target'] == 'runtime:postgresql' for call in topology['calls']))
 
+    def test_trace_topology_keeps_multi_hop_service_dependencies(self):
+        detail = _trace_detail_from_spans('tempo-layered-trace', [
+            {
+                'span_id': 'root',
+                'parent_span_id': '',
+                'service_code': 'api-gateway',
+                'endpoint_name': 'POST /checkout',
+                'start_time': '2026-05-03T12:00:00+00:00',
+                'end_time': '2026-05-03T12:00:01+00:00',
+                'layer': 'HTTP',
+            },
+            {
+                'span_id': 'order',
+                'parent_span_id': 'root',
+                'service_code': 'order-service',
+                'endpoint_name': 'POST /orders',
+                'start_time': '2026-05-03T12:00:00.100+00:00',
+                'end_time': '2026-05-03T12:00:00.600+00:00',
+                'layer': 'RPC_FRAMEWORK',
+            },
+            {
+                'span_id': 'inventory',
+                'parent_span_id': 'order',
+                'service_code': 'inventory-service',
+                'endpoint_name': 'GET /availability',
+                'start_time': '2026-05-03T12:00:00.200+00:00',
+                'end_time': '2026-05-03T12:00:00.500+00:00',
+                'layer': 'RPC_FRAMEWORK',
+            },
+            {
+                'span_id': 'redis',
+                'parent_span_id': 'inventory',
+                'service_code': 'inventory-service',
+                'endpoint_name': 'Redis GET stock',
+                'start_time': '2026-05-03T12:00:00.250+00:00',
+                'end_time': '2026-05-03T12:00:00.300+00:00',
+                'component': 'Jedis',
+                'peer': 'redis-inventory:6379',
+                'layer': 'CACHE',
+            },
+        ])
+
+        topology = _build_topology_from_trace_details([detail])
+        call_pairs = {(call['source'], call['target']) for call in topology['calls']}
+
+        self.assertIn(('api-gateway', 'order-service'), call_pairs)
+        self.assertIn(('order-service', 'inventory-service'), call_pairs)
+        self.assertIn(('inventory-service', 'runtime:redis-inventory'), call_pairs)
+
     def test_tempo_flatten_trace_keeps_full_resource_attributes(self):
         spans = _tempo_flatten_trace({
             'batches': [
