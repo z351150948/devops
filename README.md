@@ -127,7 +127,6 @@ flowchart TB
 ### AI Agent
 
 ![AI Agent](docs/screenshots/智能助手.png)
-
 ![知识图谱](docs/screenshots/知识图谱.png)
 
 ### 日志/链路排障取证
