@@ -289,7 +289,10 @@
         <div class="section-toolbar">
           <div class="toolbar-head">
             <span class="toolbar-title">模型供应商</span>
-            <span class="toolbar-desc">管理外部 LLM 接入配置与默认模型</span>
+            <span class="toolbar-desc">
+              管理外部 LLM 接入配置与默认模型。
+              <strong class="provider-strategy-reminder">模型供应商保存并测试通过后，请到智能体策略中选择默认供应商，智能助手才会使用该模型。</strong>
+            </span>
           </div>
           <el-button size="small" type="primary" @click="openProviderDialog()">新增提供商</el-button>
         </div>
@@ -2303,6 +2306,11 @@ onMounted(async () => {
   color: #94a3b8;
   font-size: 12px;
   line-height: 1.4;
+}
+
+.provider-strategy-reminder {
+  color: #334155;
+  font-weight: 700;
 }
 
 .strategy-actions {

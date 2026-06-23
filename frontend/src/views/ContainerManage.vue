@@ -379,6 +379,14 @@ const imageStats = computed(() => ({
   version: selectedHost.value?.docker_api_version || '未知',
 }))
 
+const filteredImages = computed(() => {
+  const keyword = imageKeyword.value.trim().toLowerCase()
+  if (!keyword) return images.value
+  return images.value.filter((item) =>
+    [item.repository, item.tag, item.id, item.size, item.created].some((field) => String(field || '').toLowerCase().includes(keyword)),
+  )
+})
+
 const summaryCards = computed(() => {
   if (activeTab.value === 'hosts') {
     return [

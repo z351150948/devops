@@ -120,6 +120,12 @@ class AIOpsApiTests(TestCase):
             alert_environments=['prod'],
         )
 
+    def test_platform_mcp_tools_respect_feature_gate_without_name_error(self):
+        tools = list_platform_mcp_tools(user=self.user)
+
+        self.assertTrue(any(item['name'] == 'sxdevops.query_knowledge_graph' for item in tools))
+        self.assertTrue(all('available' in item for item in tools))
+
     def ensure_ecommerce_knowledge_environment(self):
         cluster = K8sCluster.objects.create(
             name='ecommerce-test-k3s',

@@ -43,6 +43,11 @@ class _K8sApiProxy:
             kwargs.setdefault('_request_timeout', (K8S_API_CONNECT_TIMEOUT, K8S_API_READ_TIMEOUT))
             return attr(*args, **kwargs)
 
+        method_owner = getattr(attr, '__self__', None)
+        if method_owner is not None:
+            wrapped.__self__ = method_owner
+            wrapped.self = method_owner
+
         return wrapped
 
 

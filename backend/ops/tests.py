@@ -29,7 +29,7 @@ from ops.models import (
     ObservabilityDataSourceLink,
     TracingDataSource,
 )
-from ops.k8s_views import _prepare_kubeconfig, _resource_stale_cache_key, _summary_stale_cache_key
+from ops.k8s_views import _K8sApiProxy, _prepare_kubeconfig, _resource_stale_cache_key, _summary_stale_cache_key
 from ops.tracing_providers import _build_topology_from_trace_details, _tempo_flatten_trace, _trace_detail_from_spans
 
 
@@ -2294,6 +2294,25 @@ class ContainerManagementTests(TestCase):
         self.user = get_user_model().objects.create_superuser('container-admin', 'container@example.com', 'Admin@123456')
         self.client.force_authenticate(user=self.user)
         cache.clear()
+
+    def test_k8s_api_proxy_preserves_bound_method_owner_for_stream(self):
+        class FakeApi:
+            def __init__(self):
+                self.api_client = object()
+                self.kwargs = None
+
+            def connect_get_namespaced_pod_exec(self, **kwargs):
+                self.kwargs = kwargs
+                return 'connected'
+
+        fake_api = FakeApi()
+        proxy = _K8sApiProxy(fake_api)
+        wrapped = proxy.connect_get_namespaced_pod_exec
+
+        self.assertIs(wrapped.__self__, fake_api)
+        self.assertIs(wrapped.__self__.api_client, fake_api.api_client)
+        self.assertEqual(wrapped(name='pod-a'), 'connected')
+        self.assertEqual(fake_api.kwargs['_request_timeout'], (1.5, 3))
 
     def test_prepare_kubeconfig_overrides_active_cluster_server(self):
         cluster = K8sCluster.objects.create(

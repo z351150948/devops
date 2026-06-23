@@ -128,6 +128,8 @@ flowchart TB
 
 ![AI Agent](docs/screenshots/智能助手.png)
 
+![知识图谱](docs/screenshots/知识图谱.png)
+
 ### 日志/链路排障取证
 
 ![日志/链路排障取证](docs/screenshots/链路追踪.png)
@@ -173,7 +175,7 @@ flowchart LR
 
 ### 方式一：Docker Compose
 
-（此部署方式自测已没问题，如有问题请再跟我反应。后面稳定版我加上 dockerhub 镜像，这样首次部署可以不用拉依赖了）
+（目前是自己build镜像，后面稳定版我推到 dockerhub 镜像仓库，这样首次部署可以不用拉依赖了）
 仓库内置应用、MySQL 和 Redis 编排，适合最快体验完整功能：
 
 ```bash
