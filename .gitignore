@@ -10,6 +10,32 @@ db.sqlite3
 *.sqlite3.*
 *.bak
 backend/config.json
+backend/aiops/*.bak.*
+backend/ops/*.bak.*
+docker-compose.yml.bak.*
+docker-compose.yml.broken-*
+
+# Local runtime secrets
+backend/config.json
+.env
+.env.local
+.env.*.local
+
+# Frontend brand patches (baked bundles + assets).
+# Populated by `scripts/apply-patches.sh` from the official release tarball.
+# Not committed: the JS bundles are compiled artefacts without source maps.
+# We must NOT use `patches/` (directory ignore) here, because that would
+# also block the .gitkeep placeholders. Instead, list the specific files
+# that apply-patches.sh writes.
+/patches/index.html
+/patches/favicon.png
+/patches/favicon.svg
+/patches/sxdevops-ai-agent-promo.html
+/patches/urls.py
+/patches/assets/*.js
+/patches/assets/*.html
+/patches/assets/*.css
+/patches/assets/*.map
 
 # Node
 node_modules/

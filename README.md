@@ -1,13 +1,15 @@
-# SxDevOps
+# SxDevOps / Autotoll Devops
 
 SxDevOps 是一个面向真实运维现场的开源智能运维 Agent 平台。它把 **可观测性、事件中心、任务中心、工单审批、容器管理、RBAC** 等平台能力组织成 Agent 可调用、可审计、可确认的运维工作流。
 
-项目不是简单做一个聊天框，而是希望让运维从“到处查系统”升级为：
-
+> **Autotoll Devops** 是基于 SxDevOps 的二次发行版（rebrand fork），主要在「品牌外观、Traces 后端默认、Provider 体验」三方面做了定制，源代码能力与上游保持一致。
+>
 > 看态势、找证据、问系统、确认动作。
 
-- 在线体验：[https://www.sxdevops.top](https://www.sxdevops.top)
-- 产品介绍页：[SxDevOps AI Agent](https://www.sxdevops.top/ai-agent-promo)
+- 上游项目：[github.com/aiyiyi121/sxdevops](https://github.com/aiyiyi121/sxdevops)
+- 上游体验：[https://www.sxdevops.top](https://www.sxdevops.top)
+- 上游产品介绍页：[SxDevOps AI Agent](https://www.sxdevops.top/ai-agent-promo)
+- 本仓库（Autotoll Devops fork）：[github.com/z351150948/devops](https://github.com/z351150948/devops)
 - 技术栈：`Django + Django REST framework + Channels + Vue 3 + Element Plus`
 - 开源协议：[Apache License 2.0](LICENSE)
 
@@ -39,312 +41,300 @@ SxDevOps AI Agent = **可观测性 + 事件中心 + 任务中心 + AIOps**
 
 **模型负责理解，平台负责边界；Agent 可以分析和生成草稿，但关键动作必须通过权限校验和人工确认。**
 
-## 核心能力
+## Autotoll Devops 相对上游的差异
 
-| 模块 | 能力 |
-| --- | --- |
-| AIOps 智能体 | 自然语言排障、工具调用、二阶段回答、Skill 模板、Action 预检、待确认动作、模型调用审计 |
-| 可观测性 | 平台总览、系统态势、指标查询、日志检索、链路追踪、Grafana 看板承接、数据源管理 |
-| 事件中心 | 失败事件定位、关键操作沉淀、事件源接入、操作审计、按系统/环境/应用/时间过滤 |
-| 任务中心 | 主机任务、批量命令、脚本模板、资源分组、任务草稿、执行历史、计划任务 |
-| 工单系统 | 应用发布、审批流、SQL 审计、事务工单、变更留痕 |
-| 容器管理 | Kubernetes 集群、工作负载、Pod 终端、ConfigMap / Secret、Docker 环境管理 |
-| 权限与审计 | 后端 API、前端路由、菜单、按钮和 WebSocket 场景统一接入 RBAC |
+| 维度 | 上游 SxDevOps | Autotoll Devops（本仓库） |
+| --- | --- | --- |
+| 品牌 | SxDevOps / 智能助手体验版 | Autotoll Devops |
+| Traces 后端默认 | SkyWalking | **Tempo**（如需切回 SkyWalking，设 `SKYWALKING_ENABLED=1` 并调整 `TRACING_DEFAULT_PROVIDER`） |
+| 内置 demo provider | 自动创建「智能助手体验版」 | **永久禁用**（migration 0022 + `SXDEVOPS_SEED_DEMO_PROVIDER=0` 默认值） |
+| 启动占位截图、品牌色 | sxdevops | 替换为 Autotoll Devops 品牌资源（见 `patches/`） |
+| Grafana JSONField 兼容 | 偶发 MySQL 驱动返回字符串 → 异常 | `_coerce()` 强转，幂等解析 |
+| SkyWalking GraphQL Schema | `ServiceLayer` 枚举 | `String`（兼容 OAP 9.x 移除枚举后的版本） |
 
-## 典型场景
+如果只是想跑上游原版体验，把 `patches/` 留空、把 `docker-compose.yml` 里所有 `TEMPO_*`/`TRACING_*` 注释掉即可。
 
-以“生产 order-center 异常分析”为例。
+---
 
-传统方式通常要人工切换多个系统：
+# 一、部署指南（生产 / 内网）
 
-1. 打开告警平台看 PromQL、标签和触发时间。
-2. 到日志中心查错误关键字和上下文。
-3. 到链路追踪定位慢调用和异常 Span。
-4. 翻最近发布、任务、审批和事件记录。
-5. 手工整理结论和下一步动作。
+## 1.1 环境要求
 
-在 SxDevOps 里，可以让 Agent 串起这条链路：
+| 组件 | 最低版本 | 推荐版本 | 备注 |
+| --- | --- | --- | --- |
+| OS | Linux x86_64 内核 ≥ 4.15 | Ubuntu 22.04 / 24.04, Debian 12, Rocky 9 | macOS / WSL2 也能跑，生产建议 Linux |
+| CPU | 2 vCPU | 4 vCPU | AIOps 调用期间会短时打满单核 |
+| RAM | 4 GB | 8 GB | MySQL 单独 ≥ 1 GB，Redis ≥ 256 MB |
+| Disk | 20 GB | 50 GB+ | MySQL + 日志 + 前端 dist + Tempo 索引 |
+| Docker | 24.0+ | 26.x | 需开启 `BuildKit`（默认开启） |
+| Docker Compose | v2.20+ | v2.27+ | 旧版 `docker-compose` (v1) 不再支持 |
+| Python（仅开发） | 3.11+ | 3.12 | 与 `Dockerfile` 中 `python:3.12-slim` 对齐 |
+| Node（仅开发） | 20+ | 20 LTS | 与 `Dockerfile` 中 `node:20-alpine` 对齐 |
+| 出网 | 可选 | 首次部署需拉镜像 / 模型供应商 API | 离线环境需提前 `docker save` 镜像 |
 
-1. 用户用自然语言发起分析。
-2. Agent 选择告警、日志、Trace、事件中心、任务中心等工具。
-3. 后端按白名单执行工具调用，并做 RBAC、参数清洗和超时控制。
-4. 平台汇总结构化证据，Skill 输出结论、依据、风险和建议操作。
-5. 如需巡检或命令执行，先生成任务草稿，用户确认后才进入任务中心。
-6. 执行结果继续回写事件中心和审计链路。
-
-## Agent 工作机制
-
-SxDevOps 的 Agent 运行逻辑不是“用户提问 -> 大模型自由回答”，而是一套受控编排链路：**Action Router 先判断任务类型，Agent Mode 决定推理方式，Preflight 守住执行边界，Skill/SOP 约束专业过程，MCP 连接外部与平台工具，最终由审计和反馈闭环沉淀结果**。
-
-```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 10, "rankSpacing": 14, "curve": "basis"}, "themeVariables": {"fontSize": "12px"}}}%%
-flowchart TB
-    input["用户问题 / 页面上下文 / 外部协同任务"] --> router["Action Router<br/>识别任务入口与风险边界"]
-    router --> mode{"Agent Mode"}
-    mode --> direct["Direct<br/>直接执行单个动作"]
-    mode --> react["ReAct<br/>推理 -> 行动 -> 观察"]
-    mode --> plan["Plan + ReAct<br/>规划 -> 多步执行 -> 验证"]
-
-    direct --> preflight["Preflight<br/>权限校验 / 风险评估 / 缺参补齐 / 依赖检查"]
-    react --> preflight
-    plan --> preflight
-
-    preflight -->|未通过| form["预检表单 / 待确认信息"]
-    preflight -->|通过| skill["Skill + SOP<br/>证据清单 / 查询规范 / 输出合同 / 安全边界"]
-    skill --> mcp["MCP / Tool Registry<br/>可观测性 / 事件 / 任务 / 工单 / K8s / 自定义工具"]
-    mcp --> facts["结构化事实<br/>日志 / 指标 / Trace / 告警 / 事件 / 执行结果"]
-    facts --> answer["二阶段整形<br/>结论 / 依据 / 风险 / 建议动作"]
-    answer --> action{"是否写入或执行类动作"}
-    action -->|否| done["返回答案与证据"]
-    action -->|是| confirm["Pending Action<br/>用户确认"]
-    confirm --> execute["平台 API 执行<br/>RBAC / 参数清洗 / 超时控制"]
-    execute --> feedback["结果反馈<br/>任务中心 / 事件中心 / 审计 / 后续学习"]
-```
-
-这条链路里几个核心概念的职责是：
-
-| 层次 | 职责 |
-| --- | --- |
-| Action Router | 识别本次问题属于告警根因、日志查询、K8s 诊断、变更关联、任务生成等哪类 Action，并声明风险等级、所需上下文、输出结构和确认策略。 |
-| Agent Mode | 按任务复杂度选择执行方式：`Direct` 适合单步只读或明确动作，`ReAct` 适合边查边判断，`Plan + ReAct` 适合多步骤深度排障和协同任务。 |
-| Preflight | 在进入写入、生成或执行前做权限校验、风险评估、依赖检查、缺参补齐和回滚就绪检查；不满足条件时返回预检表单或待确认信息。 |
-| Skill / SOP | 沉淀领域能力包，约束证据清单、查询规范、判断规则、输出格式和安全边界，避免模型自由发挥。 |
-| MCP / Tool Registry | 把平台能力和外部系统封装成可治理工具，最终可用工具由 `Skill 工具依赖 ∩ MCP 可用性 ∩ 用户 RBAC ∩ Action 安全策略` 决定。 |
-| Pending Action | 所有写入和执行类动作先变成待确认动作，用户确认后才由平台 API 执行。 |
-| 审计与反馈 | 会话、工具调用、预检、待确认动作、执行结果和关键事件都会留痕，执行结果继续回写任务中心和事件中心。 |
-
-当前实现遵循几个原则：
-
-- 平台 API 是唯一执行边界，模型只负责理解、规划和生成候选参数，不能绕过后端直接操作资源。
-- Action 负责“任务入口和流程策略”，Skill 负责“能力包和专业约束”，两者不混在一起。
-- 只读诊断可以直接返回事实；生成、写入、执行类动作必须先预检、再确认、再执行。
-- Preflight 不是装饰步骤，而是权限、风险、依赖、缺参和回滚检查的统一入口。
-- 前端展示权限只是体验优化，后端 RBAC 才是安全边界。
-- 会话、工具调用、Action 预检、待确认动作、执行结果和关键事件都要留痕。
-
-## 产品截图
-
-### AI Agent
-
-![AI Agent](docs/screenshots/智能助手.png)
-![知识图谱](docs/screenshots/知识图谱.png)
-
-### 日志/链路排障取证
-
-![日志/链路排障取证](docs/screenshots/链路追踪.png)
-
-### 事件中心
-
-![事件中心](docs/screenshots/事件中心.png)
-
-### 任务资源与执行入口
-
-![任务资源与执行入口](docs/screenshots/任务中心.png)
-
-更多截图保存在 [docs/screenshots](docs/screenshots)。
-
-## 技术栈
-
-| 层级 | 技术 |
-| --- | --- |
-| 后端 | Django、Django REST framework、Channels、Daphne |
-| 前端 | Vue 3、Vue Router、Pinia、Element Plus、ECharts、Vite |
-| 数据库 | 本地默认 SQLite，Docker Compose 默认 MySQL 8 |
-| 缓存与实时通信 | Redis、Channels Redis |
-| 外部集成 | Kubernetes API、Docker、SSH、Prometheus / Grafana、SkyWalking、Tempo、Jaeger、Zipkin、Loki / ELK / SLS |
-
-## 架构概览
-
-```mermaid
-flowchart LR
-    user["用户 / 运维人员"] --> frontend["Vue 3 前端工作台"]
-    frontend --> api["Django REST API"]
-    frontend --> ws["Channels WebSocket"]
-    api --> rbac["RBAC / 审计"]
-    api --> aiops["AIOps 智能体"]
-    api --> ops["任务 / 工单 / 事件"]
-    aiops --> facts["可观测性事实层"]
-    ops --> facts
-    facts --> integrations["Prometheus / Grafana / Logs / Trace / K8s / SSH"]
-    api --> db["MySQL 或 SQLite"]
-    ws --> redis["Redis"]
-```
-
-## 快速启动
-
-### 方式一：Docker Compose
-
-（目前是自己build镜像，后面稳定版我推到 dockerhub 镜像仓库，这样首次部署可以不用拉依赖了）
-仓库内置应用、MySQL 和 Redis 编排，适合最快体验完整功能：
+## 1.2 一键部署（推荐路径）
 
 ```bash
+# 1. clone
+git clone git@github.com:z351150948/devops.git
+cd devops
+
+# 2. 准备 .env
+cp .env.example .env
+# 用编辑器填入真实 SECRET_KEY / MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD
+python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(32))" >> .env
+# （覆盖上面手动填的占位值）
+
+# 3. 拉取 Autotoll Devops 品牌资源（index.html / favicon / 5 个 JS bundle / urls.py）
+./scripts/apply-patches.sh
+#  离线环境：先下载 sxdevops-patches-v0.1.0.tgz，再执行
+#  PATCHES_URL=file:///path/to/sxdevops-patches.tgz ./scripts/apply-patches.sh
+#  或    ./scripts/apply-patches.sh --local ./sxdevops-patches.tgz
+
+# 4. 启动
+docker compose up -d --build
+
+# 5. 等健康检查通过（约 30~60s）
+docker compose ps
+docker compose logs -f sxdevops | grep -E "Booting|started|Listening|migrate"
+```
+
+服务起来后默认监听 **http://<host>:8000**（`SXDEVOPS_PORT` 可改）。
+
+## 1.3 部署后的必做验证
+
+```bash
+# 1. 后端 API 健康
+curl -fsS http://localhost:8000/api/health/ | jq .
+
+# 2. 前端首页可访问
+curl -fsSI http://localhost:8000/ | head -1   # 期望 200 OK
+
+# 3. RBAC 登录（默认 admin 账号，初始密码见 docker/entrypoint.sh seed 段）
+#    第一次进 UI 会强制改密
+
+# 4. 数据库迁移状态
+docker compose exec sxdevops python manage.py showmigrations | tail -5
+# 期望末尾显示 [X] 0022_disable_demo_provider_self_heal
+
+# 5. demo provider 不应存在
+docker compose exec mysql mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" sxdevops \
+  -e "SELECT name FROM aiops_aiopsmodelprovider;"
+# 期望：空（或只有你自己配置的真实 provider，看不到「智能助手体验版」）
+
+# 6. Tempo trace 联通（如启用了 TEMPO_ENABLED=1）
+curl -fsS "${TEMPO_QUERY_URL}/api/search?tags={}" | jq .
+```
+
+## 1.4 离线 / 内网部署
+
+镜像与 patches 都打包成 tarball 后离线搬运：
+
+```bash
+# 在线机：导出镜像
+docker save sxdevops:latest mysql:8.0 redis:7-alpine \
+  -o /tmp/sxdevops-images.tgz
+# 在线机：下载 patches
+curl -fsSL -o /tmp/sxdevops-patches.tgz \
+  https://github.com/z351150948/devops/releases/download/v0.1.0/sxdevops-patches-v0.1.0.tgz
+
+# 离线机：导入镜像 + 应用 patches
+docker load -i /tmp/sxdevops-images.tgz
+git clone <内部 git 镜像>/devops.git
+cd devops
+./scripts/apply-patches.sh --local /tmp/sxdevops-patches.tgz
 docker compose up -d --build
 ```
 
-启动后访问：
-
-- 平台入口：`http://localhost:8000`
-- MySQL 和 Redis 由 Compose 内部网络提供
-
-首次启动时容器会自动执行：
+## 1.5 升级
 
 ```bash
-python manage.py migrate
-python manage.py seed_data
-python manage.py seed_templates
+git pull --rebase
+./scripts/apply-patches.sh        # 拉取新版本 brand 资源
+docker compose build sxdevops
+docker compose up -d
+docker compose exec sxdevops python manage.py migrate --noinput
 ```
 
-如需关闭初始化数据，可在 `docker-compose.yml` 中把 `SXDEVOPS_SEED_DATA` 或 `SXDEVOPS_SEED_TEMPLATES` 设置为 `0`。
+`./scripts/apply-patches.sh` 是幂等的：检测到 `patches/` 已完整就跳过。
 
-### 方式二：本地开发
+## 1.6 数据备份
 
-后端：
+```bash
+# 停服 → 备份 MySQL data volume → 启动
+docker compose stop sxdevops
+docker run --rm -v devops-push_mysql_data:/from -v $(pwd)/backup:/to \
+  alpine tar czf /to/mysql-$(date +%F).tgz -C /from .
+docker compose start sxdevops
+```
+
+---
+
+# 二、二次开发指南
+
+## 2.1 仓库结构
+
+```
+devops/
+├── backend/                # Django 项目根
+│   ├── sxdevops/           # 共享 settings / urls / asgi / wsgi
+│   ├── ops/                # 可观测性、主机、容器、任务中心
+│   ├── aiops/              # LLM、Provider、Skill、Agent
+│   ├── marketplace/        # 中间件模板
+│   ├── sqlaudit/           # SQL 审计
+│   ├── iac/                # 基础设施即代码
+│   ├── multicloud/         # 多云接入
+│   ├── rbac/               # 权限（registry / permissions / guards）
+│   ├── eventwall/          # 事件中心
+│   └── aiops/migrations/   # 0022 永久禁用 demo provider
+├── frontend/               # Vue 3 + Vite + Element Plus
+│   └── src/
+│       ├── views/          # 页面（PascalCase）
+│       ├── layout/         # 工作台、菜单、面包屑
+│       ├── api/            # axios wrapper
+│       ├── router/         # 路由 + 守卫
+│       └── stores/         # pinia
+├── docs/                   # 公开文档与产品截图
+├── patches/                # ⚠️ 运行时由 apply-patches.sh 写入，git 忽略
+├── scripts/apply-patches.sh
+├── docker/                 # 额外 dockerfile 片段（entrypoint 等）
+├── docker-compose.yml
+├── .env.example
+├── AGENTS.md               # 给 AI coding agent 看的项目规约（必读）
+├── CONTRIBUTING.md
+├── SECURITY.md
+└── LICENSE
+```
+
+## 2.2 本地后端开发
 
 ```bash
 cd backend
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# 准备数据库（用 docker 起一个 mysql + redis 即可）
+docker compose up -d mysql redis
+export MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 \
+       MYSQL_USER=sxdevops MYSQL_PASSWORD=devpass MYSQL_DATABASE=sxdevops \
+       REDIS_URL=redis://127.0.0.1:6379/0 \
+       SECRET_KEY=dev-secret-key DEBUG=1 CORS_ALLOW_ALL_ORIGINS=1
+
 python manage.py migrate
-python manage.py seed_data
-python manage.py seed_templates
+python manage.py seed_data          # 可选：参考数据
+python manage.py seed_templates     # 可选：marketplace 模板
 python -m daphne -b 0.0.0.0 -p 8000 sxdevops.asgi:application
 ```
 
-前端：
+HMR：改了 `.py` 文件，daphne 不会自动 reload，请用：
+
+```bash
+python -m daphne --reload -b 0.0.0.0 -p 8000 sxdevops.asgi:application
+```
+
+测试：
+
+```bash
+python manage.py test
+```
+
+## 2.3 本地前端开发
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev      # http://localhost:5173 ，通过 vite proxy 转发 /api → 8000
 ```
 
-本地开发地址：
+约定（来自 [AGENTS.md](AGENTS.md)）：
 
-- 前端：`http://localhost:3000`
-- 后端：`http://localhost:8000`
+- 视图 / 布局用 PascalCase：`TaskWorkbench.vue` / `AppLayout.vue`。
+- API / store / util 用 kebab-case 小写：`request.js` / `app.js`。
+- 工作台页遵循 `hero + stats cards + compact hint strip + tabs/content` 模式，复用 `release-stat-card` 视觉。
+- 不写老式 `page-header` 块，规避营销感大区块。
 
-Windows 下也可以使用开发辅助脚本一键启动或停止前后端：
-
-```powershell
-.\tools\dev\start-dev.ps1
-.\tools\dev\stop-dev.ps1
-```
-
-## 体验账号
-
-执行初始化数据后可使用以下账号登录，默认密码均为：
-
-```text
-Admin@123456
-```
-
-常用账号：
-
-- `admin`
-- `ops_demo`
-- `dev_demo`
-- `audit_demo`
-- `viewer_demo`
-
-这些账号仅用于本地演示和开发环境。公开部署前请修改默认密码或禁用演示账号。
-
-## 配置说明
-
-后端支持通过环境变量或 `backend/config.json` 覆盖关键配置。需要本地 MySQL 或 Redis 时，可以参考 [backend/config.example.md](backend/config.example.md) 和 [backend/config.example.json](backend/config.example.json)。
-
-常用环境变量：
+## 2.4 改前端后重新构建 bundle
 
 ```bash
-DATABASE_ENGINE=mysql
-MYSQL_HOST=mysql
-MYSQL_PORT=3306
-MYSQL_DATABASE=sxdevops
-MYSQL_USER=sxdevops
-MYSQL_PASSWORD=sxdevops_password
-REDIS_URL=redis://redis:6379/0
-CHANNEL_REDIS_URL=redis://redis:6379/1
-SECRET_KEY=change-me
-DEBUG=0
-ALLOWED_HOSTS=localhost,127.0.0.1
-CORS_ALLOW_ALL_ORIGINS=0
+cd frontend
+npm run build
+# 产物在 frontend/dist/
+
+# 方式 A：让 compose 重新 build 镜像（推荐）
+docker compose build sxdevops
+docker compose up -d sxdevops
+
+# 方式 B：把新 dist bind-mount 进容器（仅本地调试）
+#   在 docker-compose.yml 的 sxdevops service 加：
+#     - ./frontend/dist:/app/frontend/dist:ro
+#   然后 docker compose up -d sxdevops
 ```
 
-本地开发不配置数据库时会自动使用 `backend/db.sqlite3`；Docker Compose 默认使用 MySQL 与 Redis。
+方式 A 是生产路径；方式 B 不进 git，只用于本地 HMR 风格的试错。
 
-## 常用命令
+## 2.5 RBAC 改动守则
+
+任何「新增/修改权限、路由守卫、菜单可见性、按钮、WS 接入」必须**先改后端 enforcement**，再同步前端展示。前端隐藏只是镜像，不是安全边界。
+
+参考：
+
+- `backend/rbac/registry.py` — 权限注册
+- `backend/rbac/permissions.py` — 权限校验装饰器
+- `frontend/src/router/index.js` — 路由守卫
+- `frontend/src/layout/AppLayout.vue` — 菜单显隐
+- `frontend/src/stores/auth.js` — 前端权限 store
+
+## 2.6 LLM Provider 配置
+
+`SXDEVOPS_SEED_DEMO_PROVIDER=0` 是默认。首次部署后通过 UI 的「模型供应商」页自行添加：
+
+- `provider_type`: `openai_compat` / `anthropic` / `gemini` / `ollama` ...
+- `base_url`: 例如 `https://api.deepseek.com/v1`
+- `api_key`: 加密后存 DB（`api_key_encrypted` 字段）
+- `default_model` / `backup_model`
+
+## 2.7 Traces 后端切换
 
 ```bash
-# 后端测试
-cd backend && python manage.py test
-
-# 前端构建
-cd frontend && npm run build
-
-# 重新生成基础演示数据
-cd backend && python manage.py seed_data
-
-# 重新生成智能体与任务模板
-cd backend && python manage.py seed_templates
-
-# Docker Compose 停止服务
-docker compose down
+# 切回 SkyWalking
+SKYWALKING_ENABLED=1 TEMPO_ENABLED=0 TRACING_DEFAULT_PROVIDER=skywalking \
+  docker compose up -d
 ```
 
-## 目录结构
+---
 
-```text
-.
-├── backend/                 # Django 后端项目
-│   ├── sxdevops/            # 项目设置、ASGI/WSGI、路由入口
-│   ├── aiops/               # AIOps 智能体、模型、工具、审计
-│   ├── ops/                 # 运维任务、可观测性、发布、告警等
-│   ├── eventwall/           # 事件中心
-│   ├── rbac/                # 权限、角色、菜单与审计
-│   └── ...                  # marketplace、sqlaudit、iac、multicloud 等模块
-├── frontend/                # Vue 3 前端项目
-│   └── src/
-│       ├── views/           # 页面
-│       ├── layout/          # 布局
-│       ├── api/             # API 封装
-│       ├── router/          # 路由
-│       └── stores/          # Pinia 状态
-├── docs/                    # 产品截图与设计文档
-├── docker/                  # 容器入口脚本
-├── tools/dev/               # Windows 本地开发辅助脚本
-├── docker-compose.yml       # 本地容器化部署
-└── Dockerfile               # 前后端一体镜像
-```
+# 三、关于 `patches/`
 
-## 设计文档与延伸阅读
+`patches/` 目录**不进 git**。它由 `./scripts/apply-patches.sh` 在部署前从 GitHub Release tarball 同步到本地，包含：
 
-- [SxDevOps AI Agent 产品介绍](https://www.sxdevops.top/ai-agent-promo)
-- [微信公众号文章：7fPrmABj2Ot2VbgTLTr3Zw](https://mp.weixin.qq.com/s/7fPrmABj2Ot2VbgTLTr3Zw)
-- [微信公众号文章：1fFcSliQ_Nw_HQvwmRxzJg](https://mp.weixin.qq.com/s/1fFcSliQ_Nw_HQvwmRxzJg)
-- [AIOps 2.0 升级优化方案](docs/AIOps2.0升级优化方案.md)
-- [AIOps 2.1 指标证据包设计](docs/AIOps2.1指标证据包设计.md)
-- [AIOps 2.1.2 Action Handler 与上下文 Copilot 设计](docs/AIOps2.1.2-Action-Handler与上下文Copilot设计.md)
-- [AIOps MCP + Skill 双阶段应答设计](docs/AIOps-MCP-Skill-双阶段应答设计.md)
-- [AIOps 智能体实现说明](docs/AIOps智能体实现说明.md)
+- 5 个 baked JS bundle（`index-*.js` / `Login-*.js` / `WebShell-*.js` / `K8sManage-*.js` / `AIAgentPromo-*.js`）— Autotoll 品牌色、Logo、介绍页改造
+- `index.html` — 标题、meta、入口资源
+- `favicon.png` / `favicon.svg`
+- `sxdevops-ai-agent-promo.html` — 产品介绍页
+- `urls.py` — 把 `/promo/...` 和 `/favicon.*` 路由到前端静态资源
 
-## 路线图
+为什么不进 git：
 
-- 扩展告警处置、工单汇总、K8s 异常、任务生成等 Skill 模板族。
-- 增强内置 MCP 和外部 MCP 的健康检查、工具发现、鉴权与超时诊断。
-- 在只读诊断后继续接入审批、命令模板、Runbook 和任务编排。
-- 建立更可信的事实链路：告警准、事件准、任务准、结果准。
-- 将高频、低风险动作逐步纳入可确认、可回滚、可审计的自动化闭环。
+1. 这些是 `npm run build` 的编译产物，没有 source map，从产物回溯改动成本极高。
+2. 真正可持续的方案是改 `frontend/src/` 源码再 `npm run build`；那时 `patches/` 里那些文件就成了「新一次构建的产物」，而不是源码。
+3. 持续把编译产物当 source 管，会让 PR review 变成「diff 一坨 minified JS」的灾难。
 
-## 贡献
+> **过渡期约束**：在 `frontend/src/` 没有真正消化这些改动前，`patches/` + `apply-patches.sh` 是「带源缺的兜底」；所有 fork 用户必须在 `docker compose up` 之前先跑 `./scripts/apply-patches.sh`。
 
-欢迎提交 Issue、讨论需求、补充文档或贡献代码。开始前建议先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+---
 
-适合优先参与的方向：
+# 四、已知问题 / 注意事项
 
-- 完善部署文档、截图和演示数据。
-- 补充 AIOps、可观测性、任务中心和 RBAC 的测试用例。
-- 新增数据源、模型供应商、工具调用和运维 Skill。
-- 优化前端工作台体验和移动端适配。
+1. **不要把生产 SECRET_KEY / 数据库密码 commit 进 git**。`.env` 已被 `.gitignore`，`SECURITY.md` 有完整基线清单。
+2. **0022 migration 不可逆**。如果误升级想恢复 demo provider，请直接跳过该 migration（`manage.py migrate aiops 0021`），并把 `SXDEVOPS_SEED_DEMO_PROVIDER` 显式置 `1`。但上游设计意图是「永久禁 demo」。
+3. **SkyWalking GraphQL `ServiceLayer` 枚举**：上游老代码假设 OAP 暴露了 `ServiceLayer` 枚举，但 OAP 9.x 改成了 `String`。已修。
+4. **Grafana JSONField**：MySQL 后端偶发把 JSON 字段以字符串返回，`observability_views.py` 已用 `_coerce()` 幂等解析。
+5. **Tempo 单机模式**：`TEMPO_DEMO_MODE=0` 走的是 docker network 内的 `tempo:3200`（假设同 compose network 内另有 tempo 服务）。生产建议接外部 Tempo / Grafana Cloud。
+6. **前端 dist 在镜像里**：容器内 `/app/frontend/dist` 是 build 期产物，`patches/` bind-mount 覆盖之。改 `frontend/src/` 后必须重 build 镜像。
 
-## 安全与生产部署提醒
+---
+
+# 五、安全与生产部署提醒
 
 - 生产环境请显式配置 `SECRET_KEY`、`DEBUG=0`、`ALLOWED_HOSTS`、数据库和 Redis。
 - 不要提交真实云账号、数据库密码、Kubeconfig、SSH 密钥、Grafana Token、模型供应商 API Key 或其他生产凭据。
@@ -352,16 +342,23 @@ docker compose down
 - 运行日志、SQLite 数据库、临时截图和本地配置不应进入版本库。
 - 如发现安全问题，请参考 [SECURITY.md](SECURITY.md) 的方式反馈。
 
-## 开源协议
+# 六、开源协议
 
-SxDevOps 基于 [Apache License 2.0](LICENSE) 开源。分发或二次开发时请保留项目中的 [NOTICE](NOTICE) 文件。
+SxDevOps 基于 [Apache License 2.0](LICENSE) 开源。Autotoll Devops fork 同样遵循 Apache 2.0。分发或二次开发时请保留项目中的 [NOTICE](NOTICE) 文件与版权声明。
 
-## 特别说明
+# 七、贡献
 
-SxDevOps 目前是一个纯个人开源项目，UI 设计、架构设计、功能开发、测试验证和模型调用成本都主要来自个人业余时间与个人 Token 投入。受限于个人精力，项目现阶段一定还有不少不完善的地方，也难免存在 Bug，欢迎大家多提 Issue、建议和 PR，我会在能力范围内持续迭代。
+欢迎提交 Issue、讨论需求、补充文档或贡献代码。开始前建议先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [AGENTS.md](AGENTS.md)（给 AI coding agent 看的项目规约）。
 
-如果这个项目、实现方式或产品思路对你有帮助，也欢迎小额打赏支持，帮我分担一点 Token 成本，也给后续继续迭代多一点动力。
+适合优先参与的方向：
 
-<img src="docs/screenshots/收款码.png" alt="收款码" width="220" />
+- 完善部署文档、截图和演示数据。
+- 补充 AIOps、可观测性、任务中心和 RBAC 的测试用例。
+- 新增数据源、模型供应商、工具调用和运维 Skill。
+- 优化前端工作台体验和移动端适配。
+- 把 `patches/` 里的手工改动真正搬进 `frontend/src/`，从源头消除「带源缺的兜底」。
 
-最后特别鸣谢阿铭老师为本项目提供思路启发和大力宣传。如果你有 AIOps、大模型运维、自动化运维相关学习需求，可以通过阿铭老师的公开渠道添加微信咨询：[铭科智联 - 跟阿铭学大模型/AIOps](https://www.amingedu.com/)。
+# 八、致谢
+
+- 上游 SxDevOps 作者 [dayan150820](https://github.com/aiyiyi121/sxdevops) — 没有这个项目就没有 Autotoll Devops。
+- 感谢阿铭老师为本项目提供思路启发和大力宣传。如果你有 AIOps、大模型运维、自动化运维相关学习需求，可以通过阿铭老师的公开渠道添加微信咨询：[铭科智联 - 跟阿铭学大模型/AIOps](https://www.amingedu.com/)。

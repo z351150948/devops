@@ -868,7 +868,7 @@ def _load_skywalking_services(config, layer=''):
     queries = [
         (
             """
-            query ListServices($layer: ServiceLayer) {
+            query ListServices($layer: String) {
               listServices(layer: $layer) {
                 id
                 name
@@ -917,7 +917,6 @@ def _load_skywalking_topology(config):
           id
           name
           type
-          layers
         }
         calls {
           id

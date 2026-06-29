@@ -11,24 +11,54 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
       DATABASE_ENGINE: mysql
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
-      MYSQL_DATABASE: sxdevops
-      MYSQL_USER: sxdevops
-      MYSQL_PASSWORD: sxdevops_password
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-sxdevops}
+      MYSQL_USER: ${MYSQL_USER:-sxdevops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set in .env}
       REDIS_URL: redis://redis:6379/0
       CHANNEL_REDIS_URL: redis://redis:6379/1
-      SECRET_KEY: sxdevops-change-me-in-production
-      DEBUG: "0"
-      CORS_ALLOW_ALL_ORIGINS: "1"
-      SXDEVOPS_WAIT_FOR_DB: "1"
-      SXDEVOPS_MIGRATE: "1"
-      SXDEVOPS_SEED_DATA: "1"
-      SXDEVOPS_SEED_TEMPLATES: "1"
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      DEBUG: ${DEBUG:-0}
+      CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-1}
+      SXDEVOPS_WAIT_FOR_DB: ${SXDEVOPS_WAIT_FOR_DB:-1}
+      SXDEVOPS_MIGRATE: ${SXDEVOPS_MIGRATE:-1}
+      SXDEVOPS_SEED_DEMO_PROVIDER: ${SXDEVOPS_SEED_DEMO_PROVIDER:-0}
+      # 0022 migration permanently disables the demo "智能助手体验版" provider;
+      # leave both at 0 in production. Set to 1 only when bootstrapping a fresh
+      # environment with no other provider configured.
+      SXDEVOPS_SEED_DATA: ${SXDEVOPS_SEED_DATA:-0}
+      SXDEVOPS_SEED_TEMPLATES: ${SXDEVOPS_SEED_TEMPLATES:-0}
+      # Observability: Tempo + SkyWalking (Autotoll Devops default)
+      TEMPO_ENABLED: ${TEMPO_ENABLED:-1}
+      SKYWALKING_ENABLED: ${SKYWALKING_ENABLED:-0}
+      TEMPO_QUERY_URL: ${TEMPO_QUERY_URL:-http://tempo:3200}
+      TEMPO_UI_URL: ${TEMPO_UI_URL:-http://tempo:3200}
+      TEMPO_DEMO_MODE: ${TEMPO_DEMO_MODE:-0}
+      TRACING_DEFAULT_PROVIDER: ${TRACING_DEFAULT_PROVIDER:-tempo}
+    volumes:
+      # Backend hot-patches (read-only) - useful for fast iteration without rebuild
+      - ./backend/ops/tracing_providers.py:/app/backend/ops/tracing_providers.py:ro
+      - ./backend/ops/observability_views.py:/app/backend/ops/observability_views.py:ro
+      # Autotoll Devops brand patches (2026-06-26).
+      # Run `./scripts/apply-patches.sh` before `docker compose up` to populate
+      # ./patches/ from the official release tarball.
+      - ./patches/assets/index-DVQYMGEu.js:/app/frontend/dist/assets/index-DVQYMGEu.js:ro
+      - ./patches/assets/Login-dq9xDgTt.js:/app/frontend/dist/assets/Login-dq9xDgTt.js:ro
+      - ./patches/assets/WebShell-D2GcyKzp.js:/app/frontend/dist/assets/WebShell-D2GcyKzp.js:ro
+      - ./patches/assets/K8sManage-BcAvxaTu.js:/app/frontend/dist/assets/K8sManage-BcAvxaTu.js:ro
+      - ./patches/assets/AIAgentPromo-CMRKMGzn.js:/app/frontend/dist/assets/AIAgentPromo-CMRKMGzn.js:ro
+      - ./patches/index.html:/app/frontend/dist/index.html:ro
+      - ./patches/favicon.png:/app/frontend/dist/favicon.png:ro
+      - ./patches/favicon.svg:/app/frontend/dist/favicon.svg:ro
+      - ./patches/sxdevops-ai-agent-promo.html:/app/frontend/dist/promo/sxdevops-ai-agent-promo.html:ro
+      - ./patches/urls.py:/app/backend/sxdevops/urls.py:ro
     ports:
-      - "8000:8000"
+      - "${SXDEVOPS_PORT:-8000}:8000"
 
   mysql:
     image: mysql:8.0
@@ -38,11 +68,13 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --default-authentication-plugin=mysql_native_password
+    env_file:
+      - .env
     environment:
-      MYSQL_DATABASE: sxdevops
-      MYSQL_USER: sxdevops
-      MYSQL_PASSWORD: sxdevops_password
-      MYSQL_ROOT_PASSWORD: sxdevops_root_password
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-sxdevops}
+      MYSQL_USER: ${MYSQL_USER:-sxdevops}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set in .env}
       TZ: Asia/Shanghai
     volumes:
       - mysql_data:/var/lib/mysql

@@ -2698,22 +2698,61 @@ def _ensure_builtin_runtime_assets(config):
 
 
 def _ensure_builtin_model_provider(config):
+    import os
     definition = BUILTIN_MODEL_PROVIDER
-    provider, created = AIOpsModelProvider.objects.get_or_create(
-        name=definition['name'],
-        defaults={
-            'provider_type': definition['provider_type'],
-            'base_url': definition['base_url'],
-            'default_model': definition['default_model'],
-            'backup_model': definition['backup_model'],
-            'temperature': definition['temperature'],
-            'max_tokens': definition['max_tokens'],
-            'timeout_seconds': definition['timeout_seconds'],
-            'is_enabled': True,
-            'last_test_status': AIOpsModelProvider.STATUS_UNKNOWN,
-            'last_test_message': definition['last_test_message'],
-        },
-    )
+    # 永久禁止 demo provider 自我修復（patch by paicoding 2026-06-24）：
+    # 1) SXDEVOPS_SEED_DEMO_PROVIDER=0（預設）→ 永不重建 demo
+    # 2) 若 DB 已有其他可用 provider（user 已自配 MiniMax 等），demo 永不重建
+    # 3) 僅在「DB 完全無 provider」時，才創建 demo 作為首次安裝 fallback
+    if os.environ.get('SXDEVOPS_SEED_DEMO_PROVIDER', '0') == '0':
+        existing_other = AIOpsModelProvider.objects.exclude(
+            name=definition['name']
+        ).filter(is_enabled=True).exists()
+        provider = AIOpsModelProvider.objects.filter(name=definition['name']).first()
+        if provider is None and existing_other:
+            # user 已自配其他 provider → 永久不重建 demo
+            if not config.default_provider_id:
+                fallback = AIOpsModelProvider.objects.filter(is_enabled=True).order_by('id').first()
+                if fallback:
+                    config.default_provider = fallback
+                    config.save(update_fields=['default_provider'])
+            return None
+        if provider is None:
+            # 完全無 provider 才創建 demo 作 fallback
+            provider = AIOpsModelProvider.objects.create(
+                name=definition['name'],
+                provider_type=definition['provider_type'],
+                base_url=definition['base_url'],
+                default_model=definition['default_model'],
+                backup_model=definition['backup_model'],
+                temperature=definition['temperature'],
+                max_tokens=definition['max_tokens'],
+                timeout_seconds=definition['timeout_seconds'],
+                is_enabled=True,
+                last_test_status=AIOpsModelProvider.STATUS_UNKNOWN,
+                last_test_message=definition['last_test_message'],
+            )
+        # 已存在 demo：清掉 demo api_key 占位（防洩漏）
+        if provider.get_api_key().strip() == definition['api_key']:
+            provider.set_api_key('')
+            provider.save(update_fields=['api_key_encrypted'])
+    else:
+        # 舊行為：保留向後兼容（默認不進入）
+        provider, created = AIOpsModelProvider.objects.get_or_create(
+            name=definition['name'],
+            defaults={
+                'provider_type': definition['provider_type'],
+                'base_url': definition['base_url'],
+                'default_model': definition['default_model'],
+                'backup_model': definition['backup_model'],
+                'temperature': definition['temperature'],
+                'max_tokens': definition['max_tokens'],
+                'timeout_seconds': definition['timeout_seconds'],
+                'is_enabled': True,
+                'last_test_status': AIOpsModelProvider.STATUS_UNKNOWN,
+                'last_test_message': definition['last_test_message'],
+            },
+        )
     changed_fields = []
     for field in ['provider_type', 'base_url', 'default_model', 'backup_model']:
         if not getattr(provider, field):

@@ -457,12 +457,20 @@ def _grafana_config():
     config.setdefault('dashboards', [])
     db_config = _get_grafana_setting()
     if db_config:
+        import json as _json
+        # ORM may return str for JSONField (MySQL driver quirk); parse idempotently
+        def _coerce(v):
+            if v is None: return []
+            if isinstance(v, str):
+                try: return _json.loads(v)
+                except Exception: return []
+            return v
         config.update({
             'enabled': db_config.enabled,
             'url': db_config.url,
             'default_path': db_config.default_path,
-            'folders': db_config.folders or config.get('folders') or [],
-            'dashboards': db_config.dashboards or config.get('dashboards') or [],
+            'folders': _coerce(db_config.folders) or config.get('folders') or [],
+            'dashboards': _coerce(db_config.dashboards) or config.get('dashboards') or [],
         })
     return config
 
