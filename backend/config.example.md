@@ -4,7 +4,7 @@ Copy `config.example.json` to `config.json` when local MySQL or Redis is needed.
 `config.json` is ignored by git because it may contain passwords.
 
 `database.type` can be `sqlite` or `mysql`.
-When the database section is missing, SxDevOps uses local SQLite at `backend/db.sqlite3`.
+When the database section is missing, Autotoll DevOps uses local SQLite at `backend/db.sqlite3`.
 
 For MySQL:
 
@@ -14,7 +14,7 @@ For MySQL:
 - `host` and `port`: the MySQL server address.
 
 `cache.type` can be `redis`, `local`, or can be omitted.
-When the cache section is missing, SxDevOps uses Django in-memory cache.
+When the cache section is missing, Autotoll DevOps uses Django in-memory cache.
 
 For Redis:
 
