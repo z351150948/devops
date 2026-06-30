@@ -11,7 +11,7 @@ allow-list 保护严格跳过 L1 不动项：
 - .git/、node_modules/、frontend/dist/、backend/__pycache__/
 - 所有 *.lock / *.min.js / *.svg / *.png 文件
 
-替换映射见 spec § 3 ../specs/2026-06-29-autotoll-rebrand-design.md
+替换映射见 §3 of ../specs/2026-06-29-autotoll-rebrand-design.md
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ SKIP_LINE_PATTERNS = (
 )
 
 # 整目录跳过
-SKIP_DIRS = {"backend/sxdevops"}
+SKIP_DIRS = {"backend/sxdevops", "docs/superpowers"}
 
 
 def path_allowed(path: Path, repo_root: Path) -> bool:
@@ -96,6 +96,7 @@ def transform_text(text: str) -> tuple[str, int]:
 def iter_files(scope: str, repo_root: Path):
     if scope in ("docs", "all"):
         yield from repo_root.glob("**/*.md")
+        yield from (repo_root / "docs").rglob("*.md")
     if scope in ("patches-static", "all"):
         yield from (repo_root / "patches").rglob("*.html")
     if scope in ("frontend-display", "all"):
