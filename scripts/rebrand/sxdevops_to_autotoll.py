@@ -51,6 +51,7 @@ SKIP_FILE_GLOBS = (
 # 行级跳过：跳过整行
 SKIP_LINE_PATTERNS = (
     re.compile(r"SXDEVOPS_[A-Z_]+"),       # 环境变量
+    re.compile(r"X-SxDevOps[\w-]*"),       # HTTP header (X-SxDevOps-Token 等)
     re.compile(r"/sxdevops/"),             # URL path
     re.compile(r"image:\s*sxdevops"),      # docker image
     re.compile(r"container_name:\s*sxdevops"),
