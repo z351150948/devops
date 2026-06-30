@@ -16,6 +16,7 @@ allow-list 保护严格跳过 L1 不动项：
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import re
 import sys
 from pathlib import Path
@@ -30,14 +31,8 @@ REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bSxDevOps\b"), "Autotoll DevOps"),
 ]
 
-# 文件级跳过：绝对路径或 glob 命中整文件跳过
+# 文件级跳过：基于 basename 的 glob 命中整文件跳过（目录类已迁移到 SKIP_DIRS）
 SKIP_FILE_GLOBS = (
-    ".git/",
-    "node_modules/",
-    "frontend/dist/",
-    "backend/__pycache__/",
-    ".venv/",
-    "venv/",
     "*.lock",
     "*.min.js",
     "*.svg",
@@ -62,19 +57,37 @@ SKIP_LINE_PATTERNS = (
     re.compile(r"`?sxdevops`?(?:[._-]|$)"),  # import path / 文件名
 )
 
-# 整目录跳过
-SKIP_DIRS = {"backend/sxdevops", "docs/superpowers"}
+# 整目录跳过（任一祖先目录命中即跳过整子树）
+# - 以 "/" 结尾的 glob 仍兼容（理论兼容，目前未使用）
+# - 不含 "/" 的目录名（.git / node_modules / .venv 等）走 parts 匹配
+# - 含 "/" 的多级路径（backend/sxdevops 等）走前缀匹配
+SKIP_DIRS = {
+    "backend/sxdevops",
+    "docs/superpowers",
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "frontend/dist",
+    "backend/__pycache__",
+}
 
 
 def path_allowed(path: Path, repo_root: Path) -> bool:
     rel = path.relative_to(repo_root).as_posix()
-    if any(rel.startswith(glob.rstrip("*")) for glob in SKIP_FILE_GLOBS):
-        return False
-    if any(glob.rstrip("*") in rel for glob in SKIP_FILE_GLOBS if "*" in glob):
-        return False
+    parts = Path(rel).parts
+    # 目录跳过：单级目录走 parts 匹配，多级路径走前缀匹配
     for d in SKIP_DIRS:
-        if rel == d or rel.startswith(d + "/"):
-            return False
+        if "/" in d:
+            if rel == d or rel.startswith(d + "/"):
+                return False
+        else:
+            if d in parts:
+                return False
+    # 文件级 glob 匹配（基于 basename，用 fnmatch 严格匹配）
+    base = parts[-1] if parts else ""
+    if base and any(fnmatch.fnmatch(base, glob) for glob in SKIP_FILE_GLOBS):
+        return False
     return True
 
 
@@ -124,15 +137,24 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(args.repo).resolve()
+    if not (repo_root / ".git").exists():
+        print(f"error: {repo_root} does not contain .git; pass --repo <path>",
+              file=sys.stderr)
+        return 2
     total_files = 0
     total_hits = 0
 
     for path in iter_files(args.scope, repo_root):
         if not path_allowed(path, repo_root):
             continue
+        rel = path.relative_to(repo_root).as_posix()
         try:
             text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+        except UnicodeDecodeError:
+            print(f"[WARN] skip non-utf8: {rel}", file=sys.stderr)
+            continue
+        except OSError as e:
+            print(f"[WARN] skip unreadable {rel}: {e}", file=sys.stderr)
             continue
 
         new_lines = []
@@ -150,7 +172,6 @@ def main() -> int:
         new_text = "".join(new_lines)
         total_files += 1
         total_hits += file_hits
-        rel = path.relative_to(repo_root).as_posix()
         if args.apply:
             path.write_text(new_text, encoding="utf-8")
             print(f"[PATCH] {rel}  hits={file_hits}")
