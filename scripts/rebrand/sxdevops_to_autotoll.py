@@ -55,7 +55,8 @@ SKIP_LINE_PATTERNS = (
     re.compile(r"/sxdevops/"),             # URL path
     re.compile(r"image:\s*sxdevops"),      # docker image
     re.compile(r"container_name:\s*sxdevops"),
-    re.compile(r"`?sxdevops`?(?:[._-]|$)"),  # import path / 文件名
+    re.compile(r"(?:^|\s)(?:from|import)\s+sxdevops[\w.]*"),  # Python import path (avoid markdown ref false-positive)
+    re.compile(r"(?:上游[\s\S]*?|基于\s+|是\s+|在\s+|相对\s+)SxDevOps"),  # 上游项目署名/合规引用（L1 必保留）
 )
 
 # 整目录跳过（任一祖先目录命中即跳过整子树）
