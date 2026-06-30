@@ -79,3 +79,6 @@ backend/run/
 backend/runtime/
 frontend/run/
 tmp_deploy/
+
+# rebrand 本地副产物
+docs/rebrand-inventory.md
