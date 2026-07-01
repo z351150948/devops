@@ -1970,7 +1970,7 @@ class AlertNotificationChannelViewSet(EventWallModelViewSetMixin, RBACPermission
             alert = Alert.objects.create(
                 title='告警通知测试',
                 level='info',
-                source='SxDevOps',
+                source='Autotoll DevOps',
                 source_type=Alert.SOURCE_GENERIC,
                 message='这是一条用于验证通知渠道的测试告警。',
                 status=Alert.STATUS_ACTIVE,

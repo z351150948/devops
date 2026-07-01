@@ -1027,7 +1027,7 @@ def _build_huaweicloud_main_tf(payload):
     lines = [
         'resource "huaweicloud_vpc" "this" {', f'  name = {_hcl_string(payload["name"] + "-vpc")}', f'  cidr = {_hcl_string(network["vpc_cidr"])}', '}', '',
         'resource "huaweicloud_vpc_subnet" "this" {', f'  name              = {_hcl_string(payload["name"] + "-subnet")}', f'  cidr              = {_hcl_string(network["subnet_cidr"])}', f'  gateway_ip        = {_hcl_string(network["subnet_gateway"])}', '  vpc_id            = huaweicloud_vpc.this.id', f'  availability_zone = {_hcl_string(payload["zone"])}', '  dns_list          = ["100.125.1.250", "100.125.21.250"]', '}', '',
-        'resource "huaweicloud_networking_secgroup" "this" {', f'  name        = {_hcl_string(payload["name"] + "-sg")}', '  description = "Managed by SxDevOps Terraform generator"', '}', '',
+        'resource "huaweicloud_networking_secgroup" "this" {', f'  name        = {_hcl_string(payload["name"] + "-sg")}', '  description = "Managed by Autotoll DevOps Terraform generator"', '}', '',
         'resource "huaweicloud_networking_secgroup_rule" "ingress" {', f'  count             = {len(network["open_ingress_ports"])}', '  direction         = "ingress"', '  ethertype         = "IPv4"', '  protocol          = "tcp"', f'  port_range_min    = element({_hcl_list(network["open_ingress_ports"])}, count.index)', f'  port_range_max    = element({_hcl_list(network["open_ingress_ports"])}, count.index)', '  remote_ip_prefix  = "0.0.0.0/0"', '  security_group_id = huaweicloud_networking_secgroup.this.id', '}', '',
     ]
     for index, compute in enumerate(compute_instances):
@@ -1160,4 +1160,4 @@ def _build_readme(payload, has_secret_tfvars):
         for relation in payload['resource_relationships']:
             summary_lines.append(f'- 关联关系: `{relation["source_name"]}` {relation["relation_type"]} `{relation["target_name"]}`')
     usage = ['1. 安装 Terraform 1.5+。', '2. 执行 `terraform init`。', '3. 根据需要修改 `terraform.tfvars` 中的敏感信息。' if has_secret_tfvars else '3. 将 `terraform.tfvars.example` 复制为 `terraform.tfvars` 并填写敏感信息。', '4. 执行 `terraform plan`，确认无误后执行 `terraform apply`。']
-    return '\n'.join([f'# {payload["display_name"] or payload["name"]}', '', payload['provider_meta']['description'], '', '## 资源清单', '', *summary_lines, '', '## 使用方式', '', *usage, '', '## 说明', '', '- 该工程由 SxDevOps 自动生成。', '- 敏感凭证不会持久化到 SxDevOps 数据库。', '- 如需更复杂的路由、监听器、白名单或参数组，请在生成文件基础上继续扩展。', ''])
+    return '\n'.join([f'# {payload["display_name"] or payload["name"]}', '', payload['provider_meta']['description'], '', '## 资源清单', '', *summary_lines, '', '## 使用方式', '', *usage, '', '## 说明', '', '- 该工程由 Autotoll DevOps 自动生成。', '- 敏感凭证不会持久化到 Autotoll DevOps 数据库。', '- 如需更复杂的路由、监听器、白名单或参数组，请在生成文件基础上继续扩展。', ''])

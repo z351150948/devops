@@ -293,7 +293,7 @@ class Command(BaseCommand):
                 'category': 'system',
                 'action': 'sync_role',
                 'title': '权限基线同步完成',
-                'summary': 'SxDevOps 运维管理员角色与菜单权限完成同步。',
+                'summary': 'Autotoll DevOps 运维管理员角色与菜单权限完成同步。',
                 'result': EventRecord.RESULT_SUCCESS,
                 'severity': EventRecord.SEVERITY_INFO,
                 'actor_username': 'system',
