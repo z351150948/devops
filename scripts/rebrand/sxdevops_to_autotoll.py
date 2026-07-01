@@ -115,7 +115,7 @@ def iter_files(scope: str, repo_root: Path):
     if scope in ("patches-static", "all"):
         yield from (repo_root / "patches").rglob("*.html")
     if scope in ("frontend-display", "all"):
-        for ext in ("*.vue", "*.js", "*.ts"):
+        for ext in ("*.vue", "*.js", "*.ts", "*.css", "*.scss", "*.html"):
             for p in (repo_root / "frontend").rglob(ext):
                 if "node_modules" in p.parts or "dist" in p.parts:
                     continue
