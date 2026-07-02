@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/sqlaudit/', include('sqlaudit.urls')),
     path('api/aiops/', include('aiops.urls')),
     path('api/', include('eventwall.urls')),
+    path('api/monitoring/', include('monitoring.urls')),
     re_path(r'^(assets/.*|promo/.*|favicon\.svg)$', frontend_views.frontend_asset),
     path('', frontend_views.frontend_index),
     re_path(r'^(?!api/|admin/|ws/).*$' , frontend_views.frontend_index),

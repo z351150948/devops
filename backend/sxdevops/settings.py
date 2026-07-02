@@ -381,6 +381,7 @@ INSTALLED_APPS = [
     'aiops.apps.AiopsConfig',
     'rbac',
     'eventwall',
+    'monitoring.apps.MonitoringConfig',
 ]
 
 MIDDLEWARE = [
