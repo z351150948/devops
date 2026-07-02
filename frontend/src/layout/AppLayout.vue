@@ -3,10 +3,10 @@
     <aside class="sidebar" :class="{ collapsed: appStore.sidebarCollapsed }">
       <div class="sidebar-logo">
         <div class="logo-icon">
-          <img src="@/assets/brand-mark.svg" alt="SxDevOps" class="brand-mark" />
+          <img src="@/assets/brand-mark.svg" alt="Autotoll DevOps" class="brand-mark" />
         </div>
         <div class="logo-copy">
-          <span class="logo-text">SxDevOps</span>
+          <span class="logo-text">Autotoll DevOps</span>
           <span class="logo-subtext">AI Agent</span>
         </div>
       </div>

@@ -1749,7 +1749,7 @@ function initExecTerminal() {
   execTerminal.loadAddon(execFitAddon)
   execTerminal.open(execTerminalRef.value)
   execFitAddon.fit()
-  execTerminal.writeln('\x1b[1;36mSxDevOps Pod Terminal\x1b[0m')
+  execTerminal.writeln('\x1b[1;36mAutotoll DevOps Pod Terminal\x1b[0m')
   execTerminal.writeln('\x1b[2mConnecting to pod...\x1b[0m')
   execTerminal.writeln('')
 

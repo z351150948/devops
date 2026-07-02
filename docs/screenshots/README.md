@@ -4,7 +4,7 @@
 
 ## 当前保留截图
 
-- `sxdevops-operation-flow.png`：SxDevOps 运转逻辑总览图。
+- `sxdevops-operation-flow.png`：Autotoll DevOps 运转逻辑总览图。
 - `智能助手.png`：AIOps 智能助手页面截图。
 - `链路追踪.png`：日志/链路排障取证入口截图。
 - `事件中心.png`：事件中心、失败事件定位和操作审计截图。

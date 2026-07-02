@@ -2,7 +2,7 @@
 
 ## Project Structure
 
-SxDevOps is split into `backend/` and `frontend/`.
+Autotoll DevOps is split into `backend/` and `frontend/`.
 
 - `backend/` is a Django project. Shared settings live in `backend/sxdevops/`; domain apps include `ops/`, `marketplace/`, `sqlaudit/`, `iac/`, `multicloud/`, `aiops/`, `rbac/`, and `eventwall/`.
 - `frontend/src/` contains the Vue 3 app. Views live in `frontend/src/views/`, layout in `frontend/src/layout/`, API wrappers in `frontend/src/api/`, routes in `frontend/src/router/`, and stores in `frontend/src/stores/`.
