@@ -252,6 +252,59 @@
       </div>
     </template>
 
+    <template v-else-if="activeTab === 'db-monitor'">
+      <div class="workbench-card docker-resource-card">
+        <div class="section-toolbar">
+          <div class="toolbar-head">
+            <span class="toolbar-title">数据库监控</span>
+            <span class="toolbar-desc">采集 sqlaudit.DataSource 数据库连接 / QPS / 缓存命中率等指标。</span>
+          </div>
+          <div class="workbench-card-actions">
+            <el-button @click="loadDatabases"><el-icon><RefreshRight /></el-icon>刷新</el-button>
+          </div>
+        </div>
+        <div v-loading="dbLoading">
+          <el-table :data="dbList" stripe style="width:100%">
+            <el-table-column prop="name" label="名称" min-width="160" />
+            <el-table-column prop="type" label="类型" width="100" />
+            <el-table-column label="host:port" width="200">
+              <template #default="{ row }">
+                {{ row.host }}:{{ row.port }}
+              </template>
+            </el-table-column>
+            <el-table-column label="连接" width="100">
+              <template #default="{ row }">
+                <span v-if="row.type === 'mysql' || row.type === 'polardb'">{{ row.metrics?.threads_connected || '-' }}</span>
+                <span v-else-if="row.type === 'mongodb'">{{ row.metrics?.connections?.current || '-' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="QPS" width="100">
+              <template #default="{ row }">
+                <span v-if="row.type === 'mysql' || row.type === 'polardb'">{{ row.metrics?.questions || '-' }}</span>
+                <span v-else>mongodb 无 QPS</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="缓存" width="160">
+              <template #default="{ row }">
+                <span v-if="row.type === 'mysql' || row.type === 'polardb'">命中率 {{ ((row.metrics?.innodb_buffer_pool_hit_rate || 0) * 100).toFixed(1) }}%</span>
+                <span v-else-if="row.type === 'mongodb'">{{ row.metrics?.wiredtiger?.cache_used_mb || '-' }} MB</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'ok' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <el-button size="small" @click="retryDatabase(row.id)">重试</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </template>
+
     <el-dialog v-model="logVisible" :title="'容器日志 - ' + logContainerName" width="90%" style="max-width:900px;" top="3vh" append-to-body destroy-on-close>
       <div class="filter-bar" style="margin-bottom:8px;">
         <el-select v-model="logTailLines" style="width:120px" @change="reloadContainerLogs">
@@ -306,6 +359,7 @@ import {
   testDockerConnection,
   updateDockerHost,
 } from '@/api/modules/container'
+import { probeDatabases, probeDatabase } from '@/api/modules/monitoring'
 
 const authStore = useAuthStore()
 const canManageDocker = computed(() => authStore.hasPermission('ops.docker.manage'))
@@ -314,6 +368,7 @@ const mainTabs = [
   { key: 'hosts', label: '环境管理', icon: 'OfficeBuilding' },
   { key: 'containers', label: '容器管理', icon: 'Box' },
   { key: 'images', label: '镜像管理', icon: 'Files' },
+  { key: 'db-monitor', label: '数据库', icon: 'Coin' },
 ]
 
 const tabState = useRouteTabState({
@@ -387,6 +442,43 @@ const filteredImages = computed(() => {
   )
 })
 
+// ====== 数据库监控 ======
+const dbList = ref([])
+const dbLoading = ref(false)
+
+const loadDatabases = async () => {
+  dbLoading.value = true
+  try {
+    const resp = await probeDatabases({})
+    dbList.value = resp.data?.results || []
+  } catch (e) {
+    console.error('load databases failed', e)
+    dbList.value = []
+  } finally {
+    dbLoading.value = false
+  }
+}
+
+const retryDatabase = async (id) => {
+  const resp = await probeDatabase(id)
+  const idx = dbList.value.findIndex(d => d.id === id)
+  if (idx >= 0) dbList.value[idx] = resp.data
+}
+
+const totalQps = computed(() => {
+  return dbList.value.reduce((s, d) => {
+    if (d.type === 'mysql' || d.type === 'polardb') {
+      return s + (d.metrics?.questions || 0)
+    }
+    // mongodb 没有 QPS 概念，不计入
+    return s
+  }, 0)
+})
+
+watch(activeTab, (v) => {
+  if (v === 'db-monitor' && dbList.value.length === 0) loadDatabases()
+})
+
 const summaryCards = computed(() => {
   if (activeTab.value === 'hosts') {
     return [
@@ -402,6 +494,14 @@ const summaryCards = computed(() => {
       { label: '运行中', value: containerStats.value.running, tone: 'success-card' },
       { label: '需关注', value: containerStats.value.attention, tone: 'warning-card' },
       { label: '镜像种类', value: containerStats.value.uniqueImages, tone: 'danger-card' },
+    ]
+  }
+  if (activeTab.value === 'db-monitor') {
+    return [
+      { label: '在管数据库数', value: dbList.value.length, meta: 'sqlaudit.DataSource', tone: '' },
+      { label: '连接中', value: dbList.value.filter(d => d.status === 'ok').length, meta: '采集正常', tone: 'success-card' },
+      { label: '总 QPS', value: totalQps.value, meta: '库求和', tone: 'context-card' },
+      { label: '异常库数', value: dbList.value.filter(d => d.status === 'error' || d.status === 'timeout').length, meta: '需排查', tone: 'warning-card' },
     ]
   }
   return [

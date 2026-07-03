@@ -677,6 +677,54 @@
         </div>
       </div>
     </template>
+
+    <template v-if="activeTab === 'hosts-monitor'">
+      <div class="workbench-card k8s-resource-card">
+        <div class="section-toolbar">
+          <div class="toolbar-head">
+            <span class="toolbar-title">主机监控</span>
+            <span class="toolbar-desc">采集 CMDB 在管主机 CPU / 内存 / 磁盘等指标。</span>
+          </div>
+          <div class="workbench-card-actions">
+            <el-button class="filter-refresh-btn" @click="loadHosts">
+              <el-icon><RefreshRight /></el-icon>
+              刷新
+            </el-button>
+          </div>
+        </div>
+        <div v-loading="hostLoading">
+          <el-table :data="hostsList" stripe style="width:100%">
+            <el-table-column prop="hostname" label="主机名" min-width="160" />
+            <el-table-column prop="ip" label="IP" width="140" />
+            <el-table-column label="CPU load1" width="120">
+              <template #default="{ row }">
+                {{ row.metrics?.cpu?.load1?.toFixed(2) || '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="内存" width="120">
+              <template #default="{ row }">
+                {{ row.metrics?.memory?.usage_pct || '-' }}%
+              </template>
+            </el-table-column>
+            <el-table-column label="磁盘 %" width="100">
+              <template #default="{ row }">
+                {{ row.metrics?.disk?.[0]?.used_pct || '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'ok' ? 'success' : 'danger'" size="small">{{ row.status }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="{ row }">
+                <el-button size="small" @click="retryHost(row.id)">重试</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </template>
 <!-- ============ 集群弹窗 ============ -->
     <el-dialog v-model="clusterDialogVisible" :title="editingClusterId ? '编辑集群' : '新增 K8s 集群'" width="90%" style="max-width:600px;" top="5vh" append-to-body destroy-on-close>
       <el-form :model="clusterForm" label-width="110px">
@@ -947,6 +995,7 @@ import {
   getK8sConfigRollbackPreview, rollbackK8sConfigResource,
   rollbackK8sConfigResourceToRevision,
 } from '@/api/modules/container'
+import { probeHosts, probeHost } from '@/api/modules/monitoring'
 
 const authStore = useAuthStore()
 const canManageK8s = computed(() => authStore.hasPermission('ops.k8s.manage'))
@@ -961,6 +1010,7 @@ const mainTabs = [
   { key: 'network',    label: '网络管理', icon: 'Connection' },
   { key: 'storage',    label: '存储管理', icon: 'Coin' },
   { key: 'config',     label: '配置管理', icon: 'Setting' },
+  { key: 'hosts-monitor', label: '主机', icon: 'Cpu' },
 ]
 
 const tabState = useRouteTabState({
@@ -1022,6 +1072,14 @@ const summaryCards = computed(() => {
       { label: '当前集群', value: selectedCluster.value?.name || '未选择', meta: '活动上下文', tone: 'context-card' },
     ]
   }
+  if (activeTab.value === 'hosts-monitor') {
+    return [
+      { label: '在管主机数', value: hostsList.value.length, meta: 'cmdb.Host', tone: '' },
+      { label: '在线数', value: hostsList.value.filter(h => h.status === 'ok').length, meta: '可采集', tone: 'success-card' },
+      { label: '高 CPU 主机数', value: hostsList.value.filter(h => h.metrics?.cpu?.load1 >= 0.8).length, meta: 'load1 ≥ 0.8', tone: 'warning-card' },
+      { label: '平均 CPU 负载', value: avgLoad.value, meta: 'load1 / 核数', tone: 'context-card' },
+    ]
+  }
   return [
     { label: 'Ready 节点', value: `${effectiveSummary.value.nodes_ready}/${effectiveSummary.value.nodes_total}`, meta: '节点健康度', tone: '' },
     { label: 'Pod 总数', value: effectiveSummary.value.pods_total, meta: '运行实例', tone: 'success-card' },
@@ -1055,6 +1113,39 @@ const pvcs = ref([])
 const storageclasses = ref([])
 const configmaps = ref([])
 const secrets = ref([])
+
+// ====== 主机监控 ======
+const hostsList = ref([])
+const hostLoading = ref(false)
+
+const loadHosts = async () => {
+  hostLoading.value = true
+  try {
+    const resp = await probeHosts({})
+    hostsList.value = resp.data?.results || []
+  } catch (e) {
+    console.error('load hosts failed', e)
+    hostsList.value = []
+  } finally {
+    hostLoading.value = false
+  }
+}
+
+const retryHost = async (id) => {
+  const resp = await probeHost(id)
+  const idx = hostsList.value.findIndex(h => h.id === id)
+  if (idx >= 0) hostsList.value[idx] = resp.data
+}
+
+const avgLoad = computed(() => {
+  if (hostsList.value.length === 0) return 0
+  const total = hostsList.value.reduce((s, h) => s + (h.metrics?.cpu?.load1 || 0), 0)
+  return (total / hostsList.value.length).toFixed(2)
+})
+
+watch(activeTab, (v) => {
+  if (v === 'hosts-monitor' && hostsList.value.length === 0) loadHosts()
+})
 
 // ====== Sub-tabs ======
 const workloadSubTabs = ['Deployment', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob']
