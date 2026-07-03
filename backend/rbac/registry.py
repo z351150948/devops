@@ -87,6 +87,8 @@ PERMISSION_DEFINITIONS = [
     ('rbac.module.manage', '管理模块显示', 'rbac', '配置左侧菜单模块的显示与隐藏'),
     ('rbac.audit.view', '查看操作审计', 'rbac', '查看平台关键操作、执行动作和配置变更审计记录'),
     ('rbac.audit.manage', '管理操作审计', 'rbac', '按保留策略批量清理操作审计记录'),
+    ('monitoring.host.view', '查看主机监控', 'monitoring', '查看主机 CPU / 内存 / 磁盘 / 网络 on-demand 指标'),
+    ('monitoring.database.view', '查看数据库监控', 'monitoring', '查看 MySQL / MongoDB on-demand 指标'),
 ]
 
 
@@ -120,6 +122,8 @@ BUILTIN_ROLES = [
             'cmdb.dashboard.view', 'cmdb.ci.view',
             'cmdb.ci.manage', 'cmdb.topology.view', 'cmdb.cost.view', 'cmdb.request.submit',
             'cmdb.request.approve',
+            'monitoring.host.view',
+            'monitoring.database.view',
         ],
     },
     {
